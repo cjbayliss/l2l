@@ -57,6 +57,71 @@ class LLMError(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Logging / usage stats (stderr only, so stdout stays pipe-friendly)
+# ---------------------------------------------------------------------------
+
+
+class UsageTracker:
+    def __init__(self):
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.reset_pass()
+
+    def reset_pass(self):
+        self.pass_started = time.time()
+        self.pass_prompt = 0
+        self.pass_completion = 0
+
+    def add(self, usage):
+        p = usage.get("prompt_tokens") or 0
+        c = usage.get("completion_tokens") or 0
+        self.prompt_tokens += p
+        self.completion_tokens += c
+        self.pass_prompt += p
+        self.pass_completion += c
+
+    def elapsed(self, since=None):
+        return time.time() - (since if since is not None else self.pass_started)
+
+    def log_pass(self):
+        elapsed = self.elapsed()
+        self.eprint(
+            "Done: %s, prompt=%d, completion=%d, %.1f tok/s"
+            % (
+                fmt_duration(elapsed),
+                self.pass_prompt,
+                self.pass_completion,
+                self.pass_completion / elapsed if elapsed else 0.0,
+            )
+        )
+        self.reset_pass()
+
+    def log_total(self, total_elapsed):
+        self.eprint(
+            "TOTAL: %s, prompt=%d, completion=%d, %.1f tok/s"
+            % (
+                fmt_duration(total_elapsed),
+                self.prompt_tokens,
+                self.completion_tokens,
+                self.completion_tokens / total_elapsed if total_elapsed else 0.0,
+            )
+        )
+
+    @staticmethod
+    def eprint(msg):
+        print(msg, file=sys.stderr, flush=True)
+
+
+USAGE = UsageTracker()
+
+
+def fmt_duration(seconds):
+    if seconds < 60:
+        return "%.1fs" % seconds
+    return "%dm%ds" % (int(seconds // 60), int(seconds % 60))
+
+
+# ---------------------------------------------------------------------------
 # LLM client (OpenAI-compatible chat completions, stdlib only)
 # ---------------------------------------------------------------------------
 
@@ -87,6 +152,7 @@ def chat(config, system, user, temperature=0.2):
         raise LLMError("HTTP %s from endpoint: %s" % (e.code, detail)) from None
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise LLMError("could not reach endpoint: %s" % e) from None
+    USAGE.add(body.get("usage") or {})
     try:
         return body["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
@@ -414,6 +480,7 @@ def main(argv=None):
     started = time.time()
 
     # Pass 1: per-chunk analysis, merged into a global glossary.
+    USAGE.eprint("Starting analysis...")
     glossary = {}
     all_notes = []
     for i, (chunk, _) in enumerate(chunk_items):
@@ -431,18 +498,21 @@ def main(argv=None):
 
     glossary = merge_glossaries(glossary, user_glossary)
     notes = {"notes": all_notes}
+    USAGE.log_pass()
 
     if args.analysis_only:
         print("== Glossary ==")
         print(glossary_text(glossary))
         print("\n== Notes ==")
         print(notes_text(notes))
+        USAGE.log_pass()
         return 0
 
     if args.verbose:
         eprint("zh2en: %d glossary entries, %d notes" % (len(glossary), len(all_notes)))
 
     # Pass 2: translate chunk by chunk with the global glossary.
+    USAGE.eprint("Starting translation...")
     outputs = []
     cache_hits = 0
     for i, (chunk, sep) in enumerate(chunk_items):
@@ -473,6 +543,8 @@ def main(argv=None):
         if args.verbose:
             eprint("zh2en: translated chunk %d/%d" % (i + 1, len(chunk_items)))
 
+    USAGE.log_pass()
+
     sys.stdout.write("".join(outputs))
     if not outputs[-1].endswith("\n"):
         sys.stdout.write("\n")
@@ -482,6 +554,7 @@ def main(argv=None):
             "zh2en: done in %.1fs (%d/%d chunks cached)"
             % (time.time() - started, cache_hits, len(chunk_items))
         )
+    USAGE.log_total(time.time() - started)
     return 0
 
 
