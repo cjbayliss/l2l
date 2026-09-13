@@ -6,12 +6,13 @@ Diagnostics go to stderr so the tool stays pipe-friendly.
 
 Pipeline:
     stdin -> chunk by paragraphs
-         -> Pass 1: analysis (glossary of names, idioms, terms, style notes)
-         -> Pass 2: translation, with glossary context
+         -> pass 1..N from the passes INI file (each pass receives the
+            original source chunk plus the previous pass's output)
          -> stitch -> stdout
 """
 
 import argparse
+import configparser
 import hashlib
 import json
 import os
@@ -22,6 +23,12 @@ import urllib.error
 import urllib.request
 
 CHUNK_BUDGET = 3500  # max source characters per chunk
+
+STRICT_FIDELITY_SUFFIX = (
+    "\n- STRICT FIDELITY MODE: keep the exact number of paragraphs "
+    "and the exact blank-line separators of the source. Do not merge "
+    "or split paragraphs."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +61,102 @@ class ConfigError(Exception):
 
 class LLMError(Exception):
     pass
+
+
+# ---------------------------------------------------------------------------
+# Pass definitions (INI file)
+# ---------------------------------------------------------------------------
+
+
+class PassError(Exception):
+    pass
+
+
+class Pass:
+    """One translation pass loaded from the passes INI file.
+
+    Keys other than the reserved ones pass through into the chat-completions
+    request payload as-is (with type inference), so API fields like
+    `temperature`, `model`, `reasoning_effort`, `top_p` need no code here.
+    """
+
+    def __init__(self, name, instruction, strict_fidelity=False, api_overrides=None):
+        self.name = name
+        self.instruction = instruction
+        self.strict_fidelity = strict_fidelity
+        self.api_overrides = api_overrides or {}
+
+
+def _infer_type(value):
+    v = value.strip()
+    if v.lower() == "none":
+        return None  # omit the field from the payload
+    if v.lower() in ("true", "false"):
+        return v.lower() == "true"
+    try:
+        return int(v)
+    except ValueError:
+        pass
+    try:
+        return float(v)
+    except ValueError:
+        pass
+    return v
+
+
+def load_passes(path):
+    """Load pass definitions from an INI file, in section order.
+
+    Reserved keys: `instruction-file` (required; system-prompt text, resolved
+    relative to the INI file) and `strict_fidelity` (bool). All other keys
+    become chat-completions payload overrides.
+    """
+    parser = configparser.ConfigParser()
+    try:
+        with open(path, encoding="utf-8") as f:
+            parser.read_file(f)
+    except OSError as e:
+        raise PassError("cannot read passes file: %s" % e) from None
+    except configparser.Error as e:
+        raise PassError("cannot parse passes file: %s" % e) from None
+
+    if not parser.sections():
+        raise PassError("passes file %s defines no passes" % path)
+
+    base_dir = os.path.dirname(os.path.abspath(path))
+    passes = []
+    for section in parser.sections():
+        opts = dict(parser.items(section))
+        instruction_file = opts.pop("instruction-file", None)
+        if not instruction_file:
+            raise PassError(
+                "pass [%s]: missing required key `instruction-file`" % section
+            )
+        instruction_path = os.path.join(base_dir, instruction_file)
+        try:
+            with open(instruction_path, encoding="utf-8") as f:
+                instruction = f.read().strip()
+        except OSError as e:
+            raise PassError(
+                "pass [%s]: cannot read instruction file: %s" % (section, e)
+            ) from None
+        if not instruction:
+            raise PassError("pass [%s]: instruction file is empty" % section)
+
+        strict_raw = opts.pop("strict_fidelity", "false")
+        if strict_raw.strip().lower() not in ("true", "false"):
+            raise PassError(
+                "pass [%s]: strict_fidelity must be true or false" % section
+            )
+        strict_fidelity = strict_raw.strip().lower() == "true"
+
+        api_overrides = {}
+        for key, value in opts.items():
+            parsed = _infer_type(value)
+            if parsed is not None:
+                api_overrides[key] = parsed
+        passes.append(Pass(section, instruction, strict_fidelity, api_overrides))
+    return passes
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +229,7 @@ def fmt_duration(seconds):
 # ---------------------------------------------------------------------------
 
 
-def chat(config, system, user, temperature=0.2):
+def chat(config, system, user, temperature=0.2, overrides=None):
     payload = {
         "model": config.model,
         "temperature": temperature,
@@ -135,6 +238,8 @@ def chat(config, system, user, temperature=0.2):
             {"role": "user", "content": user},
         ],
     }
+    if overrides:
+        payload.update({k: v for k, v in overrides.items() if v is not None})
     req = urllib.request.Request(
         config.base_url + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
@@ -154,9 +259,18 @@ def chat(config, system, user, temperature=0.2):
         raise LLMError("could not reach endpoint: %s" % e) from None
     USAGE.add(body.get("usage") or {})
     try:
-        return body["choices"][0]["message"]["content"]
+        content = body["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
         raise LLMError("unexpected response shape: %s" % str(body)[:500]) from None
+    if isinstance(content, list):
+        # some models return a list of content parts
+        content = "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content
+        )
+    if not isinstance(content, str):
+        raise LLMError("unexpected content type: %s" % str(body)[:500])
+    return content
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +320,20 @@ def iter_chunk_items(paragraphs, budget=CHUNK_BUDGET):
         yield chunk, (sep if i < len(chunks) - 1 else "")
 
 
+def regroup_by_plan(paragraphs, plan):
+    """Group `paragraphs` into lists sized like `plan` (a list of paragraph
+    lists). Returns None when the paragraph count doesn't match the plan."""
+    total = sum(len(c) for c in plan)
+    if len(paragraphs) != total:
+        return None
+    groups = []
+    i = 0
+    for chunk in plan:
+        groups.append(paragraphs[i : i + len(chunk)])
+        i += len(chunk)
+    return groups
+
+
 # ---------------------------------------------------------------------------
 # Glossary
 # ---------------------------------------------------------------------------
@@ -243,88 +371,30 @@ def glossary_text(glossary):
 
 
 # ---------------------------------------------------------------------------
-# Pass 1: analysis
+# Pass execution
 # ---------------------------------------------------------------------------
 
-ANALYSIS_SYSTEM = """\
-You are a Chinese-to-English translation analyst. Examine the source text and \
-return STRICT JSON only (no markdown fences, no commentary) with this shape:
 
-{
-  "names": {"source_term": "intended English rendering"},
-  "idioms": {"chengyu or idiom": "plain-meaning gloss to guide translation"},
-  "terms": {"technical/domain term": "preferred consistent English rendering"},
-  "notes": ["short style/register/ambiguity notes for the translator"]
-}
-
-Judge from context whether a string of characters is a personal/place name \
-rather than a common word. Only include items actually present in the text. \
-Use empty objects/lists if nothing applies."""
+def notes_text(notes):
+    items = notes.get("notes", []) if isinstance(notes, dict) else []
+    return "\n".join("- " + n for n in items) if items else "(none)"
 
 
-def run_analysis(config, source_text):
-    raw = chat(config, ANALYSIS_SYSTEM, source_text, temperature=0.0)
-    parsed = parse_json_loose(raw)
-    if not isinstance(parsed, dict):
-        return {"names": {}, "idioms": {}, "terms": {}, "notes": []}
-    out = {"names": {}, "idioms": {}, "terms": {}, "notes": []}
-    for key in ("names", "idioms", "terms"):
-        v = parsed.get(key)
-        if isinstance(v, dict):
-            out[key] = {str(k): str(v2) for k, v2 in v.items()}
-    notes = parsed.get("notes")
-    if isinstance(notes, list):
-        out["notes"] = [str(n) for n in notes]
-    return out
-
-
-def flatten_glossary(analysis):
-    """Merge analysis categories into one term->rendering map."""
-    merged = {}
-    merged.update(analysis.get("names", {}))
-    merged.update(analysis.get("idioms", {}))
-    merged.update(analysis.get("terms", {}))
-    return merged
-
-
-def notes_text(analysis):
-    notes = analysis.get("notes", [])
-    return "\n".join("- " + n for n in notes) if notes else "(none)"
-
-
-# ---------------------------------------------------------------------------
-# Pass 2: translation
-# ---------------------------------------------------------------------------
-
-TRANSLATE_SYSTEM = """\
-You are an expert Chinese-to-English literary translator.
-
-Rules:
-- Output ONLY the English translation. No preamble, no explanations, no \
-quotation marks around the whole output, no markdown fences.
-- Preserve the paragraph structure of the source exactly: one source \
-paragraph becomes one output paragraph, separated the same way.
-- Use the provided glossary consistently for names and recurring terms.
-- For untranslatable wordplay, translate the sense and add a brief \
-translator's note in square brackets, e.g. [translator's note: pun on ...].
-- Match the register and tone described in the style notes.
-- Translate, never summarize or omit content."""
-
-
-def run_translation(config, chunk_text, glossary, notes, strict=False):
-    system = TRANSLATE_SYSTEM
-    if strict:
-        system += (
-            "\n- STRICT FIDELITY MODE: keep the exact number of paragraphs "
-            "and the exact blank-line separators of the source. Do not merge "
-            "or split paragraphs."
-        )
+def run_pass(config, passdef, source_chunk, work_chunk, glossary, notes):
+    system = passdef.instruction
+    if passdef.strict_fidelity:
+        system += STRICT_FIDELITY_SUFFIX
     user = (
         "Glossary (use these renderings exactly):\n%s\n\n"
         "Style and context notes from analysis:\n%s\n\n"
-        "Source text:\n%s" % (glossary_text(glossary), notes_text(notes), chunk_text)
+        "Source text (original Chinese):\n%s"
+        % (glossary_text(glossary), notes_text(notes), source_chunk)
     )
-    return clean_translation(chat(config, system, user, temperature=0.2))
+    if work_chunk is not None and work_chunk != source_chunk:
+        user += "\n\nCurrent draft from the previous pass:\n%s" % work_chunk
+    return clean_translation(
+        chat(config, system, user, overrides=passdef.api_overrides)
+    )
 
 
 def clean_translation(text):
@@ -356,9 +426,13 @@ def cache_dir():
     return d
 
 
-def cache_key(chunk_text, model, glossary):
+def cache_key(chunk_text, model, glossary, pass_salt="", work_text=""):
     h = hashlib.sha256()
+    if pass_salt:
+        h.update(pass_salt.encode("utf-8") + b"\x00")
     h.update(chunk_text.encode("utf-8"))
+    if work_text:
+        h.update(b"\x00work\x00" + work_text.encode("utf-8"))
     h.update(b"\x00" + model.encode("utf-8"))
     h.update(
         b"\x00"
@@ -423,24 +497,17 @@ def main(argv=None):
         description="Translate Chinese text from stdin to English on stdout.",
     )
     ap.add_argument(
-        "--glossary",
-        metavar="FILE",
-        help="glossary file of `term -> rendering` lines; "
-        "entries override the analysis pass",
+        "passes",
+        metavar="PASSES_INI",
+        help="INI file defining the translation passes (in execution order)",
     )
     ap.add_argument(
-        "--analysis-only",
-        action="store_true",
-        help="print the analysis-pass glossary and notes, " "don't translate",
+        "--glossary",
+        metavar="FILE",
+        help="glossary file of `term -> rendering` lines, " "applied to every pass",
     )
     ap.add_argument(
         "--no-cache", action="store_true", help="bypass the translation cache"
-    )
-    ap.add_argument(
-        "--fidelity",
-        choices=["natural", "strict"],
-        default="natural",
-        help="strict preserves exact paragraph structure",
     )
     ap.add_argument(
         "--verbose",
@@ -461,6 +528,12 @@ def main(argv=None):
         eprint("zh2en: %s" % e)
         return 2
 
+    try:
+        passes = load_passes(args.passes)
+    except PassError as e:
+        eprint("zh2en: %s" % e)
+        return 2
+
     user_glossary = {}
     if args.glossary:
         try:
@@ -468,92 +541,82 @@ def main(argv=None):
         except OSError as e:
             eprint("zh2en: cannot read glossary file: %s" % e)
             return 2
-
-    paragraphs, _ = split_paragraphs(text)
-    chunk_items = list(iter_chunk_items(paragraphs))
-    if args.verbose:
-        eprint(
-            "zh2en: %d paragraph(s) in %d chunk(s)"
-            % (len(paragraphs), len(chunk_items))
-        )
+    glossary = user_glossary
+    notes = {"notes": []}
 
     started = time.time()
 
-    # Pass 1: per-chunk analysis, merged into a global glossary.
-    USAGE.eprint("Starting analysis...")
-    glossary = {}
-    all_notes = []
-    for i, (chunk, _) in enumerate(chunk_items):
-        chunk_text = "\n\n".join(chunk)
-        try:
-            analysis = run_analysis(config, chunk_text)
-        except LLMError as e:
-            eprint("zh2en: analysis pass failed on chunk %d: %s" % (i + 1, e))
-            eprint("zh2en: continuing without analysis for this chunk")
-            continue
-        glossary = merge_glossaries(glossary, flatten_glossary(analysis))
-        all_notes.extend(analysis.get("notes", []))
-        if args.verbose:
-            eprint("zh2en: analysis chunk %d/%d done" % (i + 1, len(chunk_items)))
+    # Chunks are planned once from the original source and reused for every
+    # pass, so each pass sees the matching source chunk alongside its work.
+    source_paragraphs, _ = split_paragraphs(text)
+    chunk_items = list(iter_chunk_items(source_paragraphs))
+    source_chunks = [c for c, _ in chunk_items]
+    seps = [sep for _, sep in chunk_items]
 
-    glossary = merge_glossaries(glossary, user_glossary)
-    notes = {"notes": all_notes}
-    USAGE.log_pass()
-
-    if args.analysis_only:
-        print("== Glossary ==")
-        print(glossary_text(glossary))
-        print("\n== Notes ==")
-        print(notes_text(notes))
-        USAGE.log_pass()
-        return 0
-
-    if args.verbose:
-        eprint("zh2en: %d glossary entries, %d notes" % (len(glossary), len(all_notes)))
-
-    # Pass 2: translate chunk by chunk with the global glossary.
-    USAGE.eprint("Starting translation...")
-    outputs = []
-    cache_hits = 0
-    for i, (chunk, sep) in enumerate(chunk_items):
-        chunk_text = "\n\n".join(chunk)
-        key = cache_key(chunk_text, config.model, glossary)
-        if not args.no_cache:
-            cached = cache_get(key)
-            if cached is not None:
-                outputs.append(cached + sep)
-                cache_hits += 1
-                if args.verbose:
-                    eprint("zh2en: chunk %d/%d cache hit" % (i + 1, len(chunk_items)))
-                continue
-        try:
-            result = run_translation(
-                config,
-                chunk_text,
-                glossary,
-                notes,
-                strict=(args.fidelity == "strict"),
+    for pnum, passdef in enumerate(passes, 1):
+        USAGE.eprint("Starting pass %d/%d [%s]..." % (pnum, len(passes), passdef.name))
+        work_paragraphs, _ = split_paragraphs(text)
+        work_groups = regroup_by_plan(work_paragraphs, source_chunks)
+        if work_groups is None:
+            eprint(
+                "zh2en: [%s] paragraph count changed by a previous pass; "
+                "re-chunking working text independently" % passdef.name
             )
-        except LLMError as e:
-            eprint("zh2en: translation failed on chunk %d: %s" % (i + 1, e))
-            return 1
-        if not args.no_cache:
-            cache_put(key, result)
-        outputs.append(result + sep)
+            work_groups = make_chunks(work_paragraphs)
+
         if args.verbose:
-            eprint("zh2en: translated chunk %d/%d" % (i + 1, len(chunk_items)))
+            eprint(
+                "zh2en: [%s] %d paragraph(s) in %d chunk(s)"
+                % (passdef.name, len(work_paragraphs), len(work_groups))
+            )
 
-    USAGE.log_pass()
+        pass_salt = passdef.name + "\x00" + passdef.instruction
+        outputs = []
+        for i, work_group in enumerate(work_groups):
+            source_chunk_text = (
+                "\n\n".join(source_chunks[i]) if i < len(source_chunks) else ""
+            )
+            work_chunk_text = "\n\n".join(work_group)
+            key = cache_key(
+                source_chunk_text, config.model, glossary, pass_salt, work_chunk_text
+            )
+            if not args.no_cache:
+                cached = cache_get(key)
+                if cached is not None:
+                    outputs.append(cached + (seps[i] if i < len(seps) - 1 else ""))
+                    if args.verbose:
+                        eprint(
+                            "zh2en: [%s] chunk %d/%d cache hit"
+                            % (passdef.name, i + 1, len(work_groups))
+                        )
+                    continue
+            try:
+                result = run_pass(
+                    config, passdef, source_chunk_text, work_chunk_text, glossary, notes
+                )
+            except LLMError as e:
+                eprint(
+                    "zh2en: pass [%s] failed on chunk %d: %s" % (passdef.name, i + 1, e)
+                )
+                return 1
+            if not args.no_cache:
+                cache_put(key, result)
+            outputs.append(result + (seps[i] if i < len(seps) - 1 else ""))
+            if args.verbose:
+                eprint(
+                    "zh2en: [%s] chunk %d/%d done"
+                    % (passdef.name, i + 1, len(work_groups))
+                )
 
-    sys.stdout.write("".join(outputs))
-    if not outputs[-1].endswith("\n"):
+        USAGE.log_pass()
+        text = "".join(outputs)
+
+    sys.stdout.write(text)
+    if not text.endswith("\n"):
         sys.stdout.write("\n")
 
     if args.verbose:
-        eprint(
-            "zh2en: done in %.1fs (%d/%d chunks cached)"
-            % (time.time() - started, cache_hits, len(chunk_items))
-        )
+        eprint("zh2en: done in %.1fs" % (time.time() - started))
     USAGE.log_total(time.time() - started)
     return 0
 
