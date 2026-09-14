@@ -229,10 +229,9 @@ def fmt_duration(seconds):
 # ---------------------------------------------------------------------------
 
 
-def chat(config, system, user, temperature=0.2, overrides=None):
+def chat(config, system, user, overrides=None):
     payload = {
         "model": config.model,
-        "temperature": temperature,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -259,15 +258,37 @@ def chat(config, system, user, temperature=0.2, overrides=None):
         raise LLMError("could not reach endpoint: %s" % e) from None
     USAGE.add(body.get("usage") or {})
     try:
-        content = body["choices"][0]["message"]["content"]
+        message = body["choices"][0]["message"]
+        content = message["content"]
     except (KeyError, IndexError, TypeError):
         raise LLMError("unexpected response shape: %s" % str(body)[:500]) from None
+    reasoning = message.get("reasoning_content") or message.get("reasoning")
+    if isinstance(reasoning, str) and reasoning.strip():
+        print(reasoning.rstrip(), file=sys.stderr, flush=True)
     if isinstance(content, list):
-        # some models return a list of content parts
-        content = "".join(
-            part.get("text", "") if isinstance(part, dict) else str(part)
-            for part in content
-        )
+        # Mistral reasoning models return content as a list of chunks:
+        # {type: "thinking", thinking: [{type: "text", text}...]} for the
+        # reasoning trace, {type: "text", text} for the answer itself.
+        texts = []
+        thoughts = []
+        for part in content:
+            if not isinstance(part, dict):
+                texts.append(str(part))
+            elif part.get("type") == "thinking":
+                for sub in part.get("thinking") or []:
+                    if isinstance(sub, dict) and sub.get("text"):
+                        thoughts.append(sub["text"])
+            elif part.get("text"):
+                texts.append(part["text"])
+        if thoughts:
+            print("\n".join(thoughts).rstrip(), file=sys.stderr, flush=True)
+        content = "".join(texts)
+    if isinstance(content, str):
+        # some open-weight deployments wrap the trace in <think> tags instead
+        m = re.match(r"\s*<think>(.*?)</think>", content, re.DOTALL)
+        if m:
+            print(m.group(1).strip(), file=sys.stderr, flush=True)
+            content = content[m.end():]
     if not isinstance(content, str):
         raise LLMError("unexpected content type: %s" % str(body)[:500])
     return content
