@@ -13,7 +13,8 @@ English style:
 - Preserve important political, historical, legal, technical, cultural, and fictional terminology without oversimplifying it.
 
 Names:
-- Render all personal names in consistent Hanyu Pinyin without translating their literal meanings.
+- Use the renderings in the brief's NAMES section exactly and consistently.
+- Where the brief gives no rendering, render personal names in consistent Hanyu Pinyin without translating their literal meanings.
 - Apply this rule to surnames, given names, nicknames, courtesy names, and aliases.
 - Translate a phrase only when it is clearly a descriptive title or epithet rather than a personal name.
 
@@ -26,4 +27,3 @@ Chinese web-fiction euphemisms:
 - For example, render 种花国 or 种花家 as “China” when they refer to China.
 - Render 毛熊 according to the historically appropriate referent when the context clearly identifies Russia or the Soviet Union.
 - Preserve the original tone where possible. Do not resolve genuine ambiguity without evidence.
-
