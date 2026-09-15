@@ -251,7 +251,7 @@ def fmt_duration(seconds):
 # ---------------------------------------------------------------------------
 
 
-def chat(config, system, user, overrides=None):
+def chat(config, system, user, overrides=None, verbose=False):
     payload = {
         "model": config.model,
         "messages": [
@@ -285,7 +285,7 @@ def chat(config, system, user, overrides=None):
     except (KeyError, IndexError, TypeError):
         raise LLMError("unexpected response shape: %s" % str(body)[:500]) from None
     reasoning = message.get("reasoning_content") or message.get("reasoning")
-    if isinstance(reasoning, str) and reasoning.strip():
+    if verbose and isinstance(reasoning, str) and reasoning.strip():
         print(reasoning.rstrip(), file=sys.stderr, flush=True)
     if isinstance(content, list):
         # Mistral reasoning models return content as a list of chunks:
@@ -302,14 +302,15 @@ def chat(config, system, user, overrides=None):
                         thoughts.append(sub["text"])
             elif part.get("text"):
                 texts.append(part["text"])
-        if thoughts:
+        if verbose and thoughts:
             print("\n".join(thoughts).rstrip(), file=sys.stderr, flush=True)
         content = "".join(texts)
     if isinstance(content, str):
         # some open-weight deployments wrap the trace in <think> tags instead
         m = re.match(r"\s*<think>(.*?)</think>", content, re.DOTALL)
         if m:
-            print(m.group(1).strip(), file=sys.stderr, flush=True)
+            if verbose:
+                print(m.group(1).strip(), file=sys.stderr, flush=True)
             content = content[m.end() :]
     if not isinstance(content, str):
         raise LLMError("unexpected content type: %s" % str(body)[:500])
@@ -432,7 +433,7 @@ def analysis_block(analysis):
     return analysis.strip() if analysis and analysis.strip() else "(none)"
 
 
-def run_analysis(config, passdef, full_text, glossary):
+def run_analysis(config, passdef, full_text, glossary, verbose=False):
     """Run an analysis pass once over the whole document."""
     user = (
         "Glossary (user-supplied; respect these renderings):\n%s\n\n"
@@ -440,7 +441,11 @@ def run_analysis(config, passdef, full_text, glossary):
         % (glossary_text(glossary), full_text)
     )
     return chat(
-        config, passdef.instruction, user, overrides=passdef.api_overrides
+        config,
+        passdef.instruction,
+        user,
+        overrides=passdef.api_overrides,
+        verbose=verbose,
     ).strip()
 
 
@@ -453,13 +458,15 @@ def run_analysis_once(config, passdef, full_text, glossary, use_cache, verbose):
             if verbose:
                 eprint("zh2en: [%s] cache hit" % passdef.name)
             return cached
-    result = run_analysis(config, passdef, full_text, glossary)
+    result = run_analysis(config, passdef, full_text, glossary, verbose)
     if use_cache:
         cache_put(key, result)
     return result
 
 
-def run_pass(config, passdef, source_chunk, work_chunk, glossary, analysis=None):
+def run_pass(
+    config, passdef, source_chunk, work_chunk, glossary, analysis=None, verbose=False
+):
     system = passdef.instruction
     if passdef.strict_fidelity:
         system += STRICT_FIDELITY_SUFFIX
@@ -473,7 +480,7 @@ def run_pass(config, passdef, source_chunk, work_chunk, glossary, analysis=None)
     if work_chunk is not None and work_chunk != source_chunk:
         user += "\n\nCurrent draft from the previous pass:\n%s" % work_chunk
     return clean_translation(
-        chat(config, system, user, overrides=passdef.api_overrides)
+        chat(config, system, user, overrides=passdef.api_overrides, verbose=verbose)
     )
 
 
@@ -593,7 +600,8 @@ def main(argv=None):
         "--verbose",
         "-v",
         action="store_true",
-        help="diagnostics (chunks, cache hits, timings) to stderr",
+        help="diagnostics (chunks, cache hits, timings) and LLM reasoning "
+        "traces to stderr",
     )
     args = ap.parse_args(argv)
 
@@ -719,6 +727,7 @@ def main(argv=None):
                     work_chunk_text,
                     glossary,
                     analysis_text,
+                    args.verbose,
                 )
             except LLMError as e:
                 eprint(
