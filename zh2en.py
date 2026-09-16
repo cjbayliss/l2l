@@ -464,7 +464,13 @@ def run_analysis(config, passdef, full_text, glossary, verbose=False):
 
 def run_analysis_once(config, passdef, full_text, glossary, use_cache, verbose):
     salt = passdef.name + "\x00" + passdef.instruction
-    key = cache_key(full_text, config.model, glossary, salt)
+    key = cache_key(
+        full_text,
+        config.model,
+        glossary,
+        salt,
+        overrides=passdef.api_overrides,
+    )
     if use_cache:
         cached = cache_get(key)
         if cached is not None:
@@ -701,7 +707,7 @@ def cache_dir():
     return d
 
 
-def cache_key(chunk_text, model, glossary, pass_salt="", work_text=""):
+def cache_key(chunk_text, model, glossary, pass_salt="", work_text="", overrides=None):
     h = hashlib.sha256()
     if pass_salt:
         h.update(pass_salt.encode("utf-8") + b"\x00")
@@ -711,6 +717,12 @@ def cache_key(chunk_text, model, glossary, pass_salt="", work_text=""):
         h.update(b"\x00work\x00" + work_text.encode("utf-8"))
 
     h.update(b"\x00" + model.encode("utf-8"))
+    if overrides:
+        h.update(
+            b"\x00"
+            + json.dumps(overrides, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        )
+
     h.update(
         b"\x00"
         + json.dumps(glossary, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -897,7 +909,12 @@ def main(argv=None):
             source_chunk_text = "\n\n".join(plan[i]) if i < len(plan) else ""
             work_chunk_text = "\n\n".join(work_group)
             key = cache_key(
-                source_chunk_text, config.model, glossary, pass_salt, work_chunk_text
+                source_chunk_text,
+                config.model,
+                glossary,
+                pass_salt,
+                work_chunk_text,
+                overrides=passdef.api_overrides,
             )
             trailing_sep = unit_seps[i] if i < len(unit_seps) else ""
             if not source_chunk_text:
