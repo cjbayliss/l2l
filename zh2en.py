@@ -7,9 +7,11 @@ Diagnostics go to stderr so the tool stays pipe-friendly.
 Pipeline:
     stdin -> split into paragraphs
          -> passes 1..N from the passes INI file:
-              mode = analysis    runs once over the whole document; its output
-                                 is attached to every later call as context
-                                 and never enters the translation chain
+              mode = analysis    runs once over the whole document (split into
+                                 parts and merged when it exceeds the request
+                                 budget); its output is attached to every later
+                                 call as context and never enters the
+                                 translation chain
               mode = paragraph   one source paragraph per call
               mode = chunk       default; budget-packed chunks. Every
                                  translation call receives its source unit
@@ -35,13 +37,30 @@ import unicodedata
 import urllib.error
 import urllib.request
 
-CHUNK_BUDGET = 3500
+CHUNK_BUDGET_TOKENS = 3500
+ANALYSIS_RESERVE_TOKENS = 128
 
 STRICT_FIDELITY_SUFFIX = (
     "\n- STRICT FIDELITY MODE: keep the exact number of paragraphs "
     "and the exact separators of the source. Do not merge "
     "or split paragraphs."
 )
+
+ANALYSIS_MERGE_INSTRUCTION = """
+You are merging partial preparation briefs from a Chinese-to-English translation
+pipeline. The source document was too long to read in one pass, so it was
+analysed in parts. Merge the parts into one compact brief with exactly these
+headings, in this order: OUTLINE, NAMES, HARD TO TRANSLATE.
+
+- OUTLINE: a single numbered list of the major beats in source order.
+- NAMES: one line per distinct term, formatted exactly as 原文 -> rendering (type),
+  where type is one of: person, place, organization, title, term. On conflicts,
+  prefer the first occurrence.
+- HARD TO TRANSLATE: deduplicated traps with the recommended English handling.
+
+Output only the merged brief. No preamble, no commentary. Keep it compact
+(about 600 words at most).
+"""
 
 
 class Config:
@@ -50,6 +69,10 @@ class Config:
         self.api_key = os.environ.get("TRANSLATE_API_KEY", "")
         self.model = os.environ.get("TRANSLATE_MODEL", "gpt-4o-mini")
         self.timeout = float(os.environ.get("TRANSLATE_TIMEOUT", "120"))
+        try:
+            self.max_tokens = int(os.environ.get("TRANSLATE_MAX_TOKENS", "100000"))
+        except ValueError:
+            self.max_tokens = 0
 
     def validate(self):
         missing = []
@@ -63,6 +86,9 @@ class Config:
             raise ConfigError(
                 "missing required environment variables: " + ", ".join(missing)
             )
+
+        if self.max_tokens <= 0:
+            raise ConfigError("TRANSLATE_MAX_TOKENS must be a positive integer")
 
 
 class ConfigError(Exception):
@@ -281,6 +307,13 @@ def fmt_duration(seconds):
 
 
 def chat(config, system, user, overrides=None, verbose=False):
+    estimated = estimate_tokens(system) + estimate_tokens(user)
+    if estimated > config.max_tokens:
+        raise LLMError(
+            "request is ~%d tokens, over the %d-token budget; raise "
+            "TRANSLATE_MAX_TOKENS or shorten the input" % (estimated, config.max_tokens)
+        )
+
     payload = {
         "model": config.model,
         "messages": [
@@ -369,23 +402,81 @@ def split_paragraphs(text):
     return paragraphs, separators
 
 
-def make_chunks(paragraphs, budget=CHUNK_BUDGET):
+def make_chunks(paragraphs, budget=CHUNK_BUDGET_TOKENS):
     chunks = []
     current = []
     size = 0
     for p in paragraphs:
-        if current and size + len(p) > budget:
+        p_size = estimate_tokens(p)
+        if current and size + p_size > budget:
             chunks.append(current)
             current = []
             size = 0
 
         current.append(p)
-        size += len(p)
+        size += p_size
 
     if current:
         chunks.append(current)
 
     return chunks
+
+
+def _is_cjk(char):
+    code = ord(char)
+    return (
+        0x3000 <= code <= 0x303F
+        or 0x3040 <= code <= 0x30FF
+        or 0x3400 <= code <= 0x4DBF
+        or 0x4E00 <= code <= 0x9FFF
+        or 0xF900 <= code <= 0xFAFF
+        or 0xFF00 <= code <= 0xFFEF
+        or 0x20000 <= code <= 0x2FA1F
+    )
+
+
+def estimate_tokens(text):
+    cjk = 0
+    for char in text:
+        if _is_cjk(char):
+            cjk += 1
+
+    return cjk + (len(text) - cjk + 3) // 4
+
+
+SENTENCE_BOUNDARY_CHARS = "。！？!?；;\n"
+
+
+def iter_sentences(text):
+    buf = []
+    for char in text:
+        buf.append(char)
+        if char in SENTENCE_BOUNDARY_CHARS:
+            yield "".join(buf)
+            buf = []
+
+    if buf:
+        yield "".join(buf)
+
+
+def split_to_budget(text, budget):
+    pieces = []
+    buf = []
+    size = 0
+    for sentence in iter_sentences(text):
+        s_size = estimate_tokens(sentence)
+        if buf and size + s_size > budget:
+            pieces.append("".join(buf))
+            buf = []
+            size = 0
+
+        buf.append(sentence)
+        size += s_size
+
+    if buf:
+        pieces.append("".join(buf))
+
+    return pieces
 
 
 def iter_units(plan, separators):
@@ -446,20 +537,98 @@ def analysis_block(analysis):
     return analysis.strip() if analysis and analysis.strip() else "(none)"
 
 
-def run_analysis(config, passdef, full_text, glossary, verbose=False):
-    user = (
+def analysis_user_prefix(glossary):
+    return (
         "Glossary (user-supplied; respect these renderings):\n%s\n\n"
-        "Source text (full document, original Chinese):\n%s"
-        % (glossary_text(glossary), full_text)
+        "Source text (full document, original Chinese):\n" % glossary_text(glossary)
     )
 
+
+def merge_user_prefix(glossary):
+    return (
+        "Glossary (user-supplied; respect these renderings):\n%s\n\n"
+        "Partial preparation briefs (parts of one document, in source order):\n\n"
+        % glossary_text(glossary)
+    )
+
+
+def run_analysis(config, passdef, text, glossary, verbose=False):
     return chat(
         config,
         passdef.instruction,
-        user,
+        analysis_user_prefix(glossary) + text,
         overrides=passdef.api_overrides,
         verbose=verbose,
     ).strip()
+
+
+def run_merge(config, passdef, glossary, briefs, verbose=False):
+    return chat(
+        config,
+        ANALYSIS_MERGE_INSTRUCTION,
+        merge_user_prefix(glossary) + "\n\n".join(briefs),
+        overrides=passdef.api_overrides,
+        verbose=verbose,
+    ).strip()
+
+
+def merge_analysis(config, passdef, glossary, briefs, verbose=False):
+    while len(briefs) > 1:
+        budget = (
+            config.max_tokens
+            - estimate_tokens(ANALYSIS_MERGE_INSTRUCTION)
+            - estimate_tokens(merge_user_prefix(glossary))
+            - ANALYSIS_RESERVE_TOKENS
+        )
+        groups = make_chunks(briefs, max(budget, 1))
+        if len(groups) == len(briefs):
+            raise LLMError(
+                "partial analysis brief (~%d tokens) does not fit the "
+                "%d-token budget; raise TRANSLATE_MAX_TOKENS or shorten "
+                "the input"
+                % (max(estimate_tokens(b) for b in briefs), config.max_tokens)
+            )
+
+        briefs = [
+            (
+                group[0]
+                if len(group) == 1
+                else run_merge(config, passdef, glossary, group, verbose)
+            )
+            for group in groups
+        ]
+
+    return briefs[0]
+
+
+def analyze_document(config, passdef, full_text, glossary, verbose=False):
+    overhead = estimate_tokens(passdef.instruction) + estimate_tokens(
+        analysis_user_prefix(glossary)
+    )
+    budget = max(config.max_tokens - overhead - ANALYSIS_RESERVE_TOKENS, 1)
+    paragraphs, _ = split_paragraphs(full_text)
+    units = []
+    for para in paragraphs:
+        if estimate_tokens(para) <= budget:
+            units.append(para)
+        else:
+            units.extend(split_to_budget(para, budget))
+
+    chunks = make_chunks(units, budget)
+    if len(chunks) <= 1:
+        return run_analysis(config, passdef, full_text, glossary, verbose)
+
+    if verbose:
+        eprint(
+            "zh2en: [%s] ~%d tokens over the %d-token budget; analysing in %d part(s)"
+            % (passdef.name, estimate_tokens(full_text), config.max_tokens, len(chunks))
+        )
+
+    briefs = [
+        run_analysis(config, passdef, "\n\n".join(chunk), glossary, verbose)
+        for chunk in chunks
+    ]
+    return merge_analysis(config, passdef, glossary, briefs, verbose)
 
 
 def run_analysis_once(config, passdef, full_text, glossary, use_cache, verbose):
@@ -479,7 +648,7 @@ def run_analysis_once(config, passdef, full_text, glossary, use_cache, verbose):
 
             return cached
 
-    result = run_analysis(config, passdef, full_text, glossary, verbose)
+    result = analyze_document(config, passdef, full_text, glossary, verbose)
     if use_cache:
         cache_put(key, result)
 
@@ -840,8 +1009,8 @@ def main(argv=None):
         if passdef.mode == "analysis":
             if args.verbose:
                 eprint(
-                    "zh2en: [%s] whole-document analysis (%d characters)"
-                    % (passdef.name, len(text))
+                    "zh2en: [%s] whole-document analysis (%d characters, ~%d tokens)"
+                    % (passdef.name, len(text), estimate_tokens(text))
                 )
 
             try:
