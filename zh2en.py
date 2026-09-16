@@ -1,29 +1,4 @@
 #!/usr/bin/env python3
-"""zh2en — multi-pass Chinese-to-English translator.
-
-Reads Chinese text from stdin, writes English translation to stdout.
-Diagnostics go to stderr so the tool stays pipe-friendly.
-
-Pipeline:
-    stdin -> split into paragraphs
-         -> passes 1..N from the passes INI file:
-              mode = analysis    runs once over the whole document (split into
-                                 parts and merged when it exceeds the request
-                                 budget); its output is attached to every later
-                                 call as context and never enters the
-                                 translation chain
-              mode = paragraph   one source paragraph per call
-              mode = chunk       default; budget-packed chunks. Every
-                                 translation call receives its source unit
-                                 plus the previous pass's output for that unit
-              after each pass whose `ascii` setting is true (the [options]
-              `ascii` key is the default): each output paragraph is checked;
-              non-ASCII ones get a mechanical conversion (punctuation,
-              full-width forms, accents), and anything still non-ASCII is
-              repaired by an LLM call that sees the source paragraph and
-              must emit ASCII-only English
-         -> stdout
-"""
 
 import argparse
 import configparser
