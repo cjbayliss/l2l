@@ -501,83 +501,44 @@ def regroup_by_plan(paragraphs, plan):
     return groups
 
 
-def parse_glossary_file(path):
-    entries = {}
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-
-            m = re.split(r"\s*(?:->|=>|=|\t|,\s)\s*", line, maxsplit=1)
-            if len(m) == 2 and m[0] and m[1]:
-                entries[m[0].strip()] = m[1].strip()
-
-    return entries
-
-
-def merge_glossaries(*dicts):
-    merged = {}
-    for d in dicts:
-        merged.update(d)
-
-    return merged
-
-
-def glossary_text(glossary):
-    if not glossary:
-        return "(none)"
-
-    return "\n".join(
-        "%s -> %s" % (term, trans) for term, trans in sorted(glossary.items())
-    )
-
-
 def analysis_block(analysis):
     return analysis.strip() if analysis and analysis.strip() else "(none)"
 
 
-def analysis_user_prefix(glossary):
-    return (
-        "Glossary (user-supplied; respect these renderings):\n%s\n\n"
-        "Source text (full document, original Chinese):\n" % glossary_text(glossary)
-    )
+def analysis_user_prefix():
+    return "Source text (full document, original Chinese):\n"
 
 
-def merge_user_prefix(glossary):
-    return (
-        "Glossary (user-supplied; respect these renderings):\n%s\n\n"
-        "Partial preparation briefs (parts of one document, in source order):\n\n"
-        % glossary_text(glossary)
-    )
+def merge_user_prefix():
+    return "Partial preparation briefs (parts of one document, in source order):\n\n"
 
 
-def run_analysis(config, passdef, text, glossary, verbose=False):
+def run_analysis(config, passdef, text, verbose=False):
     return chat(
         config,
         passdef.instruction,
-        analysis_user_prefix(glossary) + text,
+        analysis_user_prefix() + text,
         overrides=passdef.api_overrides,
         verbose=verbose,
     ).strip()
 
 
-def run_merge(config, passdef, glossary, briefs, verbose=False):
+def run_merge(config, passdef, briefs, verbose=False):
     return chat(
         config,
         ANALYSIS_MERGE_INSTRUCTION,
-        merge_user_prefix(glossary) + "\n\n".join(briefs),
+        merge_user_prefix() + "\n\n".join(briefs),
         overrides=passdef.api_overrides,
         verbose=verbose,
     ).strip()
 
 
-def merge_analysis(config, passdef, glossary, briefs, verbose=False):
+def merge_analysis(config, passdef, briefs, verbose=False):
     while len(briefs) > 1:
         budget = (
             config.max_tokens
             - estimate_tokens(ANALYSIS_MERGE_INSTRUCTION)
-            - estimate_tokens(merge_user_prefix(glossary))
+            - estimate_tokens(merge_user_prefix())
             - ANALYSIS_RESERVE_TOKENS
         )
         groups = make_chunks(briefs, max(budget, 1))
@@ -593,7 +554,7 @@ def merge_analysis(config, passdef, glossary, briefs, verbose=False):
             (
                 group[0]
                 if len(group) == 1
-                else run_merge(config, passdef, glossary, group, verbose)
+                else run_merge(config, passdef, group, verbose)
             )
             for group in groups
         ]
@@ -601,9 +562,9 @@ def merge_analysis(config, passdef, glossary, briefs, verbose=False):
     return briefs[0]
 
 
-def analyze_document(config, passdef, full_text, glossary, verbose=False):
+def analyze_document(config, passdef, full_text, verbose=False):
     overhead = estimate_tokens(passdef.instruction) + estimate_tokens(
-        analysis_user_prefix(glossary)
+        analysis_user_prefix()
     )
     budget = max(config.max_tokens - overhead - ANALYSIS_RESERVE_TOKENS, 1)
     paragraphs, _ = split_paragraphs(full_text)
@@ -616,7 +577,7 @@ def analyze_document(config, passdef, full_text, glossary, verbose=False):
 
     chunks = make_chunks(units, budget)
     if len(chunks) <= 1:
-        return run_analysis(config, passdef, full_text, glossary, verbose)
+        return run_analysis(config, passdef, full_text, verbose)
 
     if verbose:
         eprint(
@@ -625,18 +586,16 @@ def analyze_document(config, passdef, full_text, glossary, verbose=False):
         )
 
     briefs = [
-        run_analysis(config, passdef, "\n\n".join(chunk), glossary, verbose)
-        for chunk in chunks
+        run_analysis(config, passdef, "\n\n".join(chunk), verbose) for chunk in chunks
     ]
-    return merge_analysis(config, passdef, glossary, briefs, verbose)
+    return merge_analysis(config, passdef, briefs, verbose)
 
 
-def run_analysis_once(config, passdef, full_text, glossary, use_cache, verbose):
+def run_analysis_once(config, passdef, full_text, use_cache, verbose):
     salt = passdef.name + "\x00" + passdef.instruction
     key = cache_key(
         full_text,
         config.model,
-        glossary,
         salt,
         overrides=passdef.api_overrides,
     )
@@ -648,26 +607,22 @@ def run_analysis_once(config, passdef, full_text, glossary, use_cache, verbose):
 
             return cached
 
-    result = analyze_document(config, passdef, full_text, glossary, verbose)
+    result = analyze_document(config, passdef, full_text, verbose)
     if use_cache:
         cache_put(key, result)
 
     return result
 
 
-def run_pass(
-    config, passdef, source_chunk, work_chunk, glossary, analysis=None, verbose=False
-):
+def run_pass(config, passdef, source_chunk, work_chunk, analysis=None, verbose=False):
     system = passdef.instruction
     if passdef.strict_fidelity:
         system += STRICT_FIDELITY_SUFFIX
 
     user = (
-        "Glossary (use these renderings exactly):\n%s\n\n"
         "Preparation brief from a full read of the text "
         "(outline, names, hard-to-translate items):\n%s\n\n"
-        "Source text (original Chinese):\n%s"
-        % (glossary_text(glossary), analysis_block(analysis), source_chunk)
+        "Source text (original Chinese):\n%s" % (analysis_block(analysis), source_chunk)
     )
 
     if work_chunk is not None and work_chunk != source_chunk:
@@ -766,7 +721,7 @@ def to_ascii_mechanical(text):
 
 def ascii_fix_llm(config, pass_name, source_para, out_para, use_cache, verbose):
     salt = "ascii-fix\x00" + pass_name + "\x00" + ASCII_FIX_INSTRUCTION
-    key = cache_key(source_para, config.model, {}, salt, out_para)
+    key = cache_key(source_para, config.model, salt, out_para)
     if use_cache:
         cached = cache_get(key)
         if cached is not None and cached.isascii():
@@ -876,7 +831,7 @@ def cache_dir():
     return d
 
 
-def cache_key(chunk_text, model, glossary, pass_salt="", work_text="", overrides=None):
+def cache_key(chunk_text, model, pass_salt="", work_text="", overrides=None):
     h = hashlib.sha256()
     if pass_salt:
         h.update(pass_salt.encode("utf-8") + b"\x00")
@@ -892,10 +847,6 @@ def cache_key(chunk_text, model, glossary, pass_salt="", work_text="", overrides
             + json.dumps(overrides, sort_keys=True, ensure_ascii=False).encode("utf-8")
         )
 
-    h.update(
-        b"\x00"
-        + json.dumps(glossary, sort_keys=True, ensure_ascii=False).encode("utf-8")
-    )
     return h.hexdigest()
 
 
@@ -917,27 +868,6 @@ def cache_put(key, value):
     os.replace(tmp, path)
 
 
-def parse_json_loose(raw):
-    t = raw.strip()
-    if t.startswith("```"):
-        t = re.sub(r"^```(?:json)?\s*", "", t)
-        t = re.sub(r"\s*```$", "", t)
-
-    try:
-        return json.loads(t)
-    except json.JSONDecodeError:
-        pass
-
-    m = re.search(r"\{.*\}", t, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            return None
-
-    return None
-
-
 def eprint(*args):
     print(*args, file=sys.stderr)
 
@@ -951,11 +881,6 @@ def main(argv=None):
         "passes",
         metavar="PASSES_INI",
         help="INI file defining the translation passes (in execution order)",
-    )
-    ap.add_argument(
-        "--glossary",
-        metavar="FILE",
-        help="glossary file of `term -> rendering` lines, " "applied to every pass",
     )
     ap.add_argument(
         "--no-cache", action="store_true", help="bypass the translation cache"
@@ -986,16 +911,6 @@ def main(argv=None):
         eprint("zh2en: %s" % e)
         return 2
 
-    user_glossary = {}
-    if args.glossary:
-        try:
-            user_glossary = parse_glossary_file(args.glossary)
-        except OSError as e:
-            eprint("zh2en: cannot read glossary file: %s" % e)
-            return 2
-
-    glossary = user_glossary
-
     started = time.time()
 
     source_paragraphs, separators = split_paragraphs(text)
@@ -1015,7 +930,7 @@ def main(argv=None):
 
             try:
                 analysis_text = run_analysis_once(
-                    config, passdef, text, glossary, not args.no_cache, args.verbose
+                    config, passdef, text, not args.no_cache, args.verbose
                 )
             except LLMError as e:
                 eprint("zh2en: pass [%s] failed: %s" % (passdef.name, e))
@@ -1080,7 +995,6 @@ def main(argv=None):
             key = cache_key(
                 source_chunk_text,
                 config.model,
-                glossary,
                 pass_salt,
                 work_chunk_text,
                 overrides=passdef.api_overrides,
@@ -1115,7 +1029,6 @@ def main(argv=None):
                     passdef,
                     source_chunk_text,
                     work_chunk_text,
-                    glossary,
                     analysis_text,
                     args.verbose,
                 )
