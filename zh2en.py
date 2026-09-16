@@ -14,7 +14,13 @@ Pipeline:
               mode = chunk       default; budget-packed chunks. Every
                                  translation call receives its source unit
                                  plus the previous pass's output for that unit
-         -> stitch -> stdout
+              after each pass whose `ascii` setting is true (the [options]
+              `ascii` key is the default): each output paragraph is checked;
+              non-ASCII ones get a mechanical conversion (punctuation,
+              full-width forms, accents), and anything still non-ASCII is
+              repaired by an LLM call that sees the source paragraph and
+              must emit ASCII-only English
+         -> stdout
 """
 
 import argparse
@@ -25,6 +31,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 
@@ -83,7 +90,8 @@ class Pass:
 
     `mode` selects the unit of work: "analysis" (whole document, output kept
     as context), "chunk" (default, budget-packed) or "paragraph" (one source
-    paragraph per call).
+    paragraph per call). `ascii` enforces pure-ASCII output for this pass
+    after it completes.
 
     Keys other than the reserved ones pass through into the chat-completions
     request payload as-is (with type inference), so API fields like
@@ -91,13 +99,20 @@ class Pass:
     """
 
     def __init__(
-        self, name, instruction, mode="chunk", strict_fidelity=False, api_overrides=None
+        self,
+        name,
+        instruction,
+        mode="chunk",
+        strict_fidelity=False,
+        api_overrides=None,
+        ascii=False,
     ):
         self.name = name
         self.instruction = instruction
         self.mode = mode
         self.strict_fidelity = strict_fidelity
         self.api_overrides = api_overrides or {}
+        self.ascii = ascii
 
 
 def _infer_type(value):
@@ -117,13 +132,20 @@ def _infer_type(value):
     return v
 
 
+OPTIONS_SECTION = "options"
+
+
 def load_passes(path):
     """Load pass definitions from an INI file, in section order.
 
     Reserved keys: `instruction-file` (required; system-prompt text, resolved
     relative to the INI file), `mode` (`analysis`, `chunk` or `paragraph`;
-    default `chunk`) and `strict_fidelity` (bool). All other keys become
-    chat-completions payload overrides.
+    default `chunk`), `strict_fidelity` (bool) and `ascii` (bool; enforce
+    pure-ASCII output for this pass). All other keys become chat-completions
+    payload overrides.
+
+    A special `[options]` section holds global script options instead of a
+    pass; see load_options. Returns (passes, options).
     """
     parser = configparser.ConfigParser()
     try:
@@ -139,8 +161,12 @@ def load_passes(path):
 
     base_dir = os.path.dirname(os.path.abspath(path))
     passes = []
+    options = {}
     for section in parser.sections():
         opts = dict(parser.items(section))
+        if section.lower() == OPTIONS_SECTION:
+            options.update(load_options(section, opts))
+            continue
         instruction_file = opts.pop("instruction-file", None)
         if not instruction_file:
             raise PassError(
@@ -164,6 +190,13 @@ def load_passes(path):
             )
         strict_fidelity = strict_raw.strip().lower() == "true"
 
+        ascii_raw = opts.pop("ascii", None)
+        ascii_override = None
+        if ascii_raw is not None:
+            if ascii_raw.strip().lower() not in ("true", "false"):
+                raise PassError("pass [%s]: ascii must be true or false" % section)
+            ascii_override = ascii_raw.strip().lower() == "true"
+
         mode_raw = opts.pop("mode", "chunk").strip().lower()
         if mode_raw not in ("analysis", "chunk", "paragraph"):
             raise PassError(
@@ -176,9 +209,38 @@ def load_passes(path):
             if parsed is not None:
                 api_overrides[key] = parsed
         passes.append(
-            Pass(section, instruction, mode_raw, strict_fidelity, api_overrides)
+            Pass(
+                section,
+                instruction,
+                mode_raw,
+                strict_fidelity,
+                api_overrides,
+                ascii=ascii_override,
+            )
         )
-    return passes
+    # Resolve the per-pass ascii default after the loop so it works no matter
+    # where the [options] section sits in the file.
+    default_ascii = options.get("ascii", False)
+    for passdef in passes:
+        if passdef.ascii is None:
+            passdef.ascii = default_ascii
+    return passes, options
+
+
+def load_options(section, opts):
+    """Parse the global `[options]` section. Currently supported:
+    `ascii` (bool) — default for per-pass ASCII enforcement; any pass may
+    override it with its own `ascii` key."""
+    options = {}
+    ascii_raw = opts.pop("ascii", "false").strip().lower()
+    if ascii_raw not in ("true", "false"):
+        raise PassError("[%s]: ascii must be true or false" % section)
+    options["ascii"] = ascii_raw == "true"
+    if opts:
+        raise PassError(
+            "[%s]: unknown option(s): %s" % (section, ", ".join(sorted(opts)))
+        )
+    return options
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +564,201 @@ def clean_translation(text):
 
 
 # ---------------------------------------------------------------------------
+# ASCII enforcement (per-pass `ascii` setting; [options] ascii is the default)
+# ---------------------------------------------------------------------------
+
+
+ASCII_FIX_ATTEMPTS = 3
+
+ASCII_FIX_INSTRUCTION = """
+This paragraph failed to be fully translated or contains non-ASCII
+characters. Please analyse it and only output a clean translation
+without any non-ASCII.
+"""
+
+# Common typographic characters with no ASCII-compatible decomposition.
+# Full-width forms, no-break spaces and combining accents are handled by
+# NFKD normalization in to_ascii_mechanical().
+ASCII_CHAR_MAP = {
+    # spaces
+    "\u00a0": " ",
+    "\u2007": " ",
+    "\u2009": " ",
+    "\u202f": " ",
+    # quotes
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201a": ",",
+    "\u201b": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u201e": '"',
+    "\u201f": '"',
+    "\u2032": "'",
+    "\u2033": '"',
+    "\u2039": "'",
+    "\u203a": "'",
+    "\u00ab": '"',
+    "\u00bb": '"',
+    # dashes
+    "\u2010": "-",
+    "\u2011": "-",
+    "\u2012": "-",
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2015": "-",
+    "\u2212": "-",
+    # ellipsis / dots
+    "\u2026": "...",
+    "\u2025": "..",
+    # bullets / middle dot
+    "\u2022": "*",
+    "\u2023": "*",
+    "\u2024": "*",
+    "\u2219": "*",
+    "\u00b7": " ",
+    # arrows / comparisons
+    "\u2190": "<-",
+    "\u2192": "->",
+    "\u2194": "<->",
+    "\u2264": "<=",
+    "\u2265": ">=",
+    "\u2260": "!=",
+    # CJK punctuation with no compatibility decomposition
+    "\u3002": ".",
+    "\u3001": ",",
+    "\u300c": '"',
+    "\u300d": '"',
+    "\u300e": '"',
+    "\u300f": '"',
+    "\u3008": "<",
+    "\u3009": ">",
+    "\u300a": '"',
+    "\u300b": '"',
+    "\u3010": "[",
+    "\u3011": "]",
+}
+
+
+def to_ascii_mechanical(text):
+    """Best-effort ASCII conversion for common cases: a replacement map for
+    typographic punctuation, then NFKD normalization with combining marks
+    stripped (full-width forms, no-break spaces, accents). Anything left
+    (Chinese characters, letters without ASCII decompositions, symbols)
+    stays as-is; the caller treats that as the signal to ask the LLM."""
+    t = text
+    for src, repl in ASCII_CHAR_MAP.items():
+        t = t.replace(src, repl)
+    t = unicodedata.normalize("NFKD", t)
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+def ascii_fix_llm(config, pass_name, source_para, out_para, use_cache, verbose):
+    """Ask the LLM to rewrite a still-non-ASCII translated paragraph as
+    pure ASCII English, given the source paragraph for context. Models
+    sometimes parrot the paragraph back with the Chinese left in, so
+    non-ASCII replies are retried with an escalating complaint, and only
+    compliant replies are cached."""
+    salt = "ascii-fix\x00" + pass_name + "\x00" + ASCII_FIX_INSTRUCTION
+    key = cache_key(source_para, config.model, {}, salt, out_para)
+    if use_cache:
+        cached = cache_get(key)
+        # a cached reply that is itself non-ASCII (from an older run or a
+        # non-compliant model) is ignored so it can be regenerated
+        if cached is not None and cached.isascii():
+            if verbose:
+                eprint("zh2en: ascii: cache hit")
+            return cached
+    user = (
+        "Source paragraph (original language):\n%s\n\n"
+        "Translated paragraph (must become pure ASCII English):\n%s\n\n"
+        "Rewrite the translated paragraph as pure ASCII English."
+        % (source_para, out_para)
+    )
+    result = ""
+    for attempt in range(1, ASCII_FIX_ATTEMPTS + 1):
+        result = clean_translation(
+            chat(config, ASCII_FIX_INSTRUCTION, user, verbose=verbose)
+        )
+        if result.isascii():
+            if use_cache:
+                cache_put(key, result)
+            return result
+        if verbose:
+            eprint(
+                "zh2en: ascii: attempt %d/%d still non-ASCII; retrying"
+                % (attempt, ASCII_FIX_ATTEMPTS)
+            )
+        user = (
+            "Source paragraph (original language):\n%s\n\n"
+            "Translated paragraph (must become pure ASCII English):\n%s\n\n"
+            "Your previous reply still contained these non-ASCII "
+            "characters: %s. Rewrite the translated paragraph again, "
+            "inferring English for every one of them from the source and "
+            "context. Reply with ASCII characters only."
+            % (source_para, out_para, non_ascii_sample(result))
+        )
+    return result
+
+
+def non_ascii_sample(text, limit=12):
+    """Up to `limit` distinct non-ASCII characters in `text`, for use in
+    diagnostics and retry prompts."""
+    seen = []
+    for c in text:
+        if not c.isascii() and c not in seen:
+            seen.append(c)
+            if len(seen) >= limit:
+                break
+    return "".join(seen)
+
+
+def ensure_ascii_output(config, pass_name, text, source_paragraphs, use_cache, verbose):
+    """Enforce pure-ASCII output paragraph by paragraph. Non-ASCII
+    paragraphs first get the mechanical conversion; whatever is still
+    non-ASCII is repaired by the LLM using the matching source paragraph.
+    If even the retried LLM replies keep non-ASCII characters, the strays
+    are dropped as a last resort so the output stays ASCII."""
+    paragraphs, separators = split_paragraphs(text)
+    outputs = []
+    for i, para in enumerate(paragraphs):
+        sep = separators[i] if i < len(separators) else ""
+        if para.isascii():
+            outputs.append(para + sep)
+            continue
+        mechanical = to_ascii_mechanical(para)
+        if mechanical.isascii():
+            if verbose:
+                eprint(
+                    "zh2en: ascii: paragraph %d/%d converted mechanically"
+                    % (i + 1, len(paragraphs))
+                )
+            outputs.append(mechanical + sep)
+            continue
+        if verbose:
+            eprint(
+                "zh2en: ascii: paragraph %d/%d still non-ASCII; asking the "
+                "LLM to repair it" % (i + 1, len(paragraphs))
+            )
+        source = source_paragraphs[i] if i < len(source_paragraphs) else "(unavailable)"
+        repaired = ascii_fix_llm(config, pass_name, source, para, use_cache, verbose)
+        if not repaired.isascii():
+            fallback = to_ascii_mechanical(repaired)
+            if fallback.isascii():
+                repaired = fallback
+        if not repaired.isascii():
+            eprint(
+                "zh2en: ascii: warning: paragraph %d still contained "
+                "non-ASCII characters (%s) after %d LLM attempts; dropping "
+                "them" % (i + 1, non_ascii_sample(repaired), ASCII_FIX_ATTEMPTS)
+            )
+            repaired = "".join(c for c in repaired if c.isascii())
+            repaired = re.sub(r"  +", " ", repaired)
+        outputs.append(repaired + sep)
+    return "".join(outputs)
+
+
+# ---------------------------------------------------------------------------
 # Caching
 # ---------------------------------------------------------------------------
 
@@ -617,7 +874,7 @@ def main(argv=None):
         return 2
 
     try:
-        passes = load_passes(args.passes)
+        passes, _ = load_passes(args.passes)
     except PassError as e:
         eprint("zh2en: %s" % e)
         return 2
@@ -659,6 +916,26 @@ def main(argv=None):
                 eprint("zh2en: pass [%s] failed: %s" % (passdef.name, e))
                 return 1
             USAGE.log_pass()
+            if passdef.ascii:
+                USAGE.eprint(
+                    "Starting ascii enforcement for [%s]..." % passdef.name
+                )
+                try:
+                    analysis_text = ensure_ascii_output(
+                        config,
+                        passdef.name,
+                        analysis_text,
+                        source_paragraphs,
+                        not args.no_cache,
+                        args.verbose,
+                    )
+                except LLMError as e:
+                    eprint(
+                        "zh2en: pass [%s] ascii enforcement failed: %s"
+                        % (passdef.name, e)
+                    )
+                    return 1
+                USAGE.log_pass()
             continue
 
         plan = paragraph_plan if passdef.mode == "paragraph" else chunk_plan
@@ -745,6 +1022,24 @@ def main(argv=None):
 
         USAGE.log_pass()
         text = "".join(outputs)
+        if passdef.ascii:
+            USAGE.eprint("Starting ascii enforcement for [%s]..." % passdef.name)
+            try:
+                text = ensure_ascii_output(
+                    config,
+                    passdef.name,
+                    text,
+                    source_paragraphs,
+                    not args.no_cache,
+                    args.verbose,
+                )
+            except LLMError as e:
+                eprint(
+                    "zh2en: pass [%s] ascii enforcement failed: %s"
+                    % (passdef.name, e)
+                )
+                return 1
+            USAGE.log_pass()
 
     sys.stdout.write(text)
     if not text.endswith("\n"):
