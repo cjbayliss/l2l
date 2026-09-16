@@ -98,7 +98,7 @@ class Pass:
 def _infer_type(value):
     v = value.strip()
     if v.lower() == "none":
-        return None
+        return "none"
 
     if v.lower() in ("true", "false"):
         return v.lower() == "true"
