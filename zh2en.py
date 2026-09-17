@@ -42,7 +42,7 @@ class Config:
     def __init__(self):
         self.base_url = os.environ.get("TRANSLATE_BASE_URL", "").rstrip("/")
         self.api_key = os.environ.get("TRANSLATE_API_KEY", "")
-        self.model = os.environ.get("TRANSLATE_MODEL", "gpt-4o-mini")
+        self.model = os.environ.get("TRANSLATE_MODEL", "")
         self.timeout = float(os.environ.get("TRANSLATE_TIMEOUT", "120"))
         try:
             self.max_tokens = int(os.environ.get("TRANSLATE_MAX_TOKENS", "100000"))
@@ -391,6 +391,11 @@ def split_paragraphs(text):
     separators = [s for s in parts if s and is_sep(s)]
 
     return paragraphs, separators
+
+
+def ensure_blank_line_separators(text):
+    paragraphs, _ = split_paragraphs(text)
+    return "\n\n".join(paragraphs)
 
 
 def make_chunks(paragraphs, budget=CHUNK_BUDGET_TOKENS):
@@ -1040,7 +1045,7 @@ def main(argv=None):
                 )
 
         USAGE.log_pass()
-        text = "".join(outputs)
+        text = ensure_blank_line_separators("".join(outputs))
         if passdef.ascii:
             USAGE.eprint("Starting ascii enforcement for [%s]..." % passdef.name)
             try:
