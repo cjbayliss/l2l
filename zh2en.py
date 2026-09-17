@@ -224,20 +224,29 @@ class UsageTracker:
     def __init__(self):
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        self.cost = 0.0
         self.reset_pass()
 
     def reset_pass(self):
         self.pass_started = time.time()
         self.pass_prompt = 0
         self.pass_completion = 0
+        self.pass_cost = 0.0
 
     def add(self, usage):
         p = usage.get("prompt_tokens") or 0
         c = usage.get("completion_tokens") or 0
+        try:
+            cost = float(usage.get("cost") or 0.0)
+        except (TypeError, ValueError):
+            cost = 0.0
+
         self.prompt_tokens += p
         self.completion_tokens += c
+        self.cost += cost
         self.pass_prompt += p
         self.pass_completion += c
+        self.pass_cost += cost
 
     def elapsed(self, since=None):
         return time.time() - (since if since is not None else self.pass_started)
@@ -245,24 +254,26 @@ class UsageTracker:
     def log_pass(self):
         elapsed = self.elapsed()
         self.eprint(
-            "Done: %s, prompt=%d, completion=%d, %.1f tok/s"
+            "Done: %s, prompt=%d, completion=%d, %.1f tok/s, cost=$%.6f"
             % (
                 fmt_duration(elapsed),
                 self.pass_prompt,
                 self.pass_completion,
                 self.pass_completion / elapsed if elapsed else 0.0,
+                self.pass_cost,
             )
         )
         self.reset_pass()
 
     def log_total(self, total_elapsed):
         self.eprint(
-            "TOTAL: %s, prompt=%d, completion=%d, %.1f tok/s"
+            "TOTAL: %s, prompt=%d, completion=%d, %.1f tok/s, cost=$%.6f"
             % (
                 fmt_duration(total_elapsed),
                 self.prompt_tokens,
                 self.completion_tokens,
                 self.completion_tokens / total_elapsed if total_elapsed else 0.0,
+                self.cost,
             )
         )
 
