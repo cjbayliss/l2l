@@ -307,6 +307,11 @@ def chat(config, system, user, overrides=None, verbose=False):
             {"role": "user", "content": user},
         ],
     }
+    if "openrouter" in config.base_url.lower():
+        payload["provider"] = {
+            "allow_fallbacks": True,
+            "sort": {"by": "throughput", "partition": None},
+        }
     if overrides:
         payload.update({k: v for k, v in overrides.items() if v is not None})
 
