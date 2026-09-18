@@ -699,7 +699,7 @@ def chat(config, system, user, overrides, verbose, stderr, usage):
 
     payload = build_chat_payload(config, system, user, overrides)
     body = http_chat(config, payload)
-    new_usage = add_usage(usage, body.get("usage") or {})
+    usage = add_usage(usage, body.get("usage") or {})
     message, content = extract_message_content(body)
     print_message_reasoning(message, verbose, stderr)
     content = flatten_content_parts(content, verbose, stderr)
@@ -707,12 +707,12 @@ def chat(config, system, user, overrides, verbose, stderr, usage):
     if not isinstance(content, str):
         raise LLMError("unexpected content type: %s" % str(body)[:500])
 
-    return content, new_usage
+    return content, usage
 
 
 def run_analysis(config, settings, pass_definition, text, verbose, stderr, usage):
     user = settings.analysis_user_prefix + text
-    content, new_usage = chat(
+    content, usage = chat(
         config,
         pass_definition.instruction,
         user,
@@ -721,12 +721,12 @@ def run_analysis(config, settings, pass_definition, text, verbose, stderr, usage
         stderr,
         usage,
     )
-    return content.strip(), new_usage
+    return content.strip(), usage
 
 
 def run_merge(config, settings, pass_definition, briefs, verbose, stderr, usage):
     user = settings.merge_user_prefix + "\n\n".join(briefs)
-    content, new_usage = chat(
+    content, usage = chat(
         config,
         settings.analysis_merge_instruction,
         user,
@@ -735,7 +735,7 @@ def run_merge(config, settings, pass_definition, briefs, verbose, stderr, usage)
         stderr,
         usage,
     )
-    return content.strip(), new_usage
+    return content.strip(), usage
 
 
 def merge_budget(config, settings):
@@ -853,13 +853,13 @@ def run_analysis_once(
 
             return cached, usage
 
-    result, new_usage = analyze_document(
+    result, usage = analyze_document(
         config, settings, pass_definition, full_text, verbose, stderr, usage
     )
     if use_cache:
         cache_put(cache_directory, key, result)
 
-    return result, new_usage
+    return result, usage
 
 
 def build_pass_user(source_chunk, work_chunk, analysis):
@@ -890,25 +890,10 @@ def run_pass(
         system += settings.strict_fidelity_suffix
 
     user = build_pass_user(source_chunk, work_chunk, analysis)
-    content, new_usage = chat(
+    content, usage = chat(
         config, system, user, pass_definition.api_overrides, verbose, stderr, usage
     )
-    return clean_translation(content), new_usage
-
-
-def clean_translation(text):
-    trimmed = text.strip()
-    if trimmed.startswith("```"):
-        trimmed = re.sub(r"^```[a-zA-Z]*\n?", "", trimmed)
-        trimmed = re.sub(r"\n?```$", "", trimmed)
-
-    if len(trimmed) >= 2:
-        pairs = {'"': '"', "'": "'", "\u201c": "\u201d", "\u2018": "\u2019"}
-        if trimmed[0] in pairs and trimmed[-1] == pairs[trimmed[0]]:
-            trimmed = trimmed[1:-1]
-
-    trimmed = re.sub(r"^Translation:\s*", "", trimmed, flags=re.IGNORECASE)
-    return trimmed.strip()
+    return content, usage
 
 
 def to_ascii_mechanical(text, character_map):
@@ -980,7 +965,7 @@ def ascii_fix_llm(
     result = ""
     total_usage = usage
     for attempt in range(1, settings.ascii_fix_attempts + 1):
-        reply, total_usage = chat(
+        result, total_usage = chat(
             config,
             settings.ascii_fix_instruction,
             user,
@@ -989,7 +974,6 @@ def ascii_fix_llm(
             stderr,
             total_usage,
         )
-        result = clean_translation(reply)
         if result.isascii():
             if use_cache:
                 cache_put(cache_directory, key, result)
@@ -1062,7 +1046,7 @@ def repair_paragraph(
     source = (
         source_paragraphs[index] if index < len(source_paragraphs) else "(unavailable)"
     )
-    repaired, new_usage = ascii_fix_llm(
+    repaired, usage = ascii_fix_llm(
         config,
         settings,
         pass_name,
@@ -1081,7 +1065,7 @@ def repair_paragraph(
         index,
         stderr,
     )
-    return final + separator, new_usage
+    return final + separator, usage
 
 
 def ensure_ascii_output(
@@ -1306,7 +1290,7 @@ def enforce_pass_ascii(
 ):
     log(stderr, "Starting ascii enforcement for [%s]..." % pass_definition.name)
     try:
-        fixed, new_usage = ensure_ascii_output(
+        fixed, updated_usage = ensure_ascii_output(
             config,
             settings,
             pass_definition.name,
@@ -1326,8 +1310,8 @@ def enforce_pass_ascii(
             % (pass_definition.name, error),
         )
 
-    log_stage("Done", started_at, clock(), usage, new_usage, stderr)
-    return fixed, new_usage, None
+    log_stage("Done", started_at, clock(), usage, updated_usage, stderr)
+    return fixed, updated_usage, None
 
 
 def run_analysis_pass(
@@ -1351,7 +1335,7 @@ def run_analysis_pass(
         )
 
     try:
-        analysis, new_usage = run_analysis_once(
+        analysis, usage = run_analysis_once(
             config,
             settings,
             pass_definition,
@@ -1367,10 +1351,9 @@ def run_analysis_pass(
             None, "zh2en: pass [%s] failed: %s" % (pass_definition.name, error)
         )
 
-    log_stage("Done", started_at, clock(), state.usage, new_usage, stderr)
-    usage = new_usage
+    log_stage("Done", started_at, clock(), state.usage, usage, stderr)
     if pass_definition.ascii:
-        fixed, usage, error = enforce_pass_ascii(
+        analysis, usage, error = enforce_pass_ascii(
             config,
             settings,
             pass_definition,
@@ -1386,8 +1369,6 @@ def run_analysis_pass(
         )
         if error is not None:
             return PassResult(None, error)
-
-        analysis = fixed
 
     return PassResult(State(state.text, analysis, usage), None)
 
