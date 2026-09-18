@@ -58,13 +58,13 @@ class Settings:
     chunk_budget_tokens: int
     analysis_reserve_tokens: int
     ascii_fix_attempts: int
-    sentence_boundary_chars: str
+    sentence_boundary_characters: str
     strict_fidelity_suffix: str
     analysis_merge_instruction: str
     analysis_user_prefix: str
     merge_user_prefix: str
     ascii_fix_instruction: str
-    ascii_char_map: dict
+    ascii_character_map: dict
 
 
 @dataclass(frozen=True)
@@ -85,7 +85,7 @@ def build_settings():
         chunk_budget_tokens=3500,
         analysis_reserve_tokens=128,
         ascii_fix_attempts=3,
-        sentence_boundary_chars="。！？!?；;\n",
+        sentence_boundary_characters="。！？!?；;\n",
         strict_fidelity_suffix=(
             "\n- STRICT FIDELITY MODE: keep the exact number of paragraphs "
             "and the exact separators of the source. Do not merge "
@@ -115,7 +115,7 @@ This paragraph failed to be fully translated or contains non-ASCII
 characters. Please analyse it and only output a clean translation
 without any non-ASCII.
 """,
-        ascii_char_map={
+        ascii_character_map={
             "\u00a0": " ",
             "\u2007": " ",
             "\u2009": " ",
@@ -170,12 +170,12 @@ without any non-ASCII.
     )
 
 
-def build_config(env):
-    base_url = env.get("TRANSLATE_BASE_URL", "").rstrip("/")
-    api_key = env.get("TRANSLATE_API_KEY", "")
-    model = env.get("TRANSLATE_MODEL", "")
-    timeout = parse_float_setting(env.get("TRANSLATE_TIMEOUT", "120"), 120.0)
-    max_tokens = parse_int_setting(env.get("TRANSLATE_MAX_TOKENS", "100000"), 0)
+def build_config(environment):
+    base_url = environment.get("TRANSLATE_BASE_URL", "").rstrip("/")
+    api_key = environment.get("TRANSLATE_API_KEY", "")
+    model = environment.get("TRANSLATE_MODEL", "")
+    timeout = parse_float_setting(environment.get("TRANSLATE_TIMEOUT", "120"), 120.0)
+    max_tokens = parse_int_setting(environment.get("TRANSLATE_MAX_TOKENS", "100000"), 0)
     return Config(
         base_url=base_url,
         api_key=api_key,
@@ -224,30 +224,30 @@ def missing_config_keys(config):
 
 
 def infer_type(value):
-    v = value.strip()
-    if v.lower() == "none":
+    trimmed = value.strip()
+    if trimmed.lower() == "none":
         return "none"
 
-    if v.lower() in ("true", "false"):
-        return v.lower() == "true"
+    if trimmed.lower() in ("true", "false"):
+        return trimmed.lower() == "true"
 
-    parsed_int = parse_int_setting(v, None)
+    parsed_int = parse_int_setting(trimmed, None)
     if parsed_int is not None:
         return parsed_int
 
-    parsed_float = parse_float_setting(v, None)
+    parsed_float = parse_float_setting(trimmed, None)
     if parsed_float is not None:
         return parsed_float
 
-    return v
+    return trimmed
 
 
 def load_passes(path):
     try:
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
-    except OSError as e:
-        raise PassError("cannot read passes file: %s" % e) from None
+        with open(path, encoding="utf-8") as passes_file:
+            text = passes_file.read()
+    except OSError as error:
+        raise PassError("cannot read passes file: %s" % error) from None
 
     return parse_passes(text, path)
 
@@ -256,33 +256,36 @@ def parse_passes(text, path):
     parser = configparser.ConfigParser()
     try:
         parser.read_string(text)
-    except configparser.Error as e:
-        raise PassError("cannot parse passes file: %s" % e) from None
+    except configparser.Error as error:
+        raise PassError("cannot parse passes file: %s" % error) from None
 
     sections = parser.sections()
     if not sections:
         raise PassError("passes file %s defines no passes" % path)
 
-    base_dir = os.path.dirname(os.path.abspath(path))
+    base_directory = os.path.dirname(os.path.abspath(path))
     options = {}
-    passdefs = []
+    pass_definitions = []
     for section in sections:
-        opts = dict(parser.items(section))
+        section_options = dict(parser.items(section))
         if section.lower() == "options":
-            options.update(parse_options_section(section, opts))
+            options.update(parse_options_section(section, section_options))
             continue
 
-        passdefs.append(parse_pass_section(section, opts, base_dir))
+        pass_definitions.append(
+            parse_pass_section(section, section_options, base_directory)
+        )
 
-    return passdefs, options
+    return pass_definitions, options
 
 
-def parse_options_section(section, opts):
-    ascii_raw = opts.pop("ascii", "false")
+def parse_options_section(section, section_options):
+    ascii_raw = section_options.pop("ascii", "false")
     parse_bool_value(section, "ascii", ascii_raw, "")
-    if opts:
+    if section_options:
         raise PassError(
-            "[%s]: unknown option(s): %s" % (section, ", ".join(sorted(opts)))
+            "[%s]: unknown option(s): %s"
+            % (section, ", ".join(sorted(section_options)))
         )
 
     return {"ascii": ascii_raw.strip().lower() == "true"}
@@ -296,14 +299,17 @@ def parse_bool_value(section, key, raw, prefix):
     return value == "true"
 
 
-def parse_pass_section(section, opts, base_dir):
-    instruction = load_instruction(section, opts, base_dir)
+def parse_pass_section(section, section_options, base_directory):
+    instruction = load_instruction(section, section_options, base_directory)
     strict_fidelity = parse_bool_value(
-        section, "strict_fidelity", opts.pop("strict_fidelity", "false"), "pass "
+        section,
+        "strict_fidelity",
+        section_options.pop("strict_fidelity", "false"),
+        "pass ",
     )
-    ascii_override = parse_ascii_override(section, opts)
-    mode = parse_mode(section, opts)
-    api_overrides = collect_api_overrides(opts)
+    ascii_override = parse_ascii_override(section, section_options)
+    mode = parse_mode(section, section_options)
+    api_overrides = collect_api_overrides(section_options)
     return PassDef(
         name=section,
         instruction=instruction,
@@ -314,16 +320,16 @@ def parse_pass_section(section, opts, base_dir):
     )
 
 
-def parse_ascii_override(section, opts):
-    raw = opts.pop("ascii", None)
+def parse_ascii_override(section, section_options):
+    raw = section_options.pop("ascii", None)
     if raw is None:
         return None
 
     return parse_bool_value(section, "ascii", raw, "pass ")
 
 
-def parse_mode(section, opts):
-    mode = opts.pop("mode", "chunk").strip().lower()
+def parse_mode(section, section_options):
+    mode = section_options.pop("mode", "chunk").strip().lower()
     if mode not in ("analysis", "chunk", "paragraph"):
         raise PassError(
             "pass [%s]: mode must be analysis, chunk, or paragraph" % section
@@ -332,18 +338,18 @@ def parse_mode(section, opts):
     return mode
 
 
-def load_instruction(section, opts, base_dir):
-    instruction_file = opts.pop("instruction-file", None)
+def load_instruction(section, section_options, base_directory):
+    instruction_file = section_options.pop("instruction-file", None)
     if not instruction_file:
         raise PassError("pass [%s]: missing required key `instruction-file`" % section)
 
-    instruction_path = os.path.join(base_dir, instruction_file)
+    instruction_path = os.path.join(base_directory, instruction_file)
     try:
-        with open(instruction_path, encoding="utf-8") as f:
-            instruction = f.read().strip()
-    except OSError as e:
+        with open(instruction_path, encoding="utf-8") as instruction_handle:
+            instruction = instruction_handle.read().strip()
+    except OSError as error:
         raise PassError(
-            "pass [%s]: cannot read instruction file: %s" % (section, e)
+            "pass [%s]: cannot read instruction file: %s" % (section, error)
         ) from None
 
     if not instruction:
@@ -352,9 +358,9 @@ def load_instruction(section, opts, base_dir):
     return instruction
 
 
-def collect_api_overrides(opts):
+def collect_api_overrides(section_options):
     overrides = {}
-    for key, value in opts.items():
+    for key, value in section_options.items():
         parsed = infer_type(value)
         if parsed is not None:
             overrides[key] = parsed
@@ -362,11 +368,15 @@ def collect_api_overrides(opts):
     return overrides
 
 
-def apply_default_ascii(passdefs, options):
+def apply_default_ascii(pass_definitions, options):
     default_ascii = options.get("ascii", False)
     return [
-        replace(passdef, ascii=default_ascii) if passdef.ascii is None else passdef
-        for passdef in passdefs
+        (
+            replace(pass_definition, ascii=default_ascii)
+            if pass_definition.ascii is None
+            else pass_definition
+        )
+        for pass_definition in pass_definitions
     ]
 
 
@@ -456,19 +466,19 @@ def estimate_tokens(text):
 
 
 def split_paragraphs(text):
-    blank_re = re.compile(r"\n\s*\n")
-    blanks = blank_re.findall(text)
-    lone = text.count("\n") - sum(s.count("\n") for s in blanks)
-    sep_pattern = r"(\n+)" if lone >= 3 * len(blanks) else r"(\n\s*\n)"
-    parts = re.split(sep_pattern, text)
-    is_sep = re.compile(sep_pattern).fullmatch
-    paragraphs = [p for p in parts if p and not is_sep(p)]
-    separators = [s for s in parts if s and is_sep(s)]
+    blank_pattern = re.compile(r"\n\s*\n")
+    blanks = blank_pattern.findall(text)
+    lone = text.count("\n") - sum(blank.count("\n") for blank in blanks)
+    separator_pattern = r"(\n+)" if lone >= 3 * len(blanks) else r"(\n\s*\n)"
+    parts = re.split(separator_pattern, text)
+    is_separator = re.compile(separator_pattern).fullmatch
+    paragraphs = [part for part in parts if part and not is_separator(part)]
+    separators = [part for part in parts if part and is_separator(part)]
     return paragraphs, separators
 
 
 def ensure_blank_line_separators(text):
-    paragraphs, _ = split_paragraphs(text)
+    paragraphs, ignored_separators = split_paragraphs(text)
     return "\n\n".join(paragraphs)
 
 
@@ -477,14 +487,14 @@ def make_chunks(paragraphs, budget):
     current = []
     size = 0
     for paragraph in paragraphs:
-        p_size = estimate_tokens(paragraph)
-        if current and size + p_size > budget:
+        paragraph_size = estimate_tokens(paragraph)
+        if current and size + paragraph_size > budget:
             chunks.append(current)
             current = []
             size = 0
 
         current.append(paragraph)
-        size += p_size
+        size += paragraph_size
 
     if current:
         chunks.append(current)
@@ -492,46 +502,46 @@ def make_chunks(paragraphs, budget):
     return chunks
 
 
-def iter_sentences(text, boundary_chars):
-    buf = []
+def iter_sentences(text, boundary_characters):
+    buffer = []
     for char in text:
-        buf.append(char)
-        if char in boundary_chars:
-            yield "".join(buf)
-            buf = []
+        buffer.append(char)
+        if char in boundary_characters:
+            yield "".join(buffer)
+            buffer = []
 
-    if buf:
-        yield "".join(buf)
+    if buffer:
+        yield "".join(buffer)
 
 
-def split_to_budget(text, budget, boundary_chars):
+def split_to_budget(text, budget, boundary_characters):
     pieces = []
-    buf = []
+    buffer = []
     size = 0
-    for sentence in iter_sentences(text, boundary_chars):
-        s_size = estimate_tokens(sentence)
-        if buf and size + s_size > budget:
-            pieces.append("".join(buf))
-            buf = []
+    for sentence in iter_sentences(text, boundary_characters):
+        sentence_size = estimate_tokens(sentence)
+        if buffer and size + sentence_size > budget:
+            pieces.append("".join(buffer))
+            buffer = []
             size = 0
 
-        buf.append(sentence)
-        size += s_size
+        buffer.append(sentence)
+        size += sentence_size
 
-    if buf:
-        pieces.append("".join(buf))
+    if buffer:
+        pieces.append("".join(buffer))
 
     return pieces
 
 
-def split_units_to_budget(paragraphs, budget, boundary_chars):
+def split_units_to_budget(paragraphs, budget, boundary_characters):
     units = []
-    for para in paragraphs:
-        if estimate_tokens(para) <= budget:
-            units.append(para)
+    for paragraph in paragraphs:
+        if estimate_tokens(paragraph) <= budget:
+            units.append(paragraph)
             continue
 
-        units.extend(split_to_budget(para, budget, boundary_chars))
+        units.extend(split_to_budget(paragraph, budget, boundary_characters))
 
     return units
 
@@ -539,10 +549,10 @@ def split_units_to_budget(paragraphs, budget, boundary_chars):
 def unit_separators(plan, separators):
     result = []
     consumed = 0
-    for i, unit in enumerate(plan):
+    for index, unit in enumerate(plan):
         consumed += len(unit)
-        sep = separators[consumed - 1] if consumed - 1 < len(separators) else ""
-        result.append("" if i >= len(plan) - 1 else sep)
+        separator = separators[consumed - 1] if consumed - 1 < len(separators) else ""
+        result.append("" if index >= len(plan) - 1 else separator)
 
     return result
 
@@ -553,10 +563,10 @@ def regroup_by_plan(paragraphs, plan):
         return None
 
     groups = []
-    i = 0
+    index = 0
     for chunk in plan:
-        groups.append(paragraphs[i : i + len(chunk)])
-        i += len(chunk)
+        groups.append(paragraphs[index : index + len(chunk)])
+        index += len(chunk)
 
     return groups
 
@@ -583,13 +593,15 @@ def build_chat_payload(config, system, user, overrides):
         }
 
     if overrides:
-        payload.update({k: v for k, v in overrides.items() if v is not None})
+        payload.update(
+            {key: value for key, value in overrides.items() if value is not None}
+        )
 
     return payload
 
 
 def http_chat(config, payload):
-    req = urllib.request.Request(
+    request = urllib.request.Request(
         config.base_url + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={
@@ -599,13 +611,13 @@ def http_chat(config, payload):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=config.timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:500]
-        raise LLMError("HTTP %s from endpoint: %s" % (e.code, detail)) from None
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        raise LLMError("could not reach endpoint: %s" % e) from None
+        with urllib.request.urlopen(request, timeout=config.timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", "replace")[:500]
+        raise LLMError("HTTP %s from endpoint: %s" % (error.code, detail)) from None
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise LLMError("could not reach endpoint: %s" % error) from None
 
 
 def extract_message_content(body):
@@ -618,9 +630,9 @@ def extract_message_content(body):
 
 def thinking_texts(part):
     texts = []
-    for sub in part.get("thinking") or []:
-        if isinstance(sub, dict) and sub.get("text"):
-            texts.append(sub["text"])
+    for entry in part.get("thinking") or []:
+        if isinstance(entry, dict) and entry.get("text"):
+            texts.append(entry["text"])
 
     return texts
 
@@ -698,21 +710,27 @@ def chat(config, system, user, overrides, verbose, stderr, usage):
     return content, new_usage
 
 
-def run_analysis(config, settings, passdef, text, verbose, stderr, usage):
+def run_analysis(config, settings, pass_definition, text, verbose, stderr, usage):
     user = settings.analysis_user_prefix + text
     content, new_usage = chat(
-        config, passdef.instruction, user, passdef.api_overrides, verbose, stderr, usage
+        config,
+        pass_definition.instruction,
+        user,
+        pass_definition.api_overrides,
+        verbose,
+        stderr,
+        usage,
     )
     return content.strip(), new_usage
 
 
-def run_merge(config, settings, passdef, briefs, verbose, stderr, usage):
+def run_merge(config, settings, pass_definition, briefs, verbose, stderr, usage):
     user = settings.merge_user_prefix + "\n\n".join(briefs)
     content, new_usage = chat(
         config,
         settings.analysis_merge_instruction,
         user,
-        passdef.api_overrides,
+        pass_definition.api_overrides,
         verbose,
         stderr,
         usage,
@@ -727,7 +745,7 @@ def merge_budget(config, settings):
     return max(config.max_tokens - overhead - settings.analysis_reserve_tokens, 1)
 
 
-def merge_groups(config, settings, passdef, groups, verbose, stderr, usage):
+def merge_groups(config, settings, pass_definition, groups, verbose, stderr, usage):
     merged = []
     total_usage = usage
     for group in groups:
@@ -736,14 +754,14 @@ def merge_groups(config, settings, passdef, groups, verbose, stderr, usage):
             continue
 
         brief, total_usage = run_merge(
-            config, settings, passdef, group, verbose, stderr, total_usage
+            config, settings, pass_definition, group, verbose, stderr, total_usage
         )
         merged.append(brief)
 
     return merged, total_usage
 
 
-def merge_analysis(config, settings, passdef, briefs, verbose, stderr, usage):
+def merge_analysis(config, settings, pass_definition, briefs, verbose, stderr, usage):
     current = briefs
     total_usage = usage
     while len(current) > 1:
@@ -754,27 +772,31 @@ def merge_analysis(config, settings, passdef, briefs, verbose, stderr, usage):
                 "partial analysis brief (~%d tokens) does not fit the "
                 "%d-token budget; raise TRANSLATE_MAX_TOKENS or shorten "
                 "the input"
-                % (max(estimate_tokens(b) for b in current), config.max_tokens)
+                % (max(estimate_tokens(brief) for brief in current), config.max_tokens)
             )
 
         current, total_usage = merge_groups(
-            config, settings, passdef, groups, verbose, stderr, total_usage
+            config, settings, pass_definition, groups, verbose, stderr, total_usage
         )
 
     return current[0], total_usage
 
 
-def analyze_document(config, settings, passdef, full_text, verbose, stderr, usage):
-    overhead = estimate_tokens(passdef.instruction) + estimate_tokens(
+def analyze_document(
+    config, settings, pass_definition, full_text, verbose, stderr, usage
+):
+    overhead = estimate_tokens(pass_definition.instruction) + estimate_tokens(
         settings.analysis_user_prefix
     )
     budget = max(config.max_tokens - overhead - settings.analysis_reserve_tokens, 1)
-    paragraphs, _ = split_paragraphs(full_text)
-    units = split_units_to_budget(paragraphs, budget, settings.sentence_boundary_chars)
+    paragraphs, ignored_separators = split_paragraphs(full_text)
+    units = split_units_to_budget(
+        paragraphs, budget, settings.sentence_boundary_characters
+    )
     chunks = make_chunks(units, budget)
     if len(chunks) <= 1:
         return run_analysis(
-            config, settings, passdef, full_text, verbose, stderr, usage
+            config, settings, pass_definition, full_text, verbose, stderr, usage
         )
 
     if verbose:
@@ -782,7 +804,7 @@ def analyze_document(config, settings, passdef, full_text, verbose, stderr, usag
             stderr,
             "zh2en: [%s] ~%d tokens over the %d-token budget; analysing in %d part(s)"
             % (
-                passdef.name,
+                pass_definition.name,
                 estimate_tokens(full_text),
                 config.max_tokens,
                 len(chunks),
@@ -793,33 +815,49 @@ def analyze_document(config, settings, passdef, full_text, verbose, stderr, usag
     total_usage = usage
     for chunk in chunks:
         brief, total_usage = run_analysis(
-            config, settings, passdef, "\n\n".join(chunk), verbose, stderr, total_usage
+            config,
+            settings,
+            pass_definition,
+            "\n\n".join(chunk),
+            verbose,
+            stderr,
+            total_usage,
         )
         briefs.append(brief)
 
     return merge_analysis(
-        config, settings, passdef, briefs, verbose, stderr, total_usage
+        config, settings, pass_definition, briefs, verbose, stderr, total_usage
     )
 
 
 def run_analysis_once(
-    config, settings, passdef, full_text, use_cache, cache_dir, verbose, stderr, usage
+    config,
+    settings,
+    pass_definition,
+    full_text,
+    use_cache,
+    cache_directory,
+    verbose,
+    stderr,
+    usage,
 ):
-    salt = passdef.name + "\x00" + passdef.instruction
-    key = cache_key(full_text, config.model, salt, overrides=passdef.api_overrides)
+    salt = pass_definition.name + "\x00" + pass_definition.instruction
+    key = cache_key(
+        full_text, config.model, salt, overrides=pass_definition.api_overrides
+    )
     if use_cache:
-        cached = cache_get(cache_dir, key)
+        cached = cache_get(cache_directory, key)
         if cached is not None:
             if verbose:
-                log(stderr, "zh2en: [%s] cache hit" % passdef.name)
+                log(stderr, "zh2en: [%s] cache hit" % pass_definition.name)
 
             return cached, usage
 
     result, new_usage = analyze_document(
-        config, settings, passdef, full_text, verbose, stderr, usage
+        config, settings, pass_definition, full_text, verbose, stderr, usage
     )
     if use_cache:
-        cache_put(cache_dir, key, result)
+        cache_put(cache_directory, key, result)
 
     return result, new_usage
 
@@ -839,7 +877,7 @@ def build_pass_user(source_chunk, work_chunk, analysis):
 def run_pass(
     config,
     settings,
-    passdef,
+    pass_definition,
     source_chunk,
     work_chunk,
     analysis,
@@ -847,62 +885,64 @@ def run_pass(
     stderr,
     usage,
 ):
-    system = passdef.instruction
-    if passdef.strict_fidelity:
+    system = pass_definition.instruction
+    if pass_definition.strict_fidelity:
         system += settings.strict_fidelity_suffix
 
     user = build_pass_user(source_chunk, work_chunk, analysis)
     content, new_usage = chat(
-        config, system, user, passdef.api_overrides, verbose, stderr, usage
+        config, system, user, pass_definition.api_overrides, verbose, stderr, usage
     )
     return clean_translation(content), new_usage
 
 
 def clean_translation(text):
-    t = text.strip()
-    if t.startswith("```"):
-        t = re.sub(r"^```[a-zA-Z]*\n?", "", t)
-        t = re.sub(r"\n?```$", "", t)
+    trimmed = text.strip()
+    if trimmed.startswith("```"):
+        trimmed = re.sub(r"^```[a-zA-Z]*\n?", "", trimmed)
+        trimmed = re.sub(r"\n?```$", "", trimmed)
 
-    if len(t) >= 2:
+    if len(trimmed) >= 2:
         pairs = {'"': '"', "'": "'", "\u201c": "\u201d", "\u2018": "\u2019"}
-        if t[0] in pairs and t[-1] == pairs[t[0]]:
-            t = t[1:-1]
+        if trimmed[0] in pairs and trimmed[-1] == pairs[trimmed[0]]:
+            trimmed = trimmed[1:-1]
 
-    t = re.sub(r"^Translation:\s*", "", t, flags=re.IGNORECASE)
-    return t.strip()
+    trimmed = re.sub(r"^Translation:\s*", "", trimmed, flags=re.IGNORECASE)
+    return trimmed.strip()
 
 
-def to_ascii_mechanical(text, char_map):
+def to_ascii_mechanical(text, character_map):
     replaced = text
-    for src, repl in char_map.items():
-        replaced = replaced.replace(src, repl)
+    for source, replacement in character_map.items():
+        replaced = replaced.replace(source, replacement)
 
     normalized = unicodedata.normalize("NFKD", replaced)
-    return "".join(c for c in normalized if not unicodedata.combining(c))
+    return "".join(
+        character for character in normalized if not unicodedata.combining(character)
+    )
 
 
 def non_ascii_sample(text, limit=12):
     seen = []
-    for c in text:
-        if not c.isascii() and c not in seen:
-            seen.append(c)
+    for character in text:
+        if not character.isascii() and character not in seen:
+            seen.append(character)
             if len(seen) >= limit:
                 break
 
     return "".join(seen)
 
 
-def build_ascii_fix_user(source_para, out_para):
+def build_ascii_fix_user(source_paragraph, output_paragraph):
     return (
         "Source paragraph (original language):\n%s\n\n"
         "Translated paragraph (must become pure ASCII English):\n%s\n\n"
         "Rewrite the translated paragraph as pure ASCII English."
-        % (source_para, out_para)
+        % (source_paragraph, output_paragraph)
     )
 
 
-def build_ascii_retry_user(source_para, out_para, result):
+def build_ascii_retry_user(source_paragraph, output_paragraph, result):
     return (
         "Source paragraph (original language):\n%s\n\n"
         "Translated paragraph (must become pure ASCII English):\n%s\n\n"
@@ -910,7 +950,7 @@ def build_ascii_retry_user(source_para, out_para, result):
         "characters: %s. Rewrite the translated paragraph again, "
         "inferring English for every one of them from the source and "
         "context. Reply with ASCII characters only."
-        % (source_para, out_para, non_ascii_sample(result))
+        % (source_paragraph, output_paragraph, non_ascii_sample(result))
     )
 
 
@@ -918,25 +958,25 @@ def ascii_fix_llm(
     config,
     settings,
     pass_name,
-    source_para,
-    out_para,
+    source_paragraph,
+    output_paragraph,
     use_cache,
-    cache_dir,
+    cache_directory,
     verbose,
     stderr,
     usage,
 ):
     salt = "ascii-fix\x00" + pass_name + "\x00" + settings.ascii_fix_instruction
-    key = cache_key(source_para, config.model, salt, out_para)
+    key = cache_key(source_paragraph, config.model, salt, output_paragraph)
     if use_cache:
-        cached = cache_get(cache_dir, key)
+        cached = cache_get(cache_directory, key)
         if cached is not None and cached.isascii():
             if verbose:
                 log(stderr, "zh2en: ascii: cache hit")
 
             return cached, usage
 
-    user = build_ascii_fix_user(source_para, out_para)
+    user = build_ascii_fix_user(source_paragraph, output_paragraph)
     result = ""
     total_usage = usage
     for attempt in range(1, settings.ascii_fix_attempts + 1):
@@ -952,7 +992,7 @@ def ascii_fix_llm(
         result = clean_translation(reply)
         if result.isascii():
             if use_cache:
-                cache_put(cache_dir, key, result)
+                cache_put(cache_directory, key, result)
 
             return result, total_usage
 
@@ -963,16 +1003,16 @@ def ascii_fix_llm(
                 % (attempt, settings.ascii_fix_attempts),
             )
 
-        user = build_ascii_retry_user(source_para, out_para, result)
+        user = build_ascii_retry_user(source_paragraph, output_paragraph, result)
 
     return result, total_usage
 
 
-def drop_non_ascii(text, char_map, attempts, index, stderr):
+def drop_non_ascii(text, character_map, attempts, index, stderr):
     if text.isascii():
         return text
 
-    fallback = to_ascii_mechanical(text, char_map)
+    fallback = to_ascii_mechanical(text, character_map)
     if fallback.isascii():
         return fallback
 
@@ -982,7 +1022,7 @@ def drop_non_ascii(text, char_map, attempts, index, stderr):
         "non-ASCII characters (%s) after %d LLM attempts; dropping "
         "them" % (index + 1, non_ascii_sample(text), attempts),
     )
-    stripped = "".join(c for c in text if c.isascii())
+    stripped = "".join(character for character in text if character.isascii())
     return re.sub(r"  +", " ", stripped)
 
 
@@ -990,18 +1030,18 @@ def repair_paragraph(
     config,
     settings,
     pass_name,
-    para,
-    sep,
+    paragraph,
+    separator,
     index,
     total,
     source_paragraphs,
     use_cache,
-    cache_dir,
+    cache_directory,
     verbose,
     stderr,
     usage,
 ):
-    mechanical = to_ascii_mechanical(para, settings.ascii_char_map)
+    mechanical = to_ascii_mechanical(paragraph, settings.ascii_character_map)
     if mechanical.isascii():
         if verbose:
             log(
@@ -1010,7 +1050,7 @@ def repair_paragraph(
                 % (index + 1, total),
             )
 
-        return mechanical + sep, usage
+        return mechanical + separator, usage
 
     if verbose:
         log(
@@ -1027,17 +1067,21 @@ def repair_paragraph(
         settings,
         pass_name,
         source,
-        para,
+        paragraph,
         use_cache,
-        cache_dir,
+        cache_directory,
         verbose,
         stderr,
         usage,
     )
     final = drop_non_ascii(
-        repaired, settings.ascii_char_map, settings.ascii_fix_attempts, index, stderr
+        repaired,
+        settings.ascii_character_map,
+        settings.ascii_fix_attempts,
+        index,
+        stderr,
     )
-    return final + sep, new_usage
+    return final + separator, new_usage
 
 
 def ensure_ascii_output(
@@ -1047,7 +1091,7 @@ def ensure_ascii_output(
     text,
     source_paragraphs,
     use_cache,
-    cache_dir,
+    cache_directory,
     verbose,
     stderr,
     usage,
@@ -1055,23 +1099,23 @@ def ensure_ascii_output(
     paragraphs, separators = split_paragraphs(text)
     outputs = []
     total_usage = usage
-    for i, para in enumerate(paragraphs):
-        sep = separators[i] if i < len(separators) else ""
-        if para.isascii():
-            outputs.append(para + sep)
+    for index, paragraph in enumerate(paragraphs):
+        separator = separators[index] if index < len(separators) else ""
+        if paragraph.isascii():
+            outputs.append(paragraph + separator)
             continue
 
         piece, total_usage = repair_paragraph(
             config,
             settings,
             pass_name,
-            para,
-            sep,
-            i,
+            paragraph,
+            separator,
+            index,
             len(paragraphs),
             source_paragraphs,
             use_cache,
-            cache_dir,
+            cache_directory,
             verbose,
             stderr,
             total_usage,
@@ -1081,99 +1125,101 @@ def ensure_ascii_output(
     return "".join(outputs), total_usage
 
 
-def resolve_cache_dir(env):
-    base = env.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+def resolve_cache_dir(environment):
+    base = environment.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
     directory = os.path.join(base, "zh2en")
     os.makedirs(directory, exist_ok=True)
     return directory
 
 
 def cache_key(chunk_text, model, pass_salt="", work_text="", overrides=None):
-    h = hashlib.sha256()
+    hasher = hashlib.sha256()
     if pass_salt:
-        h.update(pass_salt.encode("utf-8") + b"\x00")
+        hasher.update(pass_salt.encode("utf-8") + b"\x00")
 
-    h.update(chunk_text.encode("utf-8"))
+    hasher.update(chunk_text.encode("utf-8"))
     if work_text:
-        h.update(b"\x00work\x00" + work_text.encode("utf-8"))
+        hasher.update(b"\x00work\x00" + work_text.encode("utf-8"))
 
-    h.update(b"\x00" + model.encode("utf-8"))
+    hasher.update(b"\x00" + model.encode("utf-8"))
     if overrides:
-        h.update(
+        hasher.update(
             b"\x00"
             + json.dumps(overrides, sort_keys=True, ensure_ascii=False).encode("utf-8")
         )
 
-    return h.hexdigest()
+    return hasher.hexdigest()
 
 
-def cache_get(cache_dir, key):
-    path = os.path.join(cache_dir, key + ".txt")
+def cache_get(cache_directory, key):
+    path = os.path.join(cache_directory, key + ".txt")
     try:
-        with open(path, encoding="utf-8") as f:
-            return f.read()
+        with open(path, encoding="utf-8") as cache_file:
+            return cache_file.read()
     except OSError:
         return None
 
 
-def cache_put(cache_dir, key, value):
-    path = os.path.join(cache_dir, key + ".txt")
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(value)
+def cache_put(cache_directory, key, value):
+    path = os.path.join(cache_directory, key + ".txt")
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as temporary_file:
+        temporary_file.write(value)
 
-    os.replace(tmp, path)
+    os.replace(temporary_path, path)
 
 
 def run_units(
     config,
     settings,
-    passdef,
+    pass_definition,
     work_groups,
     plan,
-    unit_seps,
+    trailing_separators,
     pass_salt,
     analysis,
     usage,
     use_cache,
-    cache_dir,
+    cache_directory,
     verbose,
     stderr,
 ):
     outputs = []
     total_usage = usage
-    for i, work_group in enumerate(work_groups):
-        source_chunk_text = "\n\n".join(plan[i]) if i < len(plan) else ""
+    for index, work_group in enumerate(work_groups):
+        source_chunk_text = "\n\n".join(plan[index]) if index < len(plan) else ""
         work_chunk_text = "\n\n".join(work_group)
         key = cache_key(
             source_chunk_text,
             config.model,
             pass_salt,
             work_chunk_text,
-            overrides=passdef.api_overrides,
+            overrides=pass_definition.api_overrides,
         )
-        trailing_sep = unit_seps[i] if i < len(unit_seps) else ""
+        trailing_separator = (
+            trailing_separators[index] if index < len(trailing_separators) else ""
+        )
         if not source_chunk_text:
             if verbose:
                 log(
                     stderr,
                     "zh2en: [%s] unit %d/%d has no matching source; "
                     "passing it through unchanged"
-                    % (passdef.name, i + 1, len(work_groups)),
+                    % (pass_definition.name, index + 1, len(work_groups)),
                 )
 
-            outputs.append(work_chunk_text + trailing_sep)
+            outputs.append(work_chunk_text + trailing_separator)
             continue
 
         if use_cache:
-            cached = cache_get(cache_dir, key)
+            cached = cache_get(cache_directory, key)
             if cached is not None:
-                outputs.append(cached + trailing_sep)
+                outputs.append(cached + trailing_separator)
                 if verbose:
                     log(
                         stderr,
                         "zh2en: [%s] unit %d/%d cache hit"
-                        % (passdef.name, i + 1, len(work_groups)),
+                        % (pass_definition.name, index + 1, len(work_groups)),
                     )
 
                 continue
@@ -1182,7 +1228,7 @@ def run_units(
             result, total_usage = run_pass(
                 config,
                 settings,
-                passdef,
+                pass_definition,
                 source_chunk_text,
                 work_chunk_text,
                 analysis,
@@ -1190,21 +1236,23 @@ def run_units(
                 stderr,
                 total_usage,
             )
-        except LLMError as e:
+        except LLMError as error:
             return (
                 None,
                 total_usage,
-                "zh2en: pass [%s] failed on unit %d: %s" % (passdef.name, i + 1, e),
+                "zh2en: pass [%s] failed on unit %d: %s"
+                % (pass_definition.name, index + 1, error),
             )
 
         if use_cache:
-            cache_put(cache_dir, key, result)
+            cache_put(cache_directory, key, result)
 
-        outputs.append(result + trailing_sep)
+        outputs.append(result + trailing_separator)
         if verbose:
             log(
                 stderr,
-                "zh2en: [%s] unit %d/%d done" % (passdef.name, i + 1, len(work_groups)),
+                "zh2en: [%s] unit %d/%d done"
+                % (pass_definition.name, index + 1, len(work_groups)),
             )
 
     return outputs, total_usage, None
@@ -1221,60 +1269,61 @@ def resolve_work_groups(mode, work_paragraphs, plan, pass_name, budget, stderr):
         "grouping working text independently" % pass_name,
     )
     if mode == "paragraph":
-        return [[p] for p in work_paragraphs]
+        return [[paragraph] for paragraph in work_paragraphs]
 
     return make_chunks(work_paragraphs, budget)
 
 
-def log_plan_info(passdef, work_paragraphs, work_groups, stderr):
-    if passdef.mode == "paragraph":
+def log_plan_info(pass_definition, work_paragraphs, work_groups, stderr):
+    if pass_definition.mode == "paragraph":
         log(
             stderr,
             "zh2en: [%s] %d paragraph(s), one call per paragraph"
-            % (passdef.name, len(work_groups)),
+            % (pass_definition.name, len(work_groups)),
         )
         return
 
     log(
         stderr,
         "zh2en: [%s] %d paragraph(s) in %d chunk(s)"
-        % (passdef.name, len(work_paragraphs), len(work_groups)),
+        % (pass_definition.name, len(work_paragraphs), len(work_groups)),
     )
 
 
 def enforce_pass_ascii(
     config,
     settings,
-    passdef,
+    pass_definition,
     text,
     source_paragraphs,
     use_cache,
-    cache_dir,
+    cache_directory,
     verbose,
     stderr,
     usage,
     started_at,
     clock,
 ):
-    log(stderr, "Starting ascii enforcement for [%s]..." % passdef.name)
+    log(stderr, "Starting ascii enforcement for [%s]..." % pass_definition.name)
     try:
         fixed, new_usage = ensure_ascii_output(
             config,
             settings,
-            passdef.name,
+            pass_definition.name,
             text,
             source_paragraphs,
             use_cache,
-            cache_dir,
+            cache_directory,
             verbose,
             stderr,
             usage,
         )
-    except LLMError as e:
+    except LLMError as error:
         return (
             text,
             usage,
-            "zh2en: pass [%s] ascii enforcement failed: %s" % (passdef.name, e),
+            "zh2en: pass [%s] ascii enforcement failed: %s"
+            % (pass_definition.name, error),
         )
 
     log_stage("Done", started_at, clock(), usage, new_usage, stderr)
@@ -1284,12 +1333,12 @@ def enforce_pass_ascii(
 def run_analysis_pass(
     config,
     settings,
-    passdef,
+    pass_definition,
     state,
     started_at,
     source_paragraphs,
     use_cache,
-    cache_dir,
+    cache_directory,
     verbose,
     stderr,
     clock,
@@ -1298,35 +1347,37 @@ def run_analysis_pass(
         log(
             stderr,
             "zh2en: [%s] whole-document analysis (%d characters, ~%d tokens)"
-            % (passdef.name, len(state.text), estimate_tokens(state.text)),
+            % (pass_definition.name, len(state.text), estimate_tokens(state.text)),
         )
 
     try:
         analysis, new_usage = run_analysis_once(
             config,
             settings,
-            passdef,
+            pass_definition,
             state.text,
             use_cache,
-            cache_dir,
+            cache_directory,
             verbose,
             stderr,
             state.usage,
         )
-    except LLMError as e:
-        return PassResult(None, "zh2en: pass [%s] failed: %s" % (passdef.name, e))
+    except LLMError as error:
+        return PassResult(
+            None, "zh2en: pass [%s] failed: %s" % (pass_definition.name, error)
+        )
 
     log_stage("Done", started_at, clock(), state.usage, new_usage, stderr)
     usage = new_usage
-    if passdef.ascii:
+    if pass_definition.ascii:
         fixed, usage, error = enforce_pass_ascii(
             config,
             settings,
-            passdef,
+            pass_definition,
             analysis,
             source_paragraphs,
             use_cache,
-            cache_dir,
+            cache_directory,
             verbose,
             stderr,
             usage,
@@ -1344,7 +1395,7 @@ def run_analysis_pass(
 def run_text_pass(
     config,
     settings,
-    passdef,
+    pass_definition,
     state,
     started_at,
     source_paragraphs,
@@ -1352,38 +1403,38 @@ def run_text_pass(
     chunk_plan,
     paragraph_plan,
     use_cache,
-    cache_dir,
+    cache_directory,
     verbose,
     stderr,
     clock,
 ):
-    plan = paragraph_plan if passdef.mode == "paragraph" else chunk_plan
-    work_paragraphs, _ = split_paragraphs(state.text)
+    plan = paragraph_plan if pass_definition.mode == "paragraph" else chunk_plan
+    work_paragraphs, ignored_separators = split_paragraphs(state.text)
     work_groups = resolve_work_groups(
-        passdef.mode,
+        pass_definition.mode,
         work_paragraphs,
         plan,
-        passdef.name,
+        pass_definition.name,
         settings.chunk_budget_tokens,
         stderr,
     )
     if verbose:
-        log_plan_info(passdef, work_paragraphs, work_groups, stderr)
+        log_plan_info(pass_definition, work_paragraphs, work_groups, stderr)
 
-    unit_seps = unit_separators(plan, separators)
-    pass_salt = passdef.name + "\x00" + passdef.instruction
+    trailing_separators = unit_separators(plan, separators)
+    pass_salt = pass_definition.name + "\x00" + pass_definition.instruction
     outputs, usage, error = run_units(
         config,
         settings,
-        passdef,
+        pass_definition,
         work_groups,
         plan,
-        unit_seps,
+        trailing_separators,
         pass_salt,
         state.analysis,
         state.usage,
         use_cache,
-        cache_dir,
+        cache_directory,
         verbose,
         stderr,
     )
@@ -1392,15 +1443,15 @@ def run_text_pass(
 
     log_stage("Done", started_at, clock(), state.usage, usage, stderr)
     text = ensure_blank_line_separators("".join(outputs))
-    if passdef.ascii:
+    if pass_definition.ascii:
         text, usage, error = enforce_pass_ascii(
             config,
             settings,
-            passdef,
+            pass_definition,
             text,
             source_paragraphs,
             use_cache,
-            cache_dir,
+            cache_directory,
             verbose,
             stderr,
             usage,
@@ -1416,7 +1467,7 @@ def run_text_pass(
 def run_one_pass(
     config,
     settings,
-    passdef,
+    pass_definition,
     state,
     started_at,
     source_paragraphs,
@@ -1424,21 +1475,21 @@ def run_one_pass(
     chunk_plan,
     paragraph_plan,
     use_cache,
-    cache_dir,
+    cache_directory,
     verbose,
     stderr,
     clock,
 ):
-    if passdef.mode == "analysis":
+    if pass_definition.mode == "analysis":
         return run_analysis_pass(
             config,
             settings,
-            passdef,
+            pass_definition,
             state,
             started_at,
             source_paragraphs,
             use_cache,
-            cache_dir,
+            cache_directory,
             verbose,
             stderr,
             clock,
@@ -1447,7 +1498,7 @@ def run_one_pass(
     return run_text_pass(
         config,
         settings,
-        passdef,
+        pass_definition,
         state,
         started_at,
         source_paragraphs,
@@ -1455,7 +1506,7 @@ def run_one_pass(
         chunk_plan,
         paragraph_plan,
         use_cache,
-        cache_dir,
+        cache_directory,
         verbose,
         stderr,
         clock,
@@ -1465,28 +1516,29 @@ def run_one_pass(
 def run_passes(
     config,
     settings,
-    passdefs,
+    pass_definitions,
     state,
     source_paragraphs,
     separators,
     chunk_plan,
     paragraph_plan,
     use_cache,
-    cache_dir,
+    cache_directory,
     verbose,
     stderr,
     clock,
 ):
     stage_started = clock()
-    for number, passdef in enumerate(passdefs, 1):
+    for number, pass_definition in enumerate(pass_definitions, 1):
         log(
             stderr,
-            "Starting pass %d/%d [%s]..." % (number, len(passdefs), passdef.name),
+            "Starting pass %d/%d [%s]..."
+            % (number, len(pass_definitions), pass_definition.name),
         )
         result = run_one_pass(
             config,
             settings,
-            passdef,
+            pass_definition,
             state,
             stage_started,
             source_paragraphs,
@@ -1494,7 +1546,7 @@ def run_passes(
             chunk_plan,
             paragraph_plan,
             use_cache,
-            cache_dir,
+            cache_directory,
             verbose,
             stderr,
             clock,
@@ -1514,67 +1566,67 @@ def write_output(stdout, text):
         stdout.write("\n")
 
 
-def parse_args(argv):
-    ap = argparse.ArgumentParser(
+def parse_args(arguments):
+    parser = argparse.ArgumentParser(
         prog="zh2en",
         description="Translate Chinese text from stdin to English on stdout.",
     )
-    ap.add_argument(
+    parser.add_argument(
         "passes",
         metavar="PASSES_INI",
         help="INI file defining the translation passes (in execution order)",
     )
-    ap.add_argument(
+    parser.add_argument(
         "--no-cache", action="store_true", help="bypass the translation cache"
     )
-    ap.add_argument(
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
         help="diagnostics (chunks, cache hits, timings) and LLM reasoning "
         "traces to stderr",
     )
-    return ap.parse_args(argv)
+    return parser.parse_args(arguments)
 
 
-def main(argv, env, stdin, stdout, stderr, clock):
-    args = parse_args(argv)
+def main(arguments, environment, stdin, stdout, stderr, clock):
+    parsed_arguments = parse_args(arguments)
     text = stdin.read()
     if not text.strip():
         return 0
 
     started = clock()
     try:
-        config = validate_config(build_config(env))
-    except ConfigError as e:
-        log(stderr, "zh2en: %s" % e)
+        config = validate_config(build_config(environment))
+    except ConfigError as error:
+        log(stderr, "zh2en: %s" % error)
         return 2
 
     try:
-        passdefs, options = load_passes(args.passes)
-    except PassError as e:
-        log(stderr, "zh2en: %s" % e)
+        pass_definitions, options = load_passes(parsed_arguments.passes)
+    except PassError as error:
+        log(stderr, "zh2en: %s" % error)
         return 2
 
-    passdefs = apply_default_ascii(passdefs, options)
+    pass_definitions = apply_default_ascii(pass_definitions, options)
     settings = build_settings()
-    cache_path = resolve_cache_dir(env)
+    cache_path = resolve_cache_dir(environment)
     source_paragraphs, separators = split_paragraphs(text)
     chunk_plan = make_chunks(source_paragraphs, settings.chunk_budget_tokens)
-    paragraph_plan = [[p] for p in source_paragraphs]
+    paragraph_plan = [[paragraph] for paragraph in source_paragraphs]
     state = State(text=text, analysis=None, usage=Usage())
     result = run_passes(
         config,
         settings,
-        passdefs,
+        pass_definitions,
         state,
         source_paragraphs,
         separators,
         chunk_plan,
         paragraph_plan,
-        not args.no_cache,
+        not parsed_arguments.no_cache,
         cache_path,
-        args.verbose,
+        parsed_arguments.verbose,
         stderr,
         clock,
     )
@@ -1584,7 +1636,7 @@ def main(argv, env, stdin, stdout, stderr, clock):
 
     write_output(stdout, result.state.text)
     total_elapsed = clock() - started
-    if args.verbose:
+    if parsed_arguments.verbose:
         log(stderr, "zh2en: done in %.1fs" % total_elapsed)
 
     log_total(total_elapsed, result.state.usage, stderr)
