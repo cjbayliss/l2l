@@ -37,7 +37,7 @@ class Config:
 
 
 @dataclass(frozen=True)
-class PassDef:
+class PassDefinition:
     name: str
     instruction: str
     mode: str
@@ -223,7 +223,7 @@ def missing_config_keys(config):
     return missing
 
 
-def infer_type(value):
+def parse_typed_value(value):
     trimmed = value.strip()
     if trimmed.lower() == "none":
         return "none"
@@ -310,7 +310,7 @@ def parse_pass_section(section, section_options, base_directory):
     ascii_override = parse_ascii_override(section, section_options)
     mode = parse_mode(section, section_options)
     api_overrides = collect_api_overrides(section_options)
-    return PassDef(
+    return PassDefinition(
         name=section,
         instruction=instruction,
         mode=mode,
@@ -361,7 +361,7 @@ def load_instruction(section, section_options, base_directory):
 def collect_api_overrides(section_options):
     overrides = {}
     for key, value in section_options.items():
-        parsed = infer_type(value)
+        parsed = parse_typed_value(value)
         if parsed is not None:
             overrides[key] = parsed
 
@@ -468,8 +468,8 @@ def estimate_tokens(text):
 def split_paragraphs(text):
     blank_pattern = re.compile(r"\n\s*\n")
     blanks = blank_pattern.findall(text)
-    lone = text.count("\n") - sum(blank.count("\n") for blank in blanks)
-    separator_pattern = r"(\n+)" if lone >= 3 * len(blanks) else r"(\n\s*\n)"
+    lone_newlines = text.count("\n") - sum(blank.count("\n") for blank in blanks)
+    separator_pattern = r"(\n+)" if lone_newlines >= 3 * len(blanks) else r"(\n\s*\n)"
     parts = re.split(separator_pattern, text)
     is_separator = re.compile(separator_pattern).fullmatch
     paragraphs = [part for part in parts if part and not is_separator(part)]
@@ -620,7 +620,7 @@ def http_chat(config, payload):
         raise LLMError("could not reach endpoint: %s" % error) from None
 
 
-def extract_message_content(body):
+def extract_message(body):
     try:
         message = body["choices"][0]["message"]
         return message, message["content"]
@@ -628,7 +628,7 @@ def extract_message_content(body):
         raise LLMError("unexpected response shape: %s" % str(body)[:500]) from None
 
 
-def thinking_texts(part):
+def collect_thinking_texts(part):
     texts = []
     for entry in part.get("thinking") or []:
         if isinstance(entry, dict) and entry.get("text"):
@@ -646,7 +646,7 @@ def collect_content_parts(parts):
             continue
 
         if part.get("type") == "thinking":
-            thoughts.extend(thinking_texts(part))
+            thoughts.extend(collect_thinking_texts(part))
             continue
 
         if part.get("text"):
@@ -700,7 +700,7 @@ def chat(config, system, user, overrides, verbose, stderr, usage):
     payload = build_chat_payload(config, system, user, overrides)
     body = http_chat(config, payload)
     usage = add_usage(usage, body.get("usage") or {})
-    message, content = extract_message_content(body)
+    message, content = extract_message(body)
     print_message_reasoning(message, verbose, stderr)
     content = flatten_content_parts(content, verbose, stderr)
     content = strip_think_tag(content, verbose, stderr)
@@ -874,7 +874,7 @@ def build_pass_user(source_chunk, work_chunk, analysis):
     return user
 
 
-def run_pass(
+def translate_chunk(
     config,
     settings,
     pass_definition,
@@ -1209,7 +1209,7 @@ def run_units(
                 continue
 
         try:
-            result, total_usage = run_pass(
+            result, total_usage = translate_chunk(
                 config,
                 settings,
                 pass_definition,
@@ -1445,7 +1445,7 @@ def run_text_pass(
     return PassResult(State(text, state.analysis, usage), None)
 
 
-def run_one_pass(
+def run_pass(
     config,
     settings,
     pass_definition,
@@ -1516,7 +1516,7 @@ def run_passes(
             "Starting pass %d/%d [%s]..."
             % (number, len(pass_definitions), pass_definition.name),
         )
-        result = run_one_pass(
+        result = run_pass(
             config,
             settings,
             pass_definition,
@@ -1591,7 +1591,7 @@ def main(arguments, environment, stdin, stdout, stderr, clock):
 
     pass_definitions = apply_default_ascii(pass_definitions, options)
     settings = build_settings()
-    cache_path = resolve_cache_dir(environment)
+    cache_directory = resolve_cache_dir(environment)
     source_paragraphs, separators = split_paragraphs(text)
     chunk_plan = make_chunks(source_paragraphs, settings.chunk_budget_tokens)
     paragraph_plan = [[paragraph] for paragraph in source_paragraphs]
@@ -1606,7 +1606,7 @@ def main(arguments, environment, stdin, stdout, stderr, clock):
         chunk_plan,
         paragraph_plan,
         not parsed_arguments.no_cache,
-        cache_path,
+        cache_directory,
         parsed_arguments.verbose,
         stderr,
         clock,
