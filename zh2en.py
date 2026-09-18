@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 
 import argparse
-import configparser
 import hashlib
 import json
 import os
 import re
 import sys
+import threading
 import time
+import tomllib
 import unicodedata
 import urllib.error
 import urllib.request
@@ -34,6 +35,7 @@ class Config:
     model: str
     timeout: float
     max_tokens: int
+    params: dict
 
 
 @dataclass(frozen=True)
@@ -42,8 +44,9 @@ class PassDefinition:
     instruction: str
     mode: str
     strict_fidelity: bool
-    api_overrides: dict
-    ascii: bool
+    params: dict
+    model: Optional[str]
+    ascii: Optional[bool]
 
 
 @dataclass(frozen=True)
@@ -170,178 +173,246 @@ without any non-ASCII.
     )
 
 
-def build_config(environment):
-    base_url = environment.get("TRANSLATE_BASE_URL", "").rstrip("/")
-    api_key = environment.get("TRANSLATE_API_KEY", "")
-    model = environment.get("TRANSLATE_MODEL", "")
-    timeout = parse_float_setting(environment.get("TRANSLATE_TIMEOUT", "120"), 120.0)
-    max_tokens = parse_int_setting(environment.get("TRANSLATE_MAX_TOKENS", "100000"), 0)
-    return Config(
-        base_url=base_url,
-        api_key=api_key,
-        model=model,
-        timeout=timeout,
-        max_tokens=max_tokens,
-    )
+API_SETTING_KEYS = ("base_url", "api_key", "model", "timeout", "max_tokens", "params")
+PASS_KEYS = (
+    "name",
+    "instruction",
+    "instruction_file",
+    "mode",
+    "strict_fidelity",
+    "ascii",
+    "model",
+    "params",
+)
 
 
-def parse_float_setting(raw, default):
+def default_api_settings():
+    return {
+        "base_url": "",
+        "api_key": "",
+        "model": "",
+        "timeout": 120.0,
+        "max_tokens": 100000,
+        "params": {},
+    }
+
+
+def user_config_path(environment):
+    base = environment.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "zh2en", "config.toml")
+
+
+def load_toml(path, description):
     try:
-        return float(raw)
-    except ValueError:
-        return default
-
-
-def parse_int_setting(raw, default):
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def validate_config(config):
-    missing = missing_config_keys(config)
-    if missing:
+        with open(path, "rb") as handle:
+            return tomllib.load(handle)
+    except FileNotFoundError:
+        raise ConfigError("%s not found: %s" % (description, path)) from None
+    except OSError as error:
+        raise ConfigError("cannot read %s: %s" % (description, error)) from None
+    except tomllib.TOMLDecodeError as error:
         raise ConfigError(
-            "missing required environment variables: " + ", ".join(missing)
+            "cannot parse %s %s: %s" % (description, path, error)
+        ) from None
+
+
+def validate_document(path, document):
+    if not document:
+        return
+
+    unknown = sorted(set(document) - {"api", "options", "pass"})
+    if unknown:
+        raise ConfigError(
+            "%s: unknown top-level key(s): %s (expected [api], [options], [[pass]])"
+            % (path, ", ".join(unknown))
         )
 
-    if config.max_tokens <= 0:
-        raise ConfigError("TRANSLATE_MAX_TOKENS must be a positive integer")
+
+def document_api_settings(path, document):
+    if "api" not in document:
+        return {}
+
+    table = document["api"]
+    if not isinstance(table, dict):
+        raise ConfigError("%s: [api] must be a table" % path)
+
+    unknown = sorted(set(table) - set(API_SETTING_KEYS))
+    if unknown:
+        raise ConfigError("%s: [api]: unknown key(s): %s" % (path, ", ".join(unknown)))
+
+    settings = {}
+    for key in ("base_url", "api_key", "model"):
+        if key in table:
+            value = table[key]
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigError(
+                    "%s: [api] %s must be a non-empty string" % (path, key)
+                )
+
+            settings[key] = value.strip()
+
+    if "timeout" in table:
+        value = table["timeout"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ConfigError("%s: [api] timeout must be a positive number" % path)
+
+        settings["timeout"] = float(value)
+
+    if "max_tokens" in table:
+        value = table["max_tokens"]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ConfigError("%s: [api] max_tokens must be a positive integer" % path)
+
+        settings["max_tokens"] = value
+
+    if "params" in table:
+        value = table["params"]
+        if not isinstance(value, dict):
+            raise ConfigError("%s: [api] params must be a table" % path)
+
+        settings["params"] = value
+
+    return settings
+
+
+def merge_api_settings(base, extra):
+    merged = dict(base)
+    for key, value in extra.items():
+        if key == "params" and isinstance(merged.get("params"), dict):
+            combined = dict(merged["params"])
+            combined.update(value)
+            merged["params"] = combined
+        else:
+            merged[key] = value
+
+    return merged
+
+
+def api_settings_from_environment(environment):
+    settings = {}
+    for variable, key in (
+        ("TRANSLATE_BASE_URL", "base_url"),
+        ("TRANSLATE_API_KEY", "api_key"),
+        ("TRANSLATE_MODEL", "model"),
+    ):
+        value = environment.get(variable, "").strip()
+        if value:
+            settings[key] = value
+
+    raw = environment.get("TRANSLATE_TIMEOUT", "").strip()
+    if raw:
+        try:
+            timeout = float(raw)
+        except ValueError:
+            raise ConfigError(
+                "TRANSLATE_TIMEOUT must be a number, got %r" % raw
+            ) from None
+
+        if timeout <= 0:
+            raise ConfigError("TRANSLATE_TIMEOUT must be positive")
+
+        settings["timeout"] = timeout
+
+    raw = environment.get("TRANSLATE_MAX_TOKENS", "").strip()
+    if raw:
+        try:
+            max_tokens = int(raw)
+        except ValueError:
+            raise ConfigError(
+                "TRANSLATE_MAX_TOKENS must be an integer, got %r" % raw
+            ) from None
+
+        if max_tokens <= 0:
+            raise ConfigError("TRANSLATE_MAX_TOKENS must be positive")
+
+        settings["max_tokens"] = max_tokens
+
+    return settings
+
+
+def api_settings_from_arguments(arguments):
+    settings = {}
+    if arguments.base_url:
+        settings["base_url"] = arguments.base_url
+
+    if arguments.api_key:
+        settings["api_key"] = arguments.api_key
+
+    if arguments.model:
+        settings["model"] = arguments.model
+
+    if arguments.timeout is not None:
+        settings["timeout"] = arguments.timeout
+
+    if arguments.max_tokens is not None:
+        settings["max_tokens"] = arguments.max_tokens
+
+    return settings
+
+
+def build_config(settings):
+    config = Config(
+        base_url=settings["base_url"].rstrip("/"),
+        api_key=settings["api_key"],
+        model=settings["model"],
+        timeout=settings["timeout"],
+        max_tokens=settings["max_tokens"],
+        params=dict(settings["params"]),
+    )
+    missing = []
+    if not config.base_url:
+        missing.append("api.base_url (--base-url / TRANSLATE_BASE_URL)")
+
+    if not config.api_key:
+        missing.append("api.api_key (--api-key / TRANSLATE_API_KEY)")
+
+    if not config.model:
+        missing.append("api.model (--model / TRANSLATE_MODEL)")
+
+    if missing:
+        raise ConfigError("missing required API settings: " + ", ".join(missing))
 
     return config
 
 
-def missing_config_keys(config):
-    missing = []
-    if not config.base_url:
-        missing.append("TRANSLATE_BASE_URL")
+def parse_options_table(path, table):
+    if not isinstance(table, dict):
+        raise PassError("%s: [options] must be a table" % path)
 
-    if not config.api_key:
-        missing.append("TRANSLATE_API_KEY")
-
-    return missing
-
-
-def parse_typed_value(value):
-    trimmed = value.strip()
-    if trimmed.lower() == "none":
-        return "none"
-
-    if trimmed.lower() in ("true", "false"):
-        return trimmed.lower() == "true"
-
-    parsed_int = parse_int_setting(trimmed, None)
-    if parsed_int is not None:
-        return parsed_int
-
-    parsed_float = parse_float_setting(trimmed, None)
-    if parsed_float is not None:
-        return parsed_float
-
-    return trimmed
-
-
-def load_passes(path):
-    try:
-        with open(path, encoding="utf-8") as passes_file:
-            text = passes_file.read()
-    except OSError as error:
-        raise PassError("cannot read passes file: %s" % error) from None
-
-    return parse_passes(text, path)
-
-
-def parse_passes(text, path):
-    parser = configparser.ConfigParser()
-    try:
-        parser.read_string(text)
-    except configparser.Error as error:
-        raise PassError("cannot parse passes file: %s" % error) from None
-
-    sections = parser.sections()
-    if not sections:
-        raise PassError("passes file %s defines no passes" % path)
-
-    base_directory = os.path.dirname(os.path.abspath(path))
-    options = {}
-    pass_definitions = []
-    for section in sections:
-        section_options = dict(parser.items(section))
-        if section.lower() == "options":
-            options.update(parse_options_section(section, section_options))
-            continue
-
-        pass_definitions.append(
-            parse_pass_section(section, section_options, base_directory)
-        )
-
-    return pass_definitions, options
-
-
-def parse_options_section(section, section_options):
-    ascii_raw = section_options.pop("ascii", "false")
-    parse_bool_value(section, "ascii", ascii_raw, "")
-    if section_options:
+    unknown = sorted(set(table) - {"ascii"})
+    if unknown:
         raise PassError(
-            "[%s]: unknown option(s): %s"
-            % (section, ", ".join(sorted(section_options)))
+            "%s: [options]: unknown key(s): %s" % (path, ", ".join(unknown))
         )
 
-    return {"ascii": ascii_raw.strip().lower() == "true"}
+    ascii_value = table.get("ascii", False)
+    if not isinstance(ascii_value, bool):
+        raise PassError("%s: [options] ascii must be true or false" % path)
+
+    return {"ascii": ascii_value}
 
 
-def parse_bool_value(section, key, raw, prefix):
-    value = raw.strip().lower()
-    if value not in ("true", "false"):
-        raise PassError("%s[%s]: %s must be true or false" % (prefix, section, key))
-
-    return value == "true"
-
-
-def parse_pass_section(section, section_options, base_directory):
-    instruction = load_instruction(section, section_options, base_directory)
-    strict_fidelity = parse_bool_value(
-        section,
-        "strict_fidelity",
-        section_options.pop("strict_fidelity", "false"),
-        "pass ",
-    )
-    ascii_override = parse_ascii_override(section, section_options)
-    mode = parse_mode(section, section_options)
-    api_overrides = collect_api_overrides(section_options)
-    return PassDefinition(
-        name=section,
-        instruction=instruction,
-        mode=mode,
-        strict_fidelity=strict_fidelity,
-        api_overrides=api_overrides,
-        ascii=ascii_override,
-    )
-
-
-def parse_ascii_override(section, section_options):
-    raw = section_options.pop("ascii", None)
-    if raw is None:
-        return None
-
-    return parse_bool_value(section, "ascii", raw, "pass ")
-
-
-def parse_mode(section, section_options):
-    mode = section_options.pop("mode", "chunk").strip().lower()
-    if mode not in ("analysis", "chunk", "paragraph"):
+def load_instruction_text(path, name, table, base_directory):
+    has_file = "instruction_file" in table
+    has_inline = "instruction" in table
+    if has_file == has_inline:
         raise PassError(
-            "pass [%s]: mode must be analysis, chunk, or paragraph" % section
+            "%s: [[pass]] %s: exactly one of instruction_file or instruction "
+            "is required" % (path, name)
         )
 
-    return mode
+    if has_inline:
+        instruction = table["instruction"]
+        if not isinstance(instruction, str) or not instruction.strip():
+            raise PassError("%s: [[pass]] %s: instruction is empty" % (path, name))
 
+        return instruction.strip()
 
-def load_instruction(section, section_options, base_directory):
-    instruction_file = section_options.pop("instruction-file", None)
-    if not instruction_file:
-        raise PassError("pass [%s]: missing required key `instruction-file`" % section)
+    instruction_file = table["instruction_file"]
+    if not isinstance(instruction_file, str) or not instruction_file.strip():
+        raise PassError(
+            "%s: [[pass]] %s: instruction_file must be a path" % (path, name)
+        )
 
     instruction_path = os.path.join(base_directory, instruction_file)
     try:
@@ -349,23 +420,155 @@ def load_instruction(section, section_options, base_directory):
             instruction = instruction_handle.read().strip()
     except OSError as error:
         raise PassError(
-            "pass [%s]: cannot read instruction file: %s" % (section, error)
+            "%s: [[pass]] %s: cannot read instruction file: %s" % (path, name, error)
         ) from None
 
     if not instruction:
-        raise PassError("pass [%s]: instruction file is empty" % section)
+        raise PassError("%s: [[pass]] %s: instruction file is empty" % (path, name))
 
     return instruction
 
 
-def collect_api_overrides(section_options):
-    overrides = {}
-    for key, value in section_options.items():
-        parsed = parse_typed_value(value)
-        if parsed is not None:
-            overrides[key] = parsed
+def parse_pass_table(path, table, base_directory):
+    if not isinstance(table, dict):
+        raise PassError("%s: [[pass]] entries must be tables" % path)
 
-    return overrides
+    unknown = sorted(set(table) - set(PASS_KEYS))
+    if unknown:
+        raise PassError("%s: [[pass]]: unknown key(s): %s" % (path, ", ".join(unknown)))
+
+    name = table.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise PassError("%s: [[pass]]: name must be a non-empty string" % path)
+
+    name = name.strip()
+    instruction = load_instruction_text(path, name, table, base_directory)
+    mode = table.get("mode", "chunk")
+    if mode not in ("analysis", "chunk", "paragraph"):
+        raise PassError(
+            "%s: [[pass]] %s: mode must be analysis, chunk, or paragraph" % (path, name)
+        )
+
+    strict_fidelity = table.get("strict_fidelity", False)
+    if not isinstance(strict_fidelity, bool):
+        raise PassError(
+            "%s: [[pass]] %s: strict_fidelity must be true or false" % (path, name)
+        )
+
+    ascii_value = table.get("ascii")
+    if ascii_value is not None and not isinstance(ascii_value, bool):
+        raise PassError("%s: [[pass]] %s: ascii must be true or false" % (path, name))
+
+    model = table.get("model")
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise PassError(
+            "%s: [[pass]] %s: model must be a non-empty string" % (path, name)
+        )
+
+    params = table.get("params", {})
+    if not isinstance(params, dict):
+        raise PassError("%s: [[pass]] %s: params must be a table" % (path, name))
+
+    return PassDefinition(
+        name=name,
+        instruction=instruction,
+        mode=mode,
+        strict_fidelity=strict_fidelity,
+        params=params,
+        model=model.strip() if model else None,
+        ascii=ascii_value,
+    )
+
+
+def document_passes(path, document):
+    entries = document.get("pass")
+    if entries is None:
+        return None
+
+    if (
+        not isinstance(entries, list)
+        or not entries
+        or not all(isinstance(entry, dict) for entry in entries)
+    ):
+        raise PassError("%s: [[pass]] must define one or more pass tables" % path)
+
+    base_directory = os.path.dirname(os.path.abspath(path))
+    return [parse_pass_table(path, entry, base_directory) for entry in entries]
+
+
+def resolve_passes(user_path, user_document, selected_path, selected_document):
+    sources = []
+    if selected_document:
+        sources.append((selected_path, selected_document))
+
+    if user_document:
+        sources.append((user_path, user_document))
+
+    for path, document in sources:
+        definitions = document_passes(path, document)
+        if definitions is None:
+            continue
+
+        options = {}
+        for option_path, option_document in sources:
+            if "options" in option_document:
+                options = parse_options_table(option_path, option_document["options"])
+                break
+
+        return definitions, options
+
+    raise PassError(
+        "no [[pass]] tables found; define at least one pass in %s"
+        % (selected_path or user_path or "a config file (see --help)")
+    )
+
+
+def resolve_config_path(requested, environment):
+    if requested:
+        return requested
+
+    configured = environment.get("TRANSLATE_CONFIG", "").strip()
+    if configured:
+        return configured
+
+    local = os.path.join(os.getcwd(), "zh2en.toml")
+    if os.path.exists(local):
+        return local
+
+    fallback = user_config_path(environment)
+    if os.path.exists(fallback):
+        return fallback
+
+    return None
+
+
+def load_setup(arguments, environment):
+    user_path = user_config_path(environment)
+    user_document = {}
+    if os.path.exists(user_path):
+        user_document = load_toml(user_path, "user config")
+        validate_document(user_path, user_document)
+
+    selected_path = resolve_config_path(arguments.config, environment)
+    selected_document = {}
+    if selected_path:
+        selected_document = load_toml(selected_path, "config file")
+        validate_document(selected_path, selected_document)
+
+    settings = default_api_settings()
+    settings = merge_api_settings(
+        settings, document_api_settings(user_path, user_document)
+    )
+    settings = merge_api_settings(
+        settings, document_api_settings(selected_path, selected_document)
+    )
+    settings = merge_api_settings(settings, api_settings_from_environment(environment))
+    settings = merge_api_settings(settings, api_settings_from_arguments(arguments))
+    config = build_config(settings)
+    pass_definitions, options = resolve_passes(
+        user_path, user_document, selected_path, selected_document
+    )
+    return config, apply_default_ascii(pass_definitions, options)
 
 
 def apply_default_ascii(pass_definitions, options):
@@ -381,7 +584,125 @@ def apply_default_ascii(pass_definitions, options):
 
 
 def log(stderr, message):
+    StatusLine.for_stream(stderr).interrupt()
     print(message, file=stderr, flush=True)
+
+
+class StatusLine:
+    _instances = {}
+
+    def __init__(self, stream):
+        self.stream = stream
+        try:
+            self.live = stream.isatty()
+        except (AttributeError, OSError, ValueError):
+            self.live = False
+        self.prefix = ""
+        self.drawn = ""
+        self.label = "Working"
+        self.started = 0.0
+        self.tokens = 0
+        self._stop = threading.Event()
+        self._thread = None
+        self._lock = threading.Lock()
+
+    @classmethod
+    def for_stream(cls, stream):
+        key = id(stream)
+        instance = cls._instances.get(key)
+        if instance is None:
+            instance = cls(stream)
+            cls._instances[key] = instance
+
+        return instance
+
+    def write_partial(self, text):
+        with self._lock:
+            self.prefix += text
+            self.stream.write(text)
+            self.stream.flush()
+
+    def start(self, label):
+        if not self.live:
+            return
+
+        with self._lock:
+            self.label = label
+            self.started = time.monotonic()
+            self.tokens = 0
+            self._render()
+
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._tick, daemon=True)
+        self._thread.start()
+
+    def progress(self, label, count=1):
+        if not self.live:
+            return
+
+        with self._lock:
+            self.label = label
+            self.tokens += count
+
+    def stop(self):
+        self._halt()
+        with self._lock:
+            if self._erase() and self.prefix:
+                self.stream.write(self.prefix)
+                self.drawn = self.prefix
+            self.stream.flush()
+
+    def interrupt(self):
+        self._halt()
+        with self._lock:
+            had_drawn = self._erase()
+            if self.prefix:
+                if not (self.live and had_drawn):
+                    self.stream.write("\n")
+
+                self.prefix = ""
+
+            self.stream.flush()
+
+    def finish(self, text):
+        self._halt()
+        with self._lock:
+            rewrote = self._erase()
+            prefix = self.prefix if rewrote else ""
+            self.stream.write(prefix + text + "\n")
+            self.prefix = ""
+            self.drawn = ""
+            self.stream.flush()
+
+    def _halt(self):
+        if self._thread is not None and self._thread.is_alive():
+            self._stop.set()
+            self._thread.join(timeout=1.0)
+
+    def _tick(self):
+        while not self._stop.wait(0.1):
+            with self._lock:
+                self._render()
+
+    def _render(self):
+        line = "%s: time elapsed: %.2fs, tokens received: %d" % (
+            self.label,
+            time.monotonic() - self.started,
+            self.tokens,
+        )
+        full = self.prefix + line if self.prefix else line
+        padding = max(len(self.drawn) - len(full), 0)
+        self.stream.write("\r" + full + " " * padding)
+        self.stream.flush()
+        self.drawn = full
+
+    def _erase(self):
+        if not self.drawn:
+            return False
+
+        self.stream.write("\r" + " " * len(self.drawn) + "\r")
+        self.drawn = ""
+        return True
 
 
 def fmt_duration(seconds):
@@ -578,25 +899,22 @@ def analysis_block(analysis):
     return "(none)"
 
 
-def build_chat_payload(config, system, user, overrides):
+def resolve_call_settings(config, pass_definition):
+    params = dict(config.params)
+    params.update(pass_definition.params)
+    model = pass_definition.model or config.model
+    return model, params
+
+
+def build_chat_payload(model, system, user, params):
     payload = {
-        "model": config.model,
+        "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
     }
-    if "openrouter" in config.base_url.lower():
-        payload["provider"] = {
-            "allow_fallbacks": True,
-            "sort": {"by": "throughput", "partition": None},
-        }
-
-    if overrides:
-        payload.update(
-            {key: value for key, value in overrides.items() if value is not None}
-        )
-
+    payload.update({key: value for key, value in params.items() if value is not None})
     return payload
 
 
@@ -655,68 +973,257 @@ def collect_content_parts(parts):
     return texts, thoughts
 
 
-def flatten_content_parts(content, verbose, stderr):
+def flatten_content_parts(content):
     if not isinstance(content, list):
-        return content
+        return content, []
 
     texts, thoughts = collect_content_parts(content)
-    if verbose and thoughts:
-        log(stderr, "\n".join(thoughts).rstrip())
-
-    return "".join(texts)
+    return "".join(texts), thoughts
 
 
-def print_message_reasoning(message, verbose, stderr):
-    if not verbose:
-        return
+def message_reasoning_texts(message):
+    for key in ("reasoning_content", "reasoning"):
+        reasoning = message.get(key)
+        if isinstance(reasoning, str) and reasoning.strip():
+            return [reasoning.rstrip()]
 
-    reasoning = message.get("reasoning_content") or message.get("reasoning")
-    if isinstance(reasoning, str) and reasoning.strip():
-        log(stderr, reasoning.rstrip())
+    return []
 
 
-def strip_think_tag(content, verbose, stderr):
+def strip_think_tag(content):
     if not isinstance(content, str):
-        return content
+        return content, None
 
     match = re.match(r"\s*<think>(.*?)</think>", content, re.DOTALL)
     if not match:
-        return content
+        return content, None
 
-    if verbose:
-        log(stderr, match.group(1).strip())
-
-    return content[match.end() :]
+    return content[match.end() :], match.group(1).strip()
 
 
-def chat(config, system, user, overrides, verbose, stderr, usage):
+def parse_stream_line(raw_line):
+    line = raw_line.decode("utf-8", "replace").strip()
+    if not line.startswith("data:"):
+        return None
+
+    data = line[5:].strip()
+    if not data or data == "[DONE]":
+        return None
+
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError:
+        return None
+
+
+def stream_chat_chunks(config, payload):
+    def open_stream(request_payload):
+        request = urllib.request.Request(
+            config.base_url + "/chat/completions",
+            data=json.dumps(request_payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+                "Authorization": "Bearer " + config.api_key,
+            },
+            method="POST",
+        )
+        try:
+            return urllib.request.urlopen(request, timeout=config.timeout)
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", "replace")[:500]
+            raise LLMError("HTTP %s from endpoint: %s" % (error.code, detail)) from None
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise LLMError("could not reach endpoint: %s" % error) from None
+
+    try:
+        response = open_stream(payload)
+    except LLMError as error:
+        if "stream_options" not in payload or "stream_options" not in str(error):
+            raise
+        # Endpoint rejected stream_options; retry without it.
+        payload = {
+            key: value for key, value in payload.items() if key != "stream_options"
+        }
+        response = open_stream(payload)
+
+    with response:
+        try:
+            for raw_line in response:
+                chunk = parse_stream_line(raw_line)
+                if not isinstance(chunk, dict):
+                    continue
+
+                if isinstance(chunk.get("error"), dict):
+                    raise LLMError(
+                        "endpoint stream error: %s" % str(chunk["error"])[:500]
+                    )
+
+                yield chunk
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise LLMError("stream interrupted: %s" % error) from None
+
+
+def chunk_delta(chunk):
+    try:
+        choices = chunk.get("choices")
+        if not choices:
+            return {}
+
+        return choices[0].get("delta") or {}
+    except (AttributeError, IndexError, TypeError):
+        return {}
+
+
+def delta_reasoning_text(delta):
+    for key in ("reasoning_content", "reasoning"):
+        value = delta.get(key)
+        if isinstance(value, str) and value:
+            return value
+
+    return None
+
+
+def delta_text(delta):
+    value = delta.get("content")
+    if isinstance(value, str):
+        return value
+
+    if isinstance(value, list):
+        return "".join(part.get("text", "") for part in value if isinstance(part, dict))
+
+    return ""
+
+
+class ThinkTagTracker:
+    def __init__(self):
+        self.checking = True
+        self.open = False
+        self.tail = ""
+
+    def feed(self, text):
+        if not self.checking:
+            return False
+
+        searched = self.tail + text
+        self.tail = searched[-8:]
+        if self.open:
+            if "</think>" in searched:
+                self.checking = False
+                self.open = False
+
+            return self.open
+
+        stripped = searched.lstrip()
+        if stripped.startswith("<think>"):
+            self.open = True
+            if "</think>" in stripped[7:]:
+                self.checking = False
+                self.open = False
+
+            return self.open
+
+        if not stripped.startswith("<") or len(stripped) > 64:
+            self.checking = False
+
+        return False
+
+
+def stream_chat(config, payload, status):
+    payload = dict(payload)
+    payload["stream"] = True
+    if "stream_options" not in payload:
+        payload["stream_options"] = {"include_usage": True}
+
+    reasoning = []
+    content_texts = []
+    reported = None
+    counted = 0
+    think_tracker = ThinkTagTracker()
+    content_started = False
+    for chunk in stream_chat_chunks(config, payload):
+        chunk_usage = chunk.get("usage")
+        if isinstance(chunk_usage, dict):
+            reported = chunk_usage
+
+        delta = chunk_delta(chunk)
+        reasoning_text = delta_reasoning_text(delta)
+        text = delta_text(delta)
+        if not reasoning_text and not text:
+            continue
+
+        if reasoning_text:
+            reasoning.append(reasoning_text)
+            counted += 1
+            if not content_started:
+                status.progress("Thinking")
+
+        if text:
+            content_started = True
+            content_texts.append(text)
+            counted += 1
+            status.progress("Thinking" if think_tracker.feed(text) else "Working")
+
+    return "".join(content_texts), reasoning, reported, counted
+
+
+def chat(config, system, user, model, params, verbose, stderr, usage):
     estimated = estimate_tokens(system) + estimate_tokens(user)
     if estimated > config.max_tokens:
         raise LLMError(
             "request is ~%d tokens, over the %d-token budget; raise "
-            "TRANSLATE_MAX_TOKENS or shorten the input" % (estimated, config.max_tokens)
+            "api.max_tokens (--max-tokens / TRANSLATE_MAX_TOKENS) or "
+            "shorten the input" % (estimated, config.max_tokens)
         )
 
-    payload = build_chat_payload(config, system, user, overrides)
-    body = http_chat(config, payload)
-    usage = add_usage(usage, body.get("usage") or {})
-    message, content = extract_message(body)
-    print_message_reasoning(message, verbose, stderr)
-    content = flatten_content_parts(content, verbose, stderr)
-    content = strip_think_tag(content, verbose, stderr)
+    payload = build_chat_payload(model, system, user, params)
+    status = StatusLine.for_stream(stderr)
+    try:
+        status.start("Working")
+        if payload.get("stream", True):
+            content, reasoning, reported, counted = stream_chat(config, payload, status)
+        else:
+            body = http_chat(config, payload)
+            message, content = extract_message(body)
+            reasoning = message_reasoning_texts(message)
+            content, thoughts = flatten_content_parts(content)
+            reasoning = reasoning + thoughts
+            reported = body.get("usage") or {}
+            counted = 0
+    finally:
+        status.stop()
+
+    content, think_text = strip_think_tag(content)
+    if think_text:
+        reasoning.append(think_text)
+
+    if verbose:
+        for text in reasoning:
+            if text.strip():
+                log(stderr, text.rstrip())
+
+    if reported:
+        usage = add_usage(usage, reported)
+    else:
+        usage = add_usage(
+            usage, {"prompt_tokens": estimated, "completion_tokens": counted}
+        )
+
     if not isinstance(content, str):
-        raise LLMError("unexpected content type: %s" % str(body)[:500])
+        raise LLMError("unexpected content type: %s" % type(content).__name__)
 
     return content, usage
 
 
 def run_analysis(config, settings, pass_definition, text, verbose, stderr, usage):
     user = settings.analysis_user_prefix + text
+    model, params = resolve_call_settings(config, pass_definition)
     content, usage = chat(
         config,
         pass_definition.instruction,
         user,
-        pass_definition.api_overrides,
+        model,
+        params,
         verbose,
         stderr,
         usage,
@@ -726,11 +1233,13 @@ def run_analysis(config, settings, pass_definition, text, verbose, stderr, usage
 
 def run_merge(config, settings, pass_definition, briefs, verbose, stderr, usage):
     user = settings.merge_user_prefix + "\n\n".join(briefs)
+    model, params = resolve_call_settings(config, pass_definition)
     content, usage = chat(
         config,
         settings.analysis_merge_instruction,
         user,
-        pass_definition.api_overrides,
+        model,
+        params,
         verbose,
         stderr,
         usage,
@@ -770,8 +1279,8 @@ def merge_analysis(config, settings, pass_definition, briefs, verbose, stderr, u
         if len(groups) == len(current):
             raise LLMError(
                 "partial analysis brief (~%d tokens) does not fit the "
-                "%d-token budget; raise TRANSLATE_MAX_TOKENS or shorten "
-                "the input"
+                "%d-token budget; raise api.max_tokens (--max-tokens / "
+                "TRANSLATE_MAX_TOKENS) or shorten the input"
                 % (max(estimate_tokens(brief) for brief in current), config.max_tokens)
             )
 
@@ -842,9 +1351,8 @@ def run_analysis_once(
     usage,
 ):
     salt = pass_definition.name + "\x00" + pass_definition.instruction
-    key = cache_key(
-        full_text, config.model, salt, overrides=pass_definition.api_overrides
-    )
+    model, params = resolve_call_settings(config, pass_definition)
+    key = cache_key(full_text, model, salt, overrides=params)
     if use_cache:
         cached = cache_get(cache_directory, key)
         if cached is not None:
@@ -890,9 +1398,8 @@ def translate_chunk(
         system += settings.strict_fidelity_suffix
 
     user = build_pass_user(source_chunk, work_chunk, analysis)
-    content, usage = chat(
-        config, system, user, pass_definition.api_overrides, verbose, stderr, usage
-    )
+    model, params = resolve_call_settings(config, pass_definition)
+    content, usage = chat(config, system, user, model, params, verbose, stderr, usage)
     return content, usage
 
 
@@ -969,7 +1476,8 @@ def ascii_fix_llm(
             config,
             settings.ascii_fix_instruction,
             user,
-            None,
+            config.model,
+            config.params,
             verbose,
             stderr,
             total_usage,
@@ -1129,7 +1637,9 @@ def cache_key(chunk_text, model, pass_salt="", work_text="", overrides=None):
     if overrides:
         hasher.update(
             b"\x00"
-            + json.dumps(overrides, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            + json.dumps(
+                overrides, sort_keys=True, ensure_ascii=False, default=str
+            ).encode("utf-8")
         )
 
     return hasher.hexdigest()
@@ -1170,15 +1680,16 @@ def run_units(
 ):
     outputs = []
     total_usage = usage
+    model, params = resolve_call_settings(config, pass_definition)
     for index, work_group in enumerate(work_groups):
         source_chunk_text = "\n\n".join(plan[index]) if index < len(plan) else ""
         work_chunk_text = "\n\n".join(work_group)
         key = cache_key(
             source_chunk_text,
-            config.model,
+            model,
             pass_salt,
             work_chunk_text,
-            overrides=pass_definition.api_overrides,
+            overrides=params,
         )
         trailing_separator = (
             trailing_separators[index] if index < len(trailing_separators) else ""
@@ -1288,7 +1799,8 @@ def enforce_pass_ascii(
     started_at,
     clock,
 ):
-    log(stderr, "Starting ascii enforcement for [%s]..." % pass_definition.name)
+    status = StatusLine.for_stream(stderr)
+    status.write_partial("Enforcing ASCII... ")
     try:
         fixed, updated_usage = ensure_ascii_output(
             config,
@@ -1303,6 +1815,7 @@ def enforce_pass_ascii(
             usage,
         )
     except LLMError as error:
+        status.interrupt()
         return (
             text,
             usage,
@@ -1310,7 +1823,14 @@ def enforce_pass_ascii(
             % (pass_definition.name, error),
         )
 
-    log_stage("Done", started_at, clock(), usage, updated_usage, stderr)
+    prompt, completion, cost = usage_delta(usage, updated_usage)
+    if prompt or completion or cost:
+        status.finish(
+            usage_line("Done", clock() - started_at, prompt, completion, cost)
+        )
+    else:
+        status.finish("Done.")
+
     return fixed, updated_usage, None
 
 
@@ -1553,9 +2073,36 @@ def parse_args(arguments):
         description="Translate Chinese text from stdin to English on stdout.",
     )
     parser.add_argument(
-        "passes",
-        metavar="PASSES_INI",
-        help="INI file defining the translation passes (in execution order)",
+        "config",
+        metavar="CONFIG",
+        nargs="?",
+        help="TOML config file defining [api] settings and [[pass]] passes "
+        "(default: $TRANSLATE_CONFIG, then ./zh2en.toml, then "
+        "~/.config/zh2en/config.toml)",
+    )
+    parser.add_argument(
+        "--base-url",
+        help="API endpoint; overrides [api] base_url and TRANSLATE_BASE_URL",
+    )
+    parser.add_argument(
+        "--api-key",
+        help="API key; overrides [api] api_key and TRANSLATE_API_KEY",
+    )
+    parser.add_argument(
+        "--model",
+        help="default model; overrides [api] model and TRANSLATE_MODEL",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        help="request timeout in seconds; overrides [api] timeout and "
+        "TRANSLATE_TIMEOUT",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        help="request token budget; overrides [api] max_tokens and "
+        "TRANSLATE_MAX_TOKENS",
     )
     parser.add_argument(
         "--no-cache", action="store_true", help="bypass the translation cache"
@@ -1578,18 +2125,11 @@ def main(arguments, environment, stdin, stdout, stderr, clock):
 
     started = clock()
     try:
-        config = validate_config(build_config(environment))
-    except ConfigError as error:
+        config, pass_definitions = load_setup(parsed_arguments, environment)
+    except (ConfigError, PassError) as error:
         log(stderr, "zh2en: %s" % error)
         return 2
 
-    try:
-        pass_definitions, options = load_passes(parsed_arguments.passes)
-    except PassError as error:
-        log(stderr, "zh2en: %s" % error)
-        return 2
-
-    pass_definitions = apply_default_ascii(pass_definitions, options)
     settings = build_settings()
     cache_directory = resolve_cache_dir(environment)
     source_paragraphs, separators = split_paragraphs(text)
