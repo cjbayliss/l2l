@@ -1,0 +1,101 @@
+# zh2en
+
+Translate Chinese text from stdin to English on stdout using any
+OpenAI-compatible chat completions endpoint (including OpenRouter).
+
+Single-file, standard-library-only Python (3.11+).
+
+## Install
+
+```sh
+pip install .
+```
+
+This provides the `zh2en` console script. You can also run it directly with
+`python3 zh2en.py`.
+
+## Usage
+
+```sh
+zh2en [CONFIG] [options] < input.txt > output.txt
+```
+
+- `CONFIG` is a TOML file. Resolution order: the positional argument, then
+  `$TRANSLATE_CONFIG`, then `./zh2en.toml`, then
+  `~/.config/zh2en/config.toml`. A user config at
+  `~/.config/zh2en/config.toml` (or `$XDG_CONFIG_HOME`) is always merged in
+  first when it exists; the selected config overrides it.
+- Options: `--base-url`, `--api-key`, `--model`, `--timeout`, `--max-tokens`
+  override the corresponding `[api]` setting and its `TRANSLATE_*`
+  environment variable. `--cache-dir` overrides the cache location
+  (default `$XDG_CACHE_HOME/zh2en`). `--no-cache` bypasses the cache.
+  `--verbose` prints chunking, cache, timing, and reasoning diagnostics.
+  `--version` prints the version.
+
+Precedence: defaults < user config < selected config < environment <
+command line.
+
+See `example.toml` for a starting point.
+
+## Configuration
+
+```toml
+[api]
+base_url = "https://openrouter.ai/api/v1"
+api_key = "sk-..."
+model = "z-ai/glm-5.3-flash"
+timeout = 120.0
+max_tokens = 100000
+
+[api.params]
+stop = ["END"]
+
+[[pass]]
+name = "translate"
+mode = "chunk"
+instruction_file = "translate.txt"
+strict_fidelity = true
+model = "z-ai/glm-5.3-flash"
+[pass.params]
+reasoning_effort = "high"
+
+[options]
+ascii = true
+```
+
+- `[[pass]]` entries run in order. Each defines `name`, exactly one of
+  `instruction` (inline text) or `instruction_file` (path relative to the
+  config file), and `mode`:
+  - `analysis`: reads the whole document and stores a preparation brief
+    (outline, names, hard-to-translate items) used by later passes. Long
+    documents are analysed in parts and the briefs are merged.
+  - `chunk`: translates paragraphs grouped into token-budgeted chunks.
+  - `paragraph`: translates each paragraph with its own call.
+- `strict_fidelity` appends paragraph-boundary instructions to the pass
+  prompt and participates in the cache key.
+- `model` and `params` on a pass override the API-level values per call.
+- `[options] ascii = true` (or `ascii = true` on a pass) enforces pure
+  ASCII output: mechanical Unicode folding first, then LLM repair with
+  retries, then character dropping as a last resort.
+- Passes are cached by content hash (source text, working text, model,
+  params, instruction, strict-fidelity flag) under the cache directory, so
+  re-runs after interruption are cheap.
+
+## Development
+
+```sh
+pip install -e ".[dev]"
+ruff check .
+mypy
+pytest
+```
+
+## Design notes
+
+- `Result[T, E]` (`Ok`/`Err`) for error handling without exceptions in the
+  core; `IO[T]` thunks so the whole program is a composed value that runs
+  exactly once at the entry point.
+- Pure text machinery (paragraph splitting, token-budget chunking, cache
+  keys, SSE and `<think>` tag state machines) is fully separated from
+  effects, which live in the console/status line and the injected HTTP
+  opener (`Context.open_http`).
