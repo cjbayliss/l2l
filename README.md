@@ -29,6 +29,7 @@ zh2en [CONFIG] [options] < input.txt > output.txt
   override the corresponding `[api]` setting and its `TRANSLATE_*`
   environment variable. `--cache-dir` overrides the cache location
   (default `$XDG_CACHE_HOME/zh2en`). `--no-cache` bypasses the cache.
+  `--ensure-paragraphs` turns on the paragraph-count check described below.
   `--verbose` prints chunking, cache, timing, and reasoning diagnostics.
   `--show-log-path` prints the run log's path to stderr at startup.
   `--version` prints the version.
@@ -70,6 +71,7 @@ reasoning_effort = "high"
 
 [options]
 ascii = true
+ensure_paragraphs = true
 ```
 
 - `[[pass]]` entries run in order. Each defines `name`, exactly one of
@@ -84,6 +86,11 @@ ascii = true
 - `[options] ascii = true` (or `ascii = true` on a pass) enforces pure
   ASCII output: mechanical Unicode folding first, then LLM repair with
   retries, then character dropping as a last resort.
+- `[options] ensure_paragraphs = true` (or the `--ensure-paragraphs` flag)
+  checks each pass's output paragraph count against the source after the
+  pass runs. On a mismatch the pass is re-run with one call per paragraph,
+  which preserves the source's paragraph count; a warning is printed if the
+  count still differs, and the output is emitted either way.
 - Passes are cached by content hash (source text, working text, model,
   params, instruction) under the cache directory, so re-runs after
   interruption are cheap.

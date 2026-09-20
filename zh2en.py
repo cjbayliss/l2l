@@ -169,6 +169,7 @@ class Arguments:
     timeout: float | None
     max_tokens: int | None
     no_cache: bool
+    ensure_paragraphs: bool
     verbose: bool
     show_log_path: bool
     cache_dir: str | None
@@ -178,6 +179,7 @@ class Arguments:
 class Setup:
     config: Config
     passes: tuple[PassDefinition, ...]
+    ensure_paragraphs: bool
 
 
 OpenHTTP = Callable[[Any, float], Result[Any, str]]
@@ -191,6 +193,7 @@ class Context:
     use_cache: bool
     cache_directory: str
     verbose: bool
+    ensure_paragraphs: bool
     console: Console
     open_http: OpenHTTP
     log: RunLog
@@ -296,6 +299,10 @@ def split_paragraphs(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
 
 def ensure_blank_line_separators(text: str) -> str:
     return "\n\n".join(split_paragraphs(text)[0])
+
+
+def count_paragraphs(text: str) -> int:
+    return len(split_paragraphs(text)[0])
 
 
 def make_chunks(
@@ -849,7 +856,7 @@ def parse_options_table(path: str, table: Any) -> Result[dict[str, bool], str]:
     if not isinstance(table, dict):
         return Err("%s: [options] must be a table" % path)
 
-    unknown = sorted(set(table) - {"ascii"})
+    unknown = sorted(set(table) - {"ascii", "ensure_paragraphs"})
     if unknown:
         return Err("%s: [options]: unknown key(s): %s" % (path, ", ".join(unknown)))
 
@@ -857,7 +864,11 @@ def parse_options_table(path: str, table: Any) -> Result[dict[str, bool], str]:
     if not isinstance(ascii_value, bool):
         return Err("%s: [options] ascii must be true or false" % path)
 
-    return Ok({"ascii": ascii_value})
+    ensure_paragraphs = table.get("ensure_paragraphs", False)
+    if not isinstance(ensure_paragraphs, bool):
+        return Err("%s: [options] ensure_paragraphs must be true or false" % path)
+
+    return Ok({"ascii": ascii_value, "ensure_paragraphs": ensure_paragraphs})
 
 
 def pass_definition_from(
@@ -2137,7 +2148,7 @@ def run_units(
     return fold_io(enumerate(work_groups), step, initial)
 
 
-def run_text_pass(
+def run_text_pass_once(
     ctx: Context,
     pass_definition: PassDefinition,
     state: State,
@@ -2208,6 +2219,89 @@ def run_text_pass(
         )
 
     return io_bind(ctx.console.log(warning) if warning else io_pure(None), proceed)
+
+
+def run_text_pass(
+    ctx: Context,
+    pass_definition: PassDefinition,
+    state: State,
+    started_at: float,
+    source_paragraphs: tuple[str, ...],
+    separators: tuple[str, ...],
+    chunk_plan: tuple[tuple[str, ...], ...],
+    paragraph_plan: tuple[tuple[str, ...], ...],
+    clock: Callable[[], float],
+) -> IO[Result[State, str]]:
+    def attempt(
+        pass_to_run: PassDefinition, current_state: State, attempt_started: float
+    ) -> IO[Result[State, str]]:
+        return run_text_pass_once(
+            ctx,
+            pass_to_run,
+            current_state,
+            attempt_started,
+            source_paragraphs,
+            separators,
+            chunk_plan,
+            paragraph_plan,
+            clock,
+        )
+
+    if not ctx.ensure_paragraphs:
+        return attempt(pass_definition, state, started_at)
+
+    def mismatch_message(count: int, action: str) -> str:
+        return "zh2en: [%s] output has %d paragraph(s), source has %d; %s" % (
+            pass_definition.name,
+            count,
+            len(source_paragraphs),
+            action,
+        )
+
+    def after_retry(result: Result[State, str]) -> IO[Result[State, str]]:
+        if isinstance(result, Err):
+            return io_result(result)
+
+        count = count_paragraphs(result.value.text)
+        if count == len(source_paragraphs):
+            return io_result(result)
+
+        return io_map(
+            ctx.console.log(
+                "zh2en: [%s] paragraph count still differs (%d vs %d); continuing"
+                % (pass_definition.name, count, len(source_paragraphs))
+            ),
+            lambda _: result,
+        )
+
+    def check(result: Result[State, str]) -> IO[Result[State, str]]:
+        if isinstance(result, Err):
+            return io_result(result)
+
+        count = count_paragraphs(result.value.text)
+        if count == len(source_paragraphs):
+            return io_result(result)
+
+        if pass_definition.mode != "chunk":
+            return io_map(
+                ctx.console.log(mismatch_message(count, "continuing")),
+                lambda _: result,
+            )
+
+        warning = mismatch_message(
+            count, "re-running the pass with one call per paragraph"
+        )
+        retried_state = replace(state, usage=result.value.usage)
+        paragraph_pass = replace(pass_definition, mode="paragraph")
+        return io_bind(
+            ctx.console.log(warning),
+            lambda _: io_bind(
+                attempt(paragraph_pass, retried_state, clock()),
+                after_retry,
+            ),
+        )
+
+    return io_bind(attempt(pass_definition, state, started_at), check)
 
 
 def run_pass(
@@ -2519,6 +2613,9 @@ def load_setup(
                                     Setup(
                                         config=config,
                                         passes=apply_default_ascii(pair[1], pair[0]),
+                                        ensure_paragraphs=pair[0].get(
+                                            "ensure_paragraphs", False
+                                        ),
                                     )
                                 ),
                             ),
@@ -2785,6 +2882,12 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         "--no-cache", action="store_true", help="bypass the translation cache"
     )
     parser.add_argument(
+        "--ensure-paragraphs",
+        action="store_true",
+        help="after each pass, check the output paragraph count against the "
+        "source; re-run a mismatching pass with one call per paragraph",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -2806,6 +2909,7 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         timeout=parsed.timeout,
         max_tokens=parsed.max_tokens,
         no_cache=parsed.no_cache,
+        ensure_paragraphs=parsed.ensure_paragraphs,
         verbose=parsed.verbose,
         show_log_path=parsed.show_log_path,
         cache_dir=parsed.cache_dir,
@@ -2923,6 +3027,8 @@ def run_main_program(
                     use_cache=not parsed.no_cache,
                     cache_directory=cache_directory,
                     verbose=parsed.verbose,
+                    ensure_paragraphs=parsed.ensure_paragraphs
+                    or setup.ensure_paragraphs,
                     console=console,
                     open_http=urllib_open,
                     log=log,
