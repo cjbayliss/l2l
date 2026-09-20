@@ -30,12 +30,22 @@ zh2en [CONFIG] [options] < input.txt > output.txt
   environment variable. `--cache-dir` overrides the cache location
   (default `$XDG_CACHE_HOME/zh2en`). `--no-cache` bypasses the cache.
   `--verbose` prints chunking, cache, timing, and reasoning diagnostics.
+  `--show-log-path` prints the run log's path to stderr at startup.
   `--version` prints the version.
 
 Precedence: defaults < user config < selected config < environment <
 command line.
 
 See `example.toml` for a starting point.
+
+## Logging
+
+Every run writes a log to `<cache-dir>/logs/<timestamp>-<pid>.log`
+regardless of `--no-cache`. The log records each request payload sent to
+the endpoint and everything received in reply: raw SSE lines for streamed
+calls, response bodies for plain calls, and any transport or protocol
+errors. Request headers (and therefore API keys) are never logged. With
+`--show-log-path` (or `-l`) the log's path is printed to stderr at startup.
 
 ## Configuration
 
