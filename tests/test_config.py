@@ -75,6 +75,7 @@ def test_api_settings_from_arguments() -> None:
         max_tokens=None,
         no_cache=False,
         verbose=False,
+        show_log_path=False,
         cache_dir=None,
     )
     assert z.api_settings_from_arguments(arguments) == {
@@ -93,6 +94,7 @@ def test_merged_api_settings_precedence() -> None:
         max_tokens=None,
         no_cache=False,
         verbose=False,
+        show_log_path=False,
         cache_dir=None,
     )
     environment = {

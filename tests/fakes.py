@@ -61,6 +61,7 @@ def make_context(
     cache_directory: str = "",
     use_cache: bool = False,
     max_tokens: int = 100000,
+    log: z.RunLog | None = None,
 ) -> z.Context:
     config = z.Config(
         base_url="http://endpoint.test/v1",
@@ -78,6 +79,7 @@ def make_context(
         verbose=False,
         console=console,
         open_http=open_http,
+        log=log if log is not None else z.RunLog(""),
     )
 
 

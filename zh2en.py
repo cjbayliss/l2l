@@ -175,6 +175,7 @@ class Arguments:
     max_tokens: int | None
     no_cache: bool
     verbose: bool
+    show_log_path: bool
     cache_dir: str | None
 
 
@@ -197,6 +198,7 @@ class Context:
     verbose: bool
     console: Console
     open_http: OpenHTTP
+    log: RunLog
 
 
 def build_settings() -> Settings:
@@ -1356,6 +1358,59 @@ def cache_write(cache_directory: str, key: str, value: str) -> IO[None]:
     return IO(thunk)
 
 
+def log_stamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+@dataclass(frozen=True)
+class RunLog:
+    path: str
+
+
+def run_log_path(cache_directory: str) -> str:
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    name = "%s-%d.log" % (stamp, os.getpid())
+    return os.path.join(cache_directory, "logs", name)
+
+
+def open_run_log(cache_directory: str) -> IO[RunLog]:
+    def thunk() -> RunLog:
+        path = run_log_path(cache_directory)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        return RunLog(path=path)
+
+    return IO(thunk)
+
+
+def run_log_write(log: RunLog, text: str) -> IO[None]:
+    def thunk() -> None:
+        if not log.path:
+            return
+
+        try:
+            with open(log.path, "a", encoding="utf-8") as handle:
+                handle.write(text)
+        except OSError:
+            pass
+
+    return IO(thunk)
+
+
+def log_entry(log: RunLog, label: str, body: str) -> IO[None]:
+    return run_log_write(log, "== %s %s\n%s\n\n" % (log_stamp(), label, body))
+
+
+def log_request(
+    log: RunLog, payload: Mapping[str, Any], label: str = "REQUEST"
+) -> IO[None]:
+    body = json.dumps(payload, indent=2, ensure_ascii=False)
+    return log_entry(log, label, body)
+
+
+def log_error(log: RunLog, detail: str) -> IO[None]:
+    return log_entry(log, "ERROR", detail)
+
+
 def http_request(
     config: Config, payload: Mapping[str, Any], accept: str | None = None
 ) -> urllib.request.Request:
@@ -1388,25 +1443,38 @@ def http_post_json(
     ctx: Context, payload: Mapping[str, Any]
 ) -> IO[Result[dict[str, Any], str]]:
     def thunk() -> Result[dict[str, Any], str]:
+        log_request(ctx.log, payload).run()
         opened = ctx.open_http(http_request(ctx.config, payload), ctx.config.timeout)
         if isinstance(opened, Err):
+            log_error(ctx.log, opened.error).run()
             return opened
 
         with opened.value as response:
             try:
-                return Ok(json.loads(response.read().decode("utf-8")))
+                body = response.read().decode("utf-8")
+                log_entry(ctx.log, "RESPONSE", body).run()
+                return Ok(json.loads(body))
             except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                log_error(ctx.log, "invalid JSON response: %s" % error).run()
                 return Err("invalid JSON response: %s" % error)
 
     return IO(thunk)
 
 
 def http_open_stream(ctx: Context, payload: Mapping[str, Any]) -> IO[Result[Any, str]]:
-    def thunk() -> Result[Any, str]:
+    def open_stream(body: Mapping[str, Any], label: str) -> Result[Any, str]:
+        log_request(ctx.log, body, label).run()
         opened = ctx.open_http(
-            http_request(ctx.config, payload, accept="text/event-stream"),
+            http_request(ctx.config, body, accept="text/event-stream"),
             ctx.config.timeout,
         )
+        if isinstance(opened, Err):
+            log_error(ctx.log, opened.error).run()
+
+        return opened
+
+    def thunk() -> Result[Any, str]:
+        opened = open_stream(payload, "REQUEST (stream)")
         if (
             isinstance(opened, Ok)
             or "stream_options" not in payload
@@ -1417,19 +1485,21 @@ def http_open_stream(ctx: Context, payload: Mapping[str, Any]) -> IO[Result[Any,
         retried = {
             key: value for key, value in payload.items() if key != "stream_options"
         }
-        return ctx.open_http(
-            http_request(ctx.config, retried, accept="text/event-stream"),
-            ctx.config.timeout,
-        )
+        return open_stream(retried, "REQUEST (stream, retry)")
 
     return IO(thunk)
 
 
 def drive_stream(
-    response: Any, on_progress: ProgressCallback
+    response: Any,
+    on_progress: ProgressCallback,
+    on_raw_line: Callable[[bytes], None] | None = None,
 ) -> Result[StreamState, str]:
     state = StreamState()
     for raw_line in response:
+        if on_raw_line is not None:
+            on_raw_line(raw_line)
+
         outcome = step_stream(state, raw_line)
         if isinstance(outcome, Err):
             return outcome
@@ -1445,6 +1515,9 @@ def drive_stream(
 def collect_stream(
     ctx: Context, payload: Mapping[str, Any], on_progress: ProgressCallback
 ) -> IO[Result[StreamState, str]]:
+    def on_raw_line(raw_line: bytes) -> None:
+        run_log_write(ctx.log, raw_line.decode("utf-8", "replace")).run()
+
     def respond(opened: Result[Any, str]) -> IO[Result[StreamState, str]]:
         if isinstance(opened, Err):
             return io_result(opened)
@@ -1452,8 +1525,15 @@ def collect_stream(
         def thunk() -> Result[StreamState, str]:
             try:
                 with opened.value as response:
-                    return drive_stream(response, on_progress)
+                    outcome = drive_stream(response, on_progress, on_raw_line)
+                    if isinstance(outcome, Err):
+                        log_error(ctx.log, outcome.error).run()
+                    else:
+                        run_log_write(ctx.log, "\n").run()
+
+                    return outcome
             except (urllib.error.URLError, TimeoutError, OSError) as error:
+                log_error(ctx.log, "stream interrupted: %s" % error).run()
                 return Err("stream interrupted: %s" % error)
 
         return IO(thunk)
@@ -2879,6 +2959,12 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         help="diagnostics (chunks, cache hits, timings) and LLM reasoning "
         "traces to stderr",
     )
+    parser.add_argument(
+        "--show-log-path",
+        "-l",
+        action="store_true",
+        help="print the run log's path to stderr at startup",
+    )
     parsed = parser.parse_args(arguments)
     return Arguments(
         config=parsed.config,
@@ -2889,6 +2975,7 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         max_tokens=parsed.max_tokens,
         no_cache=parsed.no_cache,
         verbose=parsed.verbose,
+        show_log_path=parsed.show_log_path,
         cache_dir=parsed.cache_dir,
     )
 
@@ -2997,16 +3084,30 @@ def run_main_program(
         setup = setup_result.value
 
         def with_cache_dir(cache_directory: str) -> IO[int]:
-            ctx = Context(
-                config=setup.config,
-                settings=build_settings(),
-                use_cache=not parsed.no_cache,
-                cache_directory=cache_directory,
-                verbose=parsed.verbose,
-                console=console,
-                open_http=urllib_open,
-            )
-            return run_pipeline(ctx, setup.passes, text, started, stdout, clock)
+            def with_log(log: RunLog) -> IO[int]:
+                ctx = Context(
+                    config=setup.config,
+                    settings=build_settings(),
+                    use_cache=not parsed.no_cache,
+                    cache_directory=cache_directory,
+                    verbose=parsed.verbose,
+                    console=console,
+                    open_http=urllib_open,
+                    log=log,
+                )
+                announce = (
+                    console.log("zh2en: log: %s" % log.path)
+                    if parsed.show_log_path
+                    else io_pure(None)
+                )
+                return io_bind(
+                    announce,
+                    lambda _: run_pipeline(
+                        ctx, setup.passes, text, started, stdout, clock
+                    ),
+                )
+
+            return io_bind(open_run_log(cache_directory), with_log)
 
         return io_bind(resolve_cache_dir(environment, parsed.cache_dir), with_cache_dir)
 
