@@ -91,6 +91,14 @@ ensure_paragraphs = true
   pass runs. On a mismatch the pass is re-run with one call per paragraph,
   which preserves the source's paragraph count; a warning is printed if the
   count still differs, and the output is emitted either way.
+- Every pass reply is validated before it is used: it must be non-empty,
+  contain exactly as many paragraphs as the source unit it was given, and
+  stay within a plausible length of that source. A failed reply is
+  re-requested with corrective feedback (two repairs by default); if it
+  still fails, a warning is printed, the last reply is used, and it is not
+  written to the cache. Paragraph-mode calls also include the neighbouring
+  source paragraphs as read-only context, which anchors short or ambiguous
+  units such as title-only or ellipsis-only lines.
 - Passes are cached by content hash (source text, working text, model,
   params, instruction) under the cache directory, so re-runs after
   interruption are cheap.

@@ -24,6 +24,10 @@ def chunk_pass(name: str = "translate", ascii_output: bool = False) -> z.PassDef
     return z.PassDefinition(name, "T.", "chunk", {}, None, ascii_output)
 
 
+def paragraph_pass(name: str = "translate") -> z.PassDefinition:
+    return z.PassDefinition(name, "T.", "paragraph", {}, None, False)
+
+
 def test_fold_io_handles_thousands_of_items() -> None:
     def step(pair: tuple[int, None], _: int) -> z.IO[z.Result[tuple[int, None], str]]:
         return z.io_pure(z.Ok((pair[0] + 1, None)))
@@ -178,11 +182,12 @@ def test_run_pipeline_enforces_ascii_mechanically() -> None:
 
 def test_ensure_paragraphs_retries_pass_in_paragraph_mode() -> None:
     console, stderr = make_console()
+    stubborn = "One.\n\nTwo.\n\nThree."
     http = FakeHttp(
         [
-            FakeStreamResponse(
-                with_usage(stream_chunks("One.\n\nTwo.\n\nThree."), USAGE)
-            ),
+            FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE)),
             FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
             FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
         ]
@@ -197,17 +202,22 @@ def test_ensure_paragraphs_retries_pass_in_paragraph_mode() -> None:
     logged = stderr.getvalue()
     assert "output has 3 paragraph(s), source has 2" in logged
     assert "re-running the pass with one call per paragraph" in logged
-    assert len(http.requests) == 3
+    assert "failed validation 2 time(s)" in logged
+    assert len(http.requests) == 5
 
 
 def test_ensure_paragraphs_warns_when_retry_still_differs() -> None:
     console, stderr = make_console()
+    stubborn = "One.\n\nTwo.\n\nThree."
+    hello = "Hello.\n\nSurprise."
     http = FakeHttp(
         [
-            FakeStreamResponse(
-                with_usage(stream_chunks("One.\n\nTwo.\n\nThree."), USAGE)
-            ),
-            FakeStreamResponse(with_usage(stream_chunks("Hello.\n\nSurprise."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(hello), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(hello), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(hello), USAGE)),
             FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
         ]
     )
@@ -221,7 +231,148 @@ def test_ensure_paragraphs_warns_when_retry_still_differs() -> None:
     logged = stderr.getvalue()
     assert "still differs (3 vs 2)" in logged
     assert "continuing" in logged
+    assert len(http.requests) == 7
+
+
+def test_unit_validation_repairs_hallucinated_paragraph(tmp_path: Path) -> None:
+    console, stderr = make_console()
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(
+                with_usage(
+                    stream_chunks(
+                        "# T.\n\n Shen Yue never expected Qin Yu to say"
+                        " that.\n\n She froze for a moment."
+                    ),
+                    USAGE,
+                )
+            ),
+            FakeStreamResponse(with_usage(stream_chunks("Chapter 4: Ruined."), USAGE)),
+        ]
+    )
+    ctx = make_context(
+        console, http.open, cache_directory=str(cache_directory), use_cache=True
+    )
+    stdout = io.StringIO()
+    code = z.run_pipeline(
+        ctx,
+        (paragraph_pass(),),
+        "第413章 被亲妈祸害的女孩 2",
+        0.0,
+        stdout,
+        time.time,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Chapter 4: Ruined.\n"
+    assert len(http.requests) == 2
+    first_user = json.loads(http.requests[0].data)["messages"][1]["content"]
+    assert "reference only" not in first_user
+    retry_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    assert "does not satisfy the output rules" in retry_user
+    assert "Shen Yue" in retry_user
+    cached = list(cache_directory.glob("*.txt"))
+    assert len(cached) == 1
+    assert cached[0].read_text(encoding="utf-8") == "Chapter 4: Ruined."
+
+
+def test_unit_validation_gives_up_warns_and_skips_cache(tmp_path: Path) -> None:
+    console, stderr = make_console()
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+    bad = "One.\n\nTwo."
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks(bad), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(bad), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(bad), USAGE)),
+        ]
+    )
+    ctx = make_context(
+        console, http.open, cache_directory=str(cache_directory), use_cache=True
+    )
+    stdout = io.StringIO()
+    code = z.run_pipeline(
+        ctx, (paragraph_pass(),), "你好。", 0.0, stdout, time.time
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "One.\n\nTwo.\n"
+    logged = stderr.getvalue()
+    assert "failed validation 2 time(s)" in logged
+    assert "uncached" in logged
     assert len(http.requests) == 3
+    assert list(cache_directory.glob("*.txt")) == []
+
+
+def test_unit_validation_repairs_dropped_chunk_paragraph() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello.\n\nWorld."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = z.run_pipeline(
+        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout, time.time
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\nWorld.\n"
+    assert len(http.requests) == 2
+    retry_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    assert "has 1 paragraph(s) but the source has 2" in retry_user
+
+
+def test_unit_validation_rejects_implausible_length() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("word " * 40), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Okay."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = z.run_pipeline(
+        ctx, (paragraph_pass(),), "嗯。", 0.0, stdout, time.time
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Okay.\n"
+    assert len(http.requests) == 2
+    retry_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    assert "tokens against a source" in retry_user
+
+
+def test_paragraph_mode_supplies_neighbour_context() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("One."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Two."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Three."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = z.run_pipeline(
+        ctx, (paragraph_pass(),), "一。\n\n二。\n\n三。", 0.0, stdout, time.time
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "One.\n\nTwo.\n\nThree.\n"
+    users = [
+        json.loads(request.data)["messages"][1]["content"] for request in http.requests
+    ]
+    assert users[0].count("reference only") == 1
+    assert "二。" in users[0]
+    assert "三。" not in users[0]
+    assert users[1].count("reference only") == 1
+    assert "一。" in users[1]
+    assert "三。" in users[1]
+    assert users[2].count("reference only") == 1
+    assert "二。" in users[2]
+    assert "一。" not in users[2]
 
 
 def test_main_empty_stdin_succeeds_without_config() -> None:

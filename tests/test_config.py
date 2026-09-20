@@ -180,7 +180,7 @@ def test_resolve_call_settings() -> None:
 
 def test_pass_salt() -> None:
     pass_definition = z.PassDefinition("p", "i", "chunk", {}, None, False)
-    assert z.pass_salt(pass_definition) == "p\x00i"
+    assert z.pass_salt(pass_definition) == (z.CACHE_SALT_VERSION + "\x00p\x00i")
 
 
 def test_cache_key_variants() -> None:

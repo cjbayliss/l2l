@@ -120,3 +120,56 @@ def test_build_pass_user() -> None:
     assert same == "src"
     blank = z.build_pass_user("src", None, "   ")
     assert blank == "src"
+
+
+def test_unit_output_problem_accepts_matching_reply() -> None:
+    settings = z.build_settings()
+    problem = z.unit_output_problem("你好。\n\n世界。", "Hello.\n\nWorld.", settings)
+    assert problem is None
+
+
+def test_unit_output_problem_flags_empty_reply() -> None:
+    settings = z.build_settings()
+    problem = z.unit_output_problem("你好。", "   ", settings)
+    assert problem is not None
+    assert "empty" in problem
+
+
+def test_unit_output_problem_flags_paragraph_mismatch() -> None:
+    settings = z.build_settings()
+    extra = z.unit_output_problem("你好。", "Hello.\n\nWorld.", settings)
+    assert extra is not None
+    assert "has 2 paragraph(s) but the source has 1" in extra
+    missing = z.unit_output_problem("你好。\n\n世界。", "Hello.", settings)
+    assert missing is not None
+    assert "has 1 paragraph(s) but the source has 2" in missing
+
+
+def test_unit_output_problem_flags_implausible_length() -> None:
+    settings = z.build_settings()
+    problem = z.unit_output_problem("嗯。", "word " * 40, settings)
+    assert problem is not None
+    assert "tokens" in problem
+
+
+def test_context_parts_and_build_pass_user_with_context() -> None:
+    assert z.context_parts(()) == ()
+    user = z.build_pass_user("src", None, None, ("before", "after"))
+    assert user.count("reference only") == 1
+    assert "before\n\nafter" in user
+    assert user.endswith("src")
+
+
+def test_build_unit_retry_user_includes_problem_and_reply() -> None:
+    user = z.build_unit_retry_user("src", (), "bad reply", "the reply was empty")
+    assert "the reply was empty" in user
+    assert "Previous reply:\nbad reply" in user
+    assert "\n\nsrc\n\n" in user
+    assert user.endswith("output only the translation.")
+
+
+def test_cache_key_distinguishes_context() -> None:
+    base = z.cache_key("你好。", "m", "salt", "你好。")
+    repeated = z.cache_key("你好。", "m", "salt", "你好。", context="世界。")
+    assert base != repeated
+    assert repeated == z.cache_key("你好。", "m", "salt", "你好。", context="世界。")
