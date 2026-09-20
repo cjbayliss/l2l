@@ -176,6 +176,54 @@ def test_run_pipeline_enforces_ascii_mechanically() -> None:
     assert len(http.requests) == 1
 
 
+def test_ensure_paragraphs_retries_pass_in_paragraph_mode() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(
+                with_usage(stream_chunks("One.\n\nTwo.\n\nThree."), USAGE)
+            ),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open, ensure_paragraphs=True)
+    stdout = io.StringIO()
+    code = z.run_pipeline(
+        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout, time.time
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\nWorld.\n"
+    logged = stderr.getvalue()
+    assert "output has 3 paragraph(s), source has 2" in logged
+    assert "re-running the pass with one call per paragraph" in logged
+    assert len(http.requests) == 3
+
+
+def test_ensure_paragraphs_warns_when_retry_still_differs() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(
+                with_usage(stream_chunks("One.\n\nTwo.\n\nThree."), USAGE)
+            ),
+            FakeStreamResponse(with_usage(stream_chunks("Hello.\n\nSurprise."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open, ensure_paragraphs=True)
+    stdout = io.StringIO()
+    code = z.run_pipeline(
+        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout, time.time
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\nSurprise.\n\nWorld.\n"
+    logged = stderr.getvalue()
+    assert "still differs (3 vs 2)" in logged
+    assert "continuing" in logged
+    assert len(http.requests) == 3
+
+
 def test_main_empty_stdin_succeeds_without_config() -> None:
     code = z.main(
         [], {}, io.StringIO("   "), io.StringIO(), io.StringIO(), time.time
@@ -224,5 +272,9 @@ def test_parse_args_defaults() -> None:
     arguments = z.parse_args(["cfg.toml", "--no-cache", "-v"])
     assert arguments.config == "cfg.toml"
     assert arguments.no_cache
+    assert not arguments.ensure_paragraphs
     assert arguments.verbose
     assert arguments.cache_dir is None
+
+    arguments = z.parse_args(["cfg.toml", "--ensure-paragraphs"])
+    assert arguments.ensure_paragraphs

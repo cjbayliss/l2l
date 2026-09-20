@@ -74,6 +74,7 @@ def test_api_settings_from_arguments() -> None:
         timeout=2.0,
         max_tokens=None,
         no_cache=False,
+        ensure_paragraphs=False,
         verbose=False,
         show_log_path=False,
         cache_dir=None,
@@ -93,6 +94,7 @@ def test_merged_api_settings_precedence() -> None:
         timeout=None,
         max_tokens=None,
         no_cache=False,
+        ensure_paragraphs=False,
         verbose=False,
         show_log_path=False,
         cache_dir=None,
@@ -128,8 +130,14 @@ def test_validate_document() -> None:
 
 
 def test_parse_options_table() -> None:
-    assert z.parse_options_table("f", {"ascii": True}) == z.Ok({"ascii": True})
+    assert z.parse_options_table("f", {"ascii": True}) == z.Ok(
+        {"ascii": True, "ensure_paragraphs": False}
+    )
+    assert z.parse_options_table("f", {"ensure_paragraphs": True}) == z.Ok(
+        {"ascii": False, "ensure_paragraphs": True}
+    )
     assert isinstance(z.parse_options_table("f", {"ascii": "yes"}), z.Err)
+    assert isinstance(z.parse_options_table("f", {"ensure_paragraphs": "yes"}), z.Err)
     assert isinstance(z.parse_options_table("f", {"other": 1}), z.Err)
     assert isinstance(z.parse_options_table("f", "x"), z.Err)
 
@@ -221,7 +229,7 @@ def test_resolve_passes_selection_and_options() -> None:
     result = z.resolve_passes("user", user, None, z.Ok({})).run()
     assert isinstance(result, z.Ok)
     options, passes = result.value
-    assert options == {"ascii": True}
+    assert options == {"ascii": True, "ensure_paragraphs": False}
     assert len(passes) == 1
 
 
