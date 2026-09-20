@@ -64,7 +64,6 @@ stop = ["END"]
 name = "translate"
 mode = "chunk"
 instruction_file = "translate.txt"
-strict_fidelity = true
 model = "z-ai/glm-5.3-flash"
 [pass.params]
 reasoning_effort = "high"
@@ -77,19 +76,17 @@ ascii = true
   `instruction` (inline text) or `instruction_file` (path relative to the
   config file), and `mode`:
   - `analysis`: reads the whole document and stores a preparation brief
-    (outline, names, hard-to-translate items) used by later passes. Long
-    documents are analysed in parts and the briefs are merged.
+    (outline, names, hard-to-translate items) used by later passes. The
+    document must fit in one call; otherwise raise `max_tokens`.
   - `chunk`: translates paragraphs grouped into token-budgeted chunks.
   - `paragraph`: translates each paragraph with its own call.
-- `strict_fidelity` appends paragraph-boundary instructions to the pass
-  prompt and participates in the cache key.
 - `model` and `params` on a pass override the API-level values per call.
 - `[options] ascii = true` (or `ascii = true` on a pass) enforces pure
   ASCII output: mechanical Unicode folding first, then LLM repair with
   retries, then character dropping as a last resort.
 - Passes are cached by content hash (source text, working text, model,
-  params, instruction, strict-fidelity flag) under the cache directory, so
-  re-runs after interruption are cheap.
+  params, instruction) under the cache directory, so re-runs after
+  interruption are cheap.
 
 ## Development
 

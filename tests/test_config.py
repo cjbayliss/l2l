@@ -139,19 +139,24 @@ def test_pass_definition_from() -> None:
     assert isinstance(result, z.Err)
 
     result = z.pass_definition_from(
-        "f", "p", {"mode": "chunk", "strict_fidelity": True, "params": {"t": 1}}, "inst"
+        "f", "p", {"mode": "chunk", "params": {"t": 1}}, "inst"
     )
     assert isinstance(result, z.Ok)
     assert result.value.mode == "chunk"
-    assert result.value.strict_fidelity
     assert result.value.model is None
     assert result.value.ascii is None
+
+    result = z.parse_pass_table(
+        "f", {"name": "p", "mode": "chunk", "strict_fidelity": True}, "."
+    ).run()
+    assert isinstance(result, z.Err)
+    assert "unknown key(s): strict_fidelity" in result.error
 
 
 def test_apply_default_ascii() -> None:
     passes = (
-        z.PassDefinition("a", "i", "chunk", False, {}, None, None),
-        z.PassDefinition("b", "i", "chunk", False, {}, None, True),
+        z.PassDefinition("a", "i", "chunk", {}, None, None),
+        z.PassDefinition("b", "i", "chunk", {}, None, True),
     )
     applied = z.apply_default_ascii(passes, {"ascii": True})
     assert [p.ascii for p in applied] == [True, True]
@@ -159,18 +164,15 @@ def test_apply_default_ascii() -> None:
 
 def test_resolve_call_settings() -> None:
     config = z.Config("u", "k", "default-model", 1.0, 100, {"a": 1})
-    pass_definition = z.PassDefinition(
-        "p", "i", "chunk", False, {"b": 2}, "pass-model", False
-    )
+    pass_definition = z.PassDefinition("p", "i", "chunk", {"b": 2}, "pass-model", False)
     model, params = z.resolve_call_settings(config, pass_definition)
     assert model == "pass-model"
     assert params == {"a": 1, "b": 2}
 
 
-def test_pass_salt_reflects_strict_fidelity() -> None:
-    plain = z.PassDefinition("p", "i", "chunk", False, {}, None, False)
-    strict = z.PassDefinition("p", "i", "chunk", True, {}, None, False)
-    assert z.pass_salt(plain) != z.pass_salt(strict)
+def test_pass_salt() -> None:
+    pass_definition = z.PassDefinition("p", "i", "chunk", {}, None, False)
+    assert z.pass_salt(pass_definition) == "p\x00i"
 
 
 def test_cache_key_variants() -> None:
