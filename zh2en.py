@@ -151,6 +151,8 @@ class Settings:
     sentence_boundary_characters: str
     ascii_fix_instruction: str
     ascii_character_map: Mapping[str, str]
+    unit_fix_attempts: int
+    unit_output_max_ratio: float
 
 
 @dataclass(frozen=True)
@@ -204,6 +206,8 @@ def build_settings() -> Settings:
         chunk_budget_tokens=3500,
         analysis_reserve_tokens=128,
         ascii_fix_attempts=3,
+        unit_fix_attempts=2,
+        unit_output_max_ratio=6.0,
         sentence_boundary_characters="。！？!?；;\n",
         ascii_fix_instruction="""
 This paragraph failed to be fully translated or contains non-ASCII
@@ -303,6 +307,36 @@ def ensure_blank_line_separators(text: str) -> str:
 
 def count_paragraphs(text: str) -> int:
     return len(split_paragraphs(text)[0])
+
+
+def unit_output_problem(
+    source_text: str, output: str, settings: Settings
+) -> str | None:
+    if not output.strip():
+        return "the reply was empty"
+
+    expected = count_paragraphs(source_text)
+    found = count_paragraphs(output)
+    if found != expected:
+        return "the reply has %d paragraph(s) but the source has %d" % (
+            found,
+            expected,
+        )
+
+    source_estimate = estimate_tokens(source_text)
+    output_estimate = estimate_tokens(output)
+    if output_estimate > settings.unit_output_max_ratio * max(source_estimate, 1):
+        return (
+            "the reply is ~%d tokens against a source of ~%d tokens "
+            "(limit %.0fx)"
+            % (
+                output_estimate,
+                source_estimate,
+                settings.unit_output_max_ratio,
+            )
+        )
+
+    return None
 
 
 def make_chunks(
@@ -528,12 +562,16 @@ def cache_path(cache_directory: str, key: str) -> str:
     return os.path.join(cache_directory, key + ".txt")
 
 
+CACHE_SALT_VERSION = "2"
+
+
 def cache_key(
     chunk_text: str,
     model: str,
     pass_salt: str = "",
     work_text: str = "",
     overrides: Mapping[str, Any] | None = None,
+    context: str = "",
 ) -> str:
     hasher = hashlib.sha256()
     if pass_salt:
@@ -542,6 +580,9 @@ def cache_key(
     hasher.update(chunk_text.encode("utf-8"))
     if work_text:
         hasher.update(b"\x00work\x00" + work_text.encode("utf-8"))
+
+    if context:
+        hasher.update(b"\x00context\x00" + context.encode("utf-8"))
 
     hasher.update(b"\x00" + model.encode("utf-8"))
     if overrides:
@@ -941,18 +982,36 @@ def build_chat_payload(
     }
 
 
+def context_parts(context: tuple[str, ...]) -> tuple[str, ...]:
+    if not context:
+        return ()
+
+    return (
+        "Context paragraphs (reference only — do not translate them, do not "
+        "continue the story from them, and do not include them in the "
+        "output):",
+        *context,
+        "Translate only the paragraph that follows, as exactly one paragraph:",
+    )
+
+
 def build_pass_user(
-    source_chunk: str, work_chunk: str | None, analysis: str | None
+    source_chunk: str,
+    work_chunk: str | None,
+    analysis: str | None,
+    context: tuple[str, ...] = (),
 ) -> str:
     brief = analysis.strip() if analysis else ""
-    parts = [brief, source_chunk]
+    parts = [brief, *context_parts(context), source_chunk]
     if work_chunk is not None and work_chunk != source_chunk:
         parts.append(work_chunk)
     return "\n\n".join(part for part in parts if part)
 
 
 def pass_salt(pass_definition: PassDefinition) -> str:
-    return "\x00".join((pass_definition.name, pass_definition.instruction))
+    return "\x00".join(
+        (CACHE_SALT_VERSION, pass_definition.name, pass_definition.instruction)
+    )
 
 
 def plan_info_message(
@@ -1196,6 +1255,23 @@ def build_ascii_retry_user(
         "context. Reply with ASCII characters only."
         % (source_paragraph, output_paragraph, non_ascii_sample(result))
     )
+
+
+def build_unit_retry_user(
+    source_chunk: str,
+    context: tuple[str, ...],
+    bad_output: str,
+    problem: str,
+) -> str:
+    parts = [
+        "Your previous reply below does not satisfy the output rules: %s." % problem,
+        "Previous reply:\n%s" % bad_output,
+        *context_parts(context),
+        source_chunk,
+        "Translate the source text again, fixing the problem; output only "
+        "the translation.",
+    ]
+    return "\n\n".join(part for part in parts if part)
 
 
 def drop_non_ascii(
@@ -1660,7 +1736,7 @@ def analyze_document(
 def run_analysis_once(
     ctx: Context, pass_definition: PassDefinition, full_text: str, usage: Usage
 ) -> IO[Result[tuple[str, Usage], str]]:
-    salt = pass_definition.name + "\x00" + pass_definition.instruction
+    salt = pass_salt(pass_definition)
     model, params = resolve_call_settings(ctx.config, pass_definition)
     key = cache_key(full_text, model, salt, overrides=params)
 
@@ -1705,9 +1781,10 @@ def translate_chunk(
     work_chunk: str | None,
     analysis: str | None,
     usage: Usage,
+    context: tuple[str, ...] = (),
 ) -> IO[Result[tuple[str, Usage], str]]:
     system = pass_definition.instruction
-    user = build_pass_user(source_chunk, work_chunk, analysis)
+    user = build_pass_user(source_chunk, work_chunk, analysis, context)
     model, params = resolve_call_settings(ctx.config, pass_definition)
     return chat(ctx, system, user, model, params, usage)
 
@@ -1720,11 +1797,13 @@ def ascii_fix_llm(
     usage: Usage,
 ) -> IO[Result[tuple[str, Usage], str]]:
     model, params = resolve_call_settings(ctx.config, pass_definition)
-    salt = (
-        "ascii-fix\x00"
-        + pass_definition.name
-        + "\x00"
-        + ctx.settings.ascii_fix_instruction
+    salt = "\x00".join(
+        (
+            CACHE_SALT_VERSION,
+            "ascii-fix",
+            pass_definition.name,
+            ctx.settings.ascii_fix_instruction,
+        )
     )
     key = cache_key(source_paragraph, model, salt, output_paragraph, overrides=params)
 
@@ -2047,6 +2126,19 @@ def run_units(
     salt = pass_salt(pass_definition)
     total = len(work_groups)
     accumulator_type = tuple[tuple[str, ...], Usage]
+    outcome_type = tuple[str, bool, Usage]
+    flat_plan = tuple(chain.from_iterable(plan))
+    plan_starts = tuple(accumulate(map(len, plan), initial=0))
+
+    def neighbour_context(index: int) -> tuple[str, ...]:
+        if pass_definition.mode != "paragraph" or index >= len(plan):
+            return ()
+
+        start = plan_starts[index]
+        end = plan_starts[index + 1]
+        before = flat_plan[start - 1 : start] if start > 0 else ()
+        after = flat_plan[end : end + 1] if end < len(flat_plan) else ()
+        return before + after
 
     def step(
         accumulator: accumulator_type, indexed: tuple[int, tuple[str, ...]]
@@ -2055,8 +2147,14 @@ def run_units(
         index, work_group = indexed
         source_chunk_text = "\n\n".join(plan[index]) if index < len(plan) else ""
         work_chunk_text = "\n\n".join(work_group)
+        context = neighbour_context(index)
         key = cache_key(
-            source_chunk_text, model, salt, work_chunk_text, overrides=params
+            source_chunk_text,
+            model,
+            salt,
+            work_chunk_text,
+            overrides=params,
+            context="\n\n".join(context),
         )
         trailing_separator = (
             trailing_separators[index] if index < len(trailing_separators) else ""
@@ -2077,24 +2175,116 @@ def run_units(
                 ),
             )
 
+        def assess_initial(
+            translated: str, unit_usage: Usage
+        ) -> IO[Result[outcome_type, str]]:
+            problem = unit_output_problem(source_chunk_text, translated, ctx.settings)
+            if problem is None:
+                return io_result(Ok((translated, True, unit_usage)))
+
+            return repair(1, translated, unit_usage, problem)
+
+        def repair(
+            attempt_index: int,
+            bad_output: str,
+            unit_usage: Usage,
+            problem: str,
+        ) -> IO[Result[outcome_type, str]]:
+            if attempt_index > ctx.settings.unit_fix_attempts:
+                warning = (
+                    "zh2en: [%s] unit %d/%d failed validation %d time(s); "
+                    "last problem: %s. Keeping the last reply, uncached"
+                    % (
+                        pass_definition.name,
+                        index + 1,
+                        total,
+                        ctx.settings.unit_fix_attempts,
+                        problem,
+                    )
+                )
+                return io_map(
+                    ctx.console.log(warning),
+                    lambda _: Ok((bad_output, False, unit_usage)),
+                )
+
+            retry_log = verbose_log(
+                ctx,
+                "zh2en: [%s] unit %d/%d failed validation (%s); repair "
+                "attempt %d/%d"
+                % (
+                    pass_definition.name,
+                    index + 1,
+                    total,
+                    problem,
+                    attempt_index,
+                    ctx.settings.unit_fix_attempts,
+                ),
+            )
+            retry_user = build_unit_retry_user(
+                source_chunk_text, context, bad_output, problem
+            )
+            return io_bind(
+                retry_log,
+                lambda _: io_bind(
+                    chat(
+                        ctx,
+                        pass_definition.instruction,
+                        retry_user,
+                        model,
+                        params,
+                        unit_usage,
+                    ),
+                    settled(attempt_index),
+                ),
+            )
+
+        def settled(
+            attempt_index: int,
+        ) -> Callable[[Result[tuple[str, Usage], str]], IO[Result[outcome_type, str]]]:
+            def continue_after(
+                reply_result: Result[tuple[str, Usage], str],
+            ) -> IO[Result[outcome_type, str]]:
+                if isinstance(reply_result, Err):
+                    return io_result(reply_result)
+
+                translated, new_usage = reply_result.value
+                problem = unit_output_problem(
+                    source_chunk_text, translated, ctx.settings
+                )
+                if problem is None:
+                    return io_result(Ok((translated, True, new_usage)))
+
+                return repair(attempt_index + 1, translated, new_usage, problem)
+
+            return continue_after
+
+        def assessed(
+            reply_result: Result[tuple[str, Usage], str],
+        ) -> IO[Result[outcome_type, str]]:
+            if isinstance(reply_result, Err):
+                return io_result(reply_result)
+
+            translated, new_usage = reply_result.value
+            return assess_initial(translated, new_usage)
+
         def translate(
             unit_usage: Usage,
         ) -> IO[Result[accumulator_type, str]]:
             def store(
-                result: Result[tuple[str, Usage], str],
+                result: Result[outcome_type, str],
             ) -> IO[Result[accumulator_type, str]]:
                 if isinstance(result, Err):
                     return io_result(
                         Err(
-                            "zh2en: pass [%s] failed on unit %d: %s"
+                            "zh2en: [%s] failed on unit %d: %s"
                             % (pass_definition.name, index + 1, result.error)
                         )
                     )
 
-                translated = result.value[0]
+                translated, valid, new_usage = result.value
                 write = (
                     cache_write(ctx.cache_directory, key, translated)
-                    if ctx.use_cache
+                    if valid and ctx.use_cache
                     else io_pure(None)
                 )
                 return io_map(
@@ -2108,19 +2298,23 @@ def run_units(
                     lambda _: Ok(
                         (
                             outputs + (translated + trailing_separator,),
-                            result.value[1],
+                            new_usage,
                         )
                     ),
                 )
 
             return io_bind(
-                translate_chunk(
-                    ctx,
-                    pass_definition,
-                    source_chunk_text,
-                    work_chunk_text,
-                    analysis,
-                    unit_usage,
+                io_bind(
+                    translate_chunk(
+                        ctx,
+                        pass_definition,
+                        source_chunk_text,
+                        work_chunk_text,
+                        analysis,
+                        unit_usage,
+                        context,
+                    ),
+                    assessed,
                 ),
                 store,
             )
