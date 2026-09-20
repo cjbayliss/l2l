@@ -75,12 +75,6 @@ def test_is_cjk_char() -> None:
     assert not z.is_cjk_char(" ")
 
 
-def test_analysis_block() -> None:
-    assert z.analysis_block(None) == "(none)"
-    assert z.analysis_block("  ") == "(none)"
-    assert z.analysis_block(" brief ") == "brief"
-
-
 def test_non_ascii_sample() -> None:
     assert z.non_ascii_sample("abé×中", 3) == "é×中"
     assert z.non_ascii_sample("abc") == ""
@@ -120,10 +114,9 @@ def test_build_chat_payload() -> None:
 
 
 def test_build_pass_user() -> None:
-    user = z.build_pass_user("src", "draft", "brief")
-    assert "brief" in user
-    assert "src" in user
-    assert "draft" in user
+    user = z.build_pass_user("src", "draft", " brief ")
+    assert user == "brief\n\nsrc\n\ndraft"
     same = z.build_pass_user("src", "src", None)
-    assert "draft" not in same
-    assert "(none)" in same
+    assert same == "src"
+    blank = z.build_pass_user("src", None, "   ")
+    assert blank == "src"

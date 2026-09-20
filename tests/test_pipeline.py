@@ -20,10 +20,8 @@ import zh2en as z
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
 
-def chunk_pass(
-    name: str = "translate", strict: bool = False, ascii_output: bool = False
-) -> z.PassDefinition:
-    return z.PassDefinition(name, "T.", "chunk", strict, {}, None, ascii_output)
+def chunk_pass(name: str = "translate", ascii_output: bool = False) -> z.PassDefinition:
+    return z.PassDefinition(name, "T.", "chunk", {}, None, ascii_output)
 
 
 def test_fold_io_handles_thousands_of_items() -> None:
@@ -153,31 +151,15 @@ def test_run_pipeline_cache_hit(tmp_path: Path) -> None:
     assert first_output == second_output == "Hello.\n"
 
 
-def test_cache_distinguishes_strict_fidelity(tmp_path: Path) -> None:
-    cache_directory = tmp_path / "cache"
-    cache_directory.mkdir()
-    chunks = with_usage(stream_chunks("Hello."), USAGE)
-
-    def run(strict: bool) -> int:
-        console, stderr = make_console()
-        http = FakeHttp([FakeStreamResponse(chunks)])
-        ctx = make_context(
-            console, http.open, cache_directory=str(cache_directory), use_cache=True
-        )
-        stdout = io.StringIO()
-        code = z.run_pipeline(
-            ctx,
-            (chunk_pass(strict=strict),),
-            "你好。",
-            0.0,
-            stdout,
-            time.time,
-        ).run()
-        assert code == 0
-        return len(http.requests)
-
-    assert run(True) == 1
-    assert run(False) == 1
+def test_analysis_fails_fast_when_document_needs_multiple_parts() -> None:
+    console, stderr = make_console()
+    http = FakeHttp([])
+    ctx = make_context(console, http.open, max_tokens=40)
+    analysis_pass = z.PassDefinition("prep", "Brief.", "analysis", {}, None, False)
+    result = z.analyze_document(ctx, analysis_pass, "一。二。三。四。", z.Usage()).run()
+    assert isinstance(result, z.Err)
+    assert "requires analysis in" in result.error
+    assert http.requests == []
 
 
 def test_run_pipeline_enforces_ascii_mechanically() -> None:

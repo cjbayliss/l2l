@@ -131,7 +131,6 @@ class PassDefinition:
     name: str
     instruction: str
     mode: str
-    strict_fidelity: bool
     params: Mapping[str, Any]
     model: str | None
     ascii: bool | None
@@ -150,10 +149,6 @@ class Settings:
     analysis_reserve_tokens: int
     ascii_fix_attempts: int
     sentence_boundary_characters: str
-    strict_fidelity_suffix: str
-    analysis_merge_instruction: str
-    analysis_user_prefix: str
-    merge_user_prefix: str
     ascii_fix_instruction: str
     ascii_character_map: Mapping[str, str]
 
@@ -207,30 +202,6 @@ def build_settings() -> Settings:
         analysis_reserve_tokens=128,
         ascii_fix_attempts=3,
         sentence_boundary_characters="。！？!?；;\n",
-        strict_fidelity_suffix=(
-            "\n- STRICT FIDELITY MODE: keep the exact number of paragraphs "
-            "and the exact separators of the source. Do not merge "
-            "or split paragraphs."
-        ),
-        analysis_merge_instruction="""
-You are merging partial preparation briefs from a Chinese-to-English translation
-pipeline. The source document was too long to read in one pass, so it was
-analysed in parts. Merge the parts into one compact brief with exactly these
-headings, in this order: OUTLINE, NAMES, HARD TO TRANSLATE.
-
-- OUTLINE: a single numbered list of the major beats in source order.
-- NAMES: one line per distinct term, formatted exactly as 原文 -> rendering (type),
-  where type is one of: person, place, organization, title, term. On conflicts,
-  prefer the first occurrence.
-- HARD TO TRANSLATE: deduplicated traps with the recommended English handling.
-
-Output only the merged brief. No preamble, no commentary. Keep it compact
-(about 600 words at most).
-""",
-        analysis_user_prefix="Source text (full document, original Chinese):\n",
-        merge_user_prefix=(
-            "Partial preparation briefs (parts of one document, in source order):\n\n"
-        ),
         ascii_fix_instruction="""
 This paragraph failed to be fully translated or contains non-ASCII
 characters. Please analyse it and only output a clean translation
@@ -418,11 +389,6 @@ def regroup_by_plan(
     )
 
 
-def analysis_block(analysis: str | None) -> str:
-    stripped = analysis.strip() if analysis else ""
-    return stripped if stripped else "(none)"
-
-
 def fmt_duration(seconds: float) -> str:
     if seconds < 60:
         return "%.1fs" % seconds
@@ -588,7 +554,6 @@ PASS_KEYS = (
     "instruction",
     "instruction_file",
     "mode",
-    "strict_fidelity",
     "ascii",
     "model",
     "params",
@@ -904,12 +869,6 @@ def pass_definition_from(
             "%s: [[pass]] %s: mode must be analysis, chunk, or paragraph" % (path, name)
         )
 
-    strict_fidelity = table.get("strict_fidelity", False)
-    if not isinstance(strict_fidelity, bool):
-        return Err(
-            "%s: [[pass]] %s: strict_fidelity must be true or false" % (path, name)
-        )
-
     ascii_value = table.get("ascii")
     if ascii_value is not None and not isinstance(ascii_value, bool):
         return Err("%s: [[pass]] %s: ascii must be true or false" % (path, name))
@@ -927,7 +886,6 @@ def pass_definition_from(
             name=name,
             instruction=instruction,
             mode=mode,
-            strict_fidelity=strict_fidelity,
             params=MappingProxyType(dict(params)),
             model=model.strip() if model else None,
             ascii=ascii_value,
@@ -956,13 +914,6 @@ def resolve_call_settings(
     return (pass_definition.model or config.model), params
 
 
-def merge_budget(config: Config, settings: Settings) -> int:
-    overhead = estimate_tokens(settings.analysis_merge_instruction) + estimate_tokens(
-        settings.merge_user_prefix
-    )
-    return max(config.max_tokens - overhead - settings.analysis_reserve_tokens, 1)
-
-
 def build_chat_payload(
     model: str, system: str, user: str, params: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -982,27 +933,15 @@ def build_chat_payload(
 def build_pass_user(
     source_chunk: str, work_chunk: str | None, analysis: str | None
 ) -> str:
-    base = (
-        "Preparation brief from a full read of the text "
-        "(outline, names, hard-to-translate items):\n%s\n\n"
-        "Source text (original Chinese):\n%s" % (analysis_block(analysis), source_chunk)
-    )
-    draft = (
-        ("\n\nCurrent draft from the previous pass:\n%s" % work_chunk,)
-        if work_chunk is not None and work_chunk != source_chunk
-        else ()
-    )
-    return "".join((base,) + draft)
+    brief = analysis.strip() if analysis else ""
+    parts = [brief, source_chunk]
+    if work_chunk is not None and work_chunk != source_chunk:
+        parts.append(work_chunk)
+    return "\n\n".join(part for part in parts if part)
 
 
 def pass_salt(pass_definition: PassDefinition) -> str:
-    return "\x00".join(
-        (
-            pass_definition.name,
-            pass_definition.instruction,
-            "strict" if pass_definition.strict_fidelity else "plain",
-        )
-    )
+    return "\x00".join((pass_definition.name, pass_definition.instruction))
 
 
 def plan_info_message(
@@ -1675,95 +1614,17 @@ def run_analysis(
     text: str,
     usage: Usage,
 ) -> IO[Result[tuple[str, Usage], str]]:
-    user = ctx.settings.analysis_user_prefix + text
     model, params = resolve_call_settings(ctx.config, pass_definition)
     return io_map(
-        chat(ctx, pass_definition.instruction, user, model, params, usage),
+        chat(ctx, pass_definition.instruction, text, model, params, usage),
         lambda result: result_map(result, lambda pair: (pair[0].strip(), pair[1])),
-    )
-
-
-def run_merge(
-    ctx: Context, pass_definition: PassDefinition, briefs: tuple[str, ...], usage: Usage
-) -> IO[Result[tuple[str, Usage], str]]:
-    user = ctx.settings.merge_user_prefix + "\n\n".join(briefs)
-    model, params = resolve_call_settings(ctx.config, pass_definition)
-    return io_map(
-        chat(ctx, ctx.settings.analysis_merge_instruction, user, model, params, usage),
-        lambda result: result_map(result, lambda pair: (pair[0].strip(), pair[1])),
-    )
-
-
-def merge_group(
-    ctx: Context,
-    pass_definition: PassDefinition,
-    group: tuple[str, ...],
-    usage: Usage,
-) -> IO[Result[tuple[str, Usage], str]]:
-    if len(group) == 1:
-        return io_result(Ok((group[0], usage)))
-
-    return run_merge(ctx, pass_definition, group, usage)
-
-
-def merge_groups(
-    ctx: Context,
-    pass_definition: PassDefinition,
-    groups: tuple[tuple[str, ...], ...],
-    usage: Usage,
-) -> IO[Result[tuple[tuple[str, ...], Usage], str]]:
-    accumulator_type = tuple[tuple[str, ...], Usage]
-
-    def step(
-        accumulator: accumulator_type, group: tuple[str, ...]
-    ) -> IO[Result[accumulator_type, str]]:
-        merged, current_usage = accumulator
-        return io_map(
-            merge_group(ctx, pass_definition, group, current_usage),
-            lambda result: result_map(
-                result, lambda pair: (merged + (pair[0],), pair[1])
-            ),
-        )
-
-    initial: Result[accumulator_type, str] = Ok(((), usage))
-    return fold_io(groups, step, initial)
-
-
-def merge_analysis(
-    ctx: Context, pass_definition: PassDefinition, briefs: tuple[str, ...], usage: Usage
-) -> IO[Result[tuple[str, Usage], str]]:
-    if len(briefs) <= 1:
-        return io_result(Ok((briefs[0], usage)))
-
-    budget = merge_budget(ctx.config, ctx.settings)
-    groups = make_chunks(briefs, budget)
-    if len(groups) == len(briefs):
-        return io_result(
-            Err(
-                "partial analysis brief (~%d tokens) does not fit the "
-                "%d-token budget; raise api.max_tokens (--max-tokens / "
-                "TRANSLATE_MAX_TOKENS) or shorten the input"
-                % (
-                    max(estimate_tokens(brief) for brief in briefs),
-                    ctx.config.max_tokens,
-                )
-            )
-        )
-
-    return io_bind(
-        merge_groups(ctx, pass_definition, groups, usage),
-        lambda result: result_bind_io(
-            result, lambda pair: merge_analysis(ctx, pass_definition, pair[0], pair[1])
-        ),
     )
 
 
 def analyze_document(
     ctx: Context, pass_definition: PassDefinition, full_text: str, usage: Usage
 ) -> IO[Result[tuple[str, Usage], str]]:
-    overhead = estimate_tokens(pass_definition.instruction) + estimate_tokens(
-        ctx.settings.analysis_user_prefix
-    )
+    overhead = estimate_tokens(pass_definition.instruction)
     budget = max(
         ctx.config.max_tokens - overhead - ctx.settings.analysis_reserve_tokens, 1
     )
@@ -1772,44 +1633,17 @@ def analyze_document(
         paragraphs, budget, ctx.settings.sentence_boundary_characters
     )
     chunks = make_chunks(units, budget)
-    if len(chunks) <= 1:
-        return run_analysis(ctx, pass_definition, full_text, usage)
-
-    intro_log = verbose_log(
-        ctx,
-        "zh2en: [%s] ~%d tokens over the %d-token budget; analysing in %d part(s)"
-        % (
-            pass_definition.name,
-            estimate_tokens(full_text),
-            ctx.config.max_tokens,
-            len(chunks),
-        ),
-    )
-
-    accumulator_type = tuple[tuple[str, ...], Usage]
-
-    def step(
-        accumulator: accumulator_type, chunk: tuple[str, ...]
-    ) -> IO[Result[accumulator_type, str]]:
-        briefs, current_usage = accumulator
-        return io_map(
-            run_analysis(ctx, pass_definition, "\n\n".join(chunk), current_usage),
-            lambda result: result_map(
-                result, lambda pair: (briefs + (pair[0],), pair[1])
-            ),
+    if len(chunks) > 1:
+        return io_result(
+            Err(
+                "document requires analysis in %d parts, over the "
+                "%d-token budget; raise api.max_tokens (--max-tokens / "
+                "TRANSLATE_MAX_TOKENS) or shorten the input"
+                % (len(chunks), ctx.config.max_tokens)
+            )
         )
 
-    initial: Result[accumulator_type, str] = Ok(((), usage))
-    return io_bind(
-        intro_log,
-        lambda _: io_bind(
-            fold_io(chunks, step, initial),
-            lambda result: result_bind_io(
-                result,
-                lambda pair: merge_analysis(ctx, pass_definition, pair[0], pair[1]),
-            ),
-        ),
-    )
+    return run_analysis(ctx, pass_definition, full_text, usage)
 
 
 def run_analysis_once(
@@ -1861,9 +1695,7 @@ def translate_chunk(
     analysis: str | None,
     usage: Usage,
 ) -> IO[Result[tuple[str, Usage], str]]:
-    system = pass_definition.instruction + (
-        ctx.settings.strict_fidelity_suffix if pass_definition.strict_fidelity else ""
-    )
+    system = pass_definition.instruction
     user = build_pass_user(source_chunk, work_chunk, analysis)
     model, params = resolve_call_settings(ctx.config, pass_definition)
     return chat(ctx, system, user, model, params, usage)

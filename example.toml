@@ -13,7 +13,6 @@ stop = ["END"]
 name = "translate"
 mode = "chunk"
 instruction_file = "translate.txt"
-strict_fidelity = true
 model = "z-ai/glm-5.3-flash"
 [pass.params]
 reasoning_effort = "high"
