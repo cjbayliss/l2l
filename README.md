@@ -125,29 +125,39 @@ nudge toward functional idioms.
 ## Design notes
 
 - `Result[T, E]` (`Ok`/`Err`) for error handling without exceptions in the
-  core; `IO[T]` thunks so the whole program is a composed value that runs
+  core; the error channel is a typed ADT (`TranslationError`) built through
+  `fail_*` constructors and rendered exactly once by `describe()`.
+  `IO[T]` thunks keep the whole program a composed value that runs
   exactly once at the entry point.
 - Pure text machinery (paragraph splitting, token-budget chunking, cache
   keys, SSE and `<think>` tag state machines) is fully separated from
   effects, which live in the console/status line and the injected HTTP
-  opener (`Context.open_http`). Clocks are injected the same way:
-  log stamps, run-log paths, the status line, and `Context.clock` all take
-  their time source from the caller.
+  opener (`Context.open_http`). Time is injected the same way: clocks
+  (`Context.clock`) and sleeps (`Context.sleep`) both come from the caller,
+  as does the HTTP opener, so retries and status lines are testable.
 - Module map (dependencies point downward only):
 
-  - `monads` — `Result`, `IO`, `fold_io`, lazy `fold_while`; no imports
-    from the rest of the package.
+  - `monads` — `Result`, `IO`, and their combinators (`fold_io`, lazy
+    `fold_while`, `io_traverse`, `io_when`, `io_pair`); no imports from
+    the rest of the package.
+  - `errors` — the error ADT (`ConfigError`, `HttpError`, `BudgetError`,
+    pass/unit wrappers) with `fail_*` constructors and the single
+    `describe()` renderer; depends only on `monads`.
   - `text` — pure string machinery, token estimates, ASCII folding,
     cache keys, usage arithmetic.
-  - `effects` — the IO vocabulary: stdin/stdout, TOML and cache files,
-    the run log (with an injected clock).
+  - `effects` — the IO vocabulary: stdin/stdout, TOML and cache files
+    (including pruning), the run log (with an injected clock).
   - `console` — the status line and stderr reporting; the one mutable
     component, by design.
   - `config` — TOML/config/argument parsing and merging; `Context`, the
     immutable bundle everything downstream receives.
-  - `http` — request payloads, reply parsing, the SSE stream fold, and
-    `chat`; effects are IO values, never executed inline.
-  - `pipeline` — pass planning and execution: pure planners
-    (`plan_unit_calls`) produce data, IO executors (`run_unit`) run it.
+  - `plans` — pure pass planning: `UnitCall`/`plan_unit_calls`, prompt
+    builders, validation (`unit_output_problem`), retry policies
+    (`transient`, `plan_backoff`), and the `--dry-run` report; data in,
+    data out.
+  - `http` — request payloads, reply parsing, the SSE stream fold,
+    retries, and `chat`; effects are IO values, never executed inline.
+  - `pipeline` — pass execution: IO executors (`run_units`, `run_pass`)
+    that run the plans produced by `plans`.
   - `cli` — argument parsing, wiring, and the single entry point that
     runs the composed program.
