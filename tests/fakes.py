@@ -51,7 +51,7 @@ class FakeHttp:
 
 def make_console() -> tuple[z.Console, io.StringIO]:
     stream = io.StringIO()
-    console = z.Console(stream, z.StatusLine(stream))
+    console = z.Console(stream, z.StatusLine(stream, live=False))
     return console, stream
 
 

@@ -1172,7 +1172,7 @@ def delta_text(delta: Mapping[str, Any]) -> str:
 class StreamState:
     reasoning: tuple[str, ...] = ()
     contents: tuple[str, ...] = ()
-    reported: dict[str, Any] | None = None
+    reported: Mapping[str, Any] | None = None
     counted: int = 0
     content_started: bool = False
     think: ThinkState = ThinkState()
@@ -1182,8 +1182,11 @@ class StreamState:
 def stream_step(
     state: StreamState, chunk: Mapping[str, Any]
 ) -> Result[StreamState, str]:
+    usage_report = chunk.get("usage")
     reported = (
-        chunk["usage"] if isinstance(chunk.get("usage"), dict) else state.reported
+        MappingProxyType(usage_report)
+        if isinstance(usage_report, dict)
+        else state.reported
     )
     delta = parse_chunk_delta(chunk)
     reasoning_text = delta_reasoning_text(delta)
@@ -1224,7 +1227,7 @@ def stream_step(
 class ChatReply:
     content: Any
     reasoning: tuple[str, ...] = ()
-    reported: dict[str, Any] | None = None
+    reported: Mapping[str, Any] | None = None
     counted: int = 0
 
 
@@ -1235,11 +1238,15 @@ def plain_reply(body: Any) -> Result[ChatReply, str]:
 
     message, content = message_result.value
     texts, thoughts = flatten_content_parts(content)
+    usage_report = body.get("usage")
+    reported = (
+        MappingProxyType(usage_report) if isinstance(usage_report, dict) else None
+    )
     return Ok(
         ChatReply(
             content=texts,
             reasoning=message_reasoning_texts(message) + thoughts,
-            reported=body.get("usage") or {},
+            reported=reported,
             counted=0,
         )
     )
@@ -1334,6 +1341,16 @@ def path_exists(path: str) -> IO[bool]:
 
 def cwd() -> IO[str]:
     return IO(os.getcwd)
+
+
+def io_isatty(stream: TextIO) -> IO[bool]:
+    def thunk() -> bool:
+        try:
+            return bool(stream.isatty())
+        except (AttributeError, OSError, ValueError):
+            return False
+
+    return IO(thunk)
 
 
 def user_config_path(environment: Mapping[str, str]) -> IO[str]:
@@ -2937,13 +2954,9 @@ def status_erase_text(view: StatusView) -> str:
 
 
 class StatusLine:
-    def __init__(self, stream: TextIO):
+    def __init__(self, stream: TextIO, live: bool):
         self._stream = stream
-        try:
-            self._live = bool(stream.isatty())
-        except (AttributeError, OSError, ValueError):
-            self._live = False
-
+        self._live = live
         self._view = StatusView()
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -3177,6 +3190,10 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
     )
 
 
+def parse_arguments(arguments: Sequence[str]) -> IO[Arguments]:
+    return IO(lambda: parse_args(arguments))
+
+
 def run_pipeline(
     ctx: Context,
     pass_definitions: tuple[PassDefinition, ...],
@@ -3252,10 +3269,14 @@ def main(
     stderr: TextIO,
     clock: Callable[[], float],
 ) -> IO[int]:
-    parsed = parse_args(arguments)
     return io_bind(
-        read_stdin(stdin),
-        lambda text: run_main_program(parsed, environment, text, stdout, stderr, clock),
+        parse_arguments(arguments),
+        lambda parsed: io_bind(
+            read_stdin(stdin),
+            lambda text: run_main_program(
+                parsed, environment, text, stdout, stderr, clock
+            ),
+        ),
     )
 
 
@@ -3270,49 +3291,56 @@ def run_main_program(
     if not text.strip():
         return io_pure(0)
 
-    console = Console(stderr, StatusLine(stderr))
-    started = clock()
+    def with_console(live: bool) -> IO[int]:
+        console = Console(stderr, StatusLine(stderr, live))
+        started = clock()
 
-    def use_setup(setup_result: Result[Setup, str]) -> IO[int]:
-        if isinstance(setup_result, Err):
-            return io_map(console.log("zh2en: %s" % setup_result.error), lambda _: 2)
-
-        setup = setup_result.value
-
-        def with_cache_dir(cache_directory: str) -> IO[int]:
-            def with_log(log: RunLog) -> IO[int]:
-                return io_bind(
-                    (
-                        console.log("zh2en: log: %s" % log.path)
-                        if parsed.show_log_path
-                        else io_pure(None)
-                    ),
-                    lambda _: run_pipeline(
-                        Context(
-                            config=setup.config,
-                            settings=build_settings(),
-                            use_cache=not parsed.no_cache,
-                            cache_directory=cache_directory,
-                            verbose=parsed.verbose,
-                            ensure_paragraphs=parsed.ensure_paragraphs
-                            or setup.ensure_paragraphs,
-                            console=console,
-                            open_http=urllib_open,
-                            log=log,
-                        ),
-                        setup.passes,
-                        text,
-                        started,
-                        stdout,
-                        clock,
-                    ),
+        def use_setup(setup_result: Result[Setup, str]) -> IO[int]:
+            if isinstance(setup_result, Err):
+                return io_map(
+                    console.log("zh2en: %s" % setup_result.error), lambda _: 2
                 )
 
-            return io_bind(open_run_log(cache_directory), with_log)
+            setup = setup_result.value
 
-        return io_bind(resolve_cache_dir(environment, parsed.cache_dir), with_cache_dir)
+            def with_cache_dir(cache_directory: str) -> IO[int]:
+                def with_log(log: RunLog) -> IO[int]:
+                    return io_bind(
+                        (
+                            console.log("zh2en: log: %s" % log.path)
+                            if parsed.show_log_path
+                            else io_pure(None)
+                        ),
+                        lambda _: run_pipeline(
+                            Context(
+                                config=setup.config,
+                                settings=build_settings(),
+                                use_cache=not parsed.no_cache,
+                                cache_directory=cache_directory,
+                                verbose=parsed.verbose,
+                                ensure_paragraphs=parsed.ensure_paragraphs
+                                or setup.ensure_paragraphs,
+                                console=console,
+                                open_http=urllib_open,
+                                log=log,
+                            ),
+                            setup.passes,
+                            text,
+                            started,
+                            stdout,
+                            clock,
+                        ),
+                    )
 
-    return io_bind(load_setup(parsed, environment), use_setup)
+                return io_bind(open_run_log(cache_directory), with_log)
+
+            return io_bind(
+                resolve_cache_dir(environment, parsed.cache_dir), with_cache_dir
+            )
+
+        return io_bind(load_setup(parsed, environment), use_setup)
+
+    return io_bind(io_isatty(stderr), with_console)
 
 
 def cli() -> None:
