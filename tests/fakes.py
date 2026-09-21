@@ -9,6 +9,7 @@ from typing import Any, Literal
 from zh2en.config import Config, Context, build_settings
 from zh2en.console import Console, StatusLine
 from zh2en.effects import RunLog
+from zh2en.errors import TranslationError
 from zh2en.monads import Ok, Result
 
 
@@ -47,7 +48,7 @@ class FakeHttp:
         self.responses = responses
         self.requests: list[Any] = []
 
-    def open(self, request: Any, timeout: float) -> Result[Any, str]:
+    def open(self, request: Any, timeout: float) -> Result[Any, TranslationError]:
         self.requests.append(request)
         index = min(len(self.requests) - 1, len(self.responses) - 1)
         return Ok(self.responses[index])
@@ -61,7 +62,7 @@ def make_console() -> tuple[Console, io.StringIO]:
 
 def make_context(
     console: Console,
-    open_http: Callable[[Any, float], Result[Any, str]],
+    open_http: Callable[[Any, float], Result[Any, TranslationError]],
     cache_directory: str = "",
     use_cache: bool = False,
     max_tokens: int = 100000,

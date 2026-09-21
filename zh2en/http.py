@@ -12,6 +12,7 @@ from typing import Any
 from zh2en.config import Config, Context
 from zh2en.console import Console
 from zh2en.effects import log_entry, log_error, log_request, run_log_write
+from zh2en.errors import HttpError, TranslationError, describe, fail_budget, fail_http
 from zh2en.monads import (
     IO,
     Err,
@@ -54,12 +55,14 @@ def build_chat_payload(
     }
 
 
-def extract_message(body: Any) -> Result[tuple[Mapping[str, Any], Any], str]:
+def extract_message(
+    body: Any,
+) -> Result[tuple[Mapping[str, Any], Any], TranslationError]:
     try:
         message = body["choices"][0]["message"]
         return Ok((message, message["content"]))
     except (KeyError, IndexError, TypeError):
-        return Err("unexpected response shape: %s" % str(body)[:500])
+        return fail_http("protocol", "unexpected response shape: %s" % str(body)[:500])
 
 
 def collect_thinking_texts(part: Mapping[str, Any]) -> tuple[str, ...]:
@@ -179,7 +182,7 @@ class StreamState:
 
 def stream_step(
     state: StreamState, chunk: Mapping[str, Any]
-) -> Result[StreamState, str]:
+) -> Result[StreamState, TranslationError]:
     usage_report = chunk.get("usage")
     reported = (
         MappingProxyType(usage_report)
@@ -219,13 +222,15 @@ def stream_step(
     )
 
 
-def step_stream(state: StreamState, raw_line: bytes) -> Result[StreamState, str]:
+def step_stream(
+    state: StreamState, raw_line: bytes
+) -> Result[StreamState, TranslationError]:
     chunk = parse_stream_line(raw_line)
     if chunk is None:
         return Ok(state)
 
     if isinstance(chunk.get("error"), dict):
-        return Err("endpoint stream error: %s" % str(chunk["error"])[:500])
+        return fail_http("stream", str(chunk["error"])[:500])
 
     return stream_step(state, chunk)
 
@@ -238,7 +243,7 @@ class ChatReply:
     counted: int = 0
 
 
-def plain_reply(body: Any) -> Result[ChatReply, str]:
+def plain_reply(body: Any) -> Result[ChatReply, TranslationError]:
     message_result = extract_message(body)
     if isinstance(message_result, Err):
         return message_result
@@ -277,26 +282,25 @@ def http_request(
     )
 
 
-def urllib_open(request: Any, timeout: float) -> Result[Any, str]:
+def urllib_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
     try:
         return Ok(urllib.request.urlopen(request, timeout=timeout))
     except urllib.error.HTTPError as error:
-        return Err(
-            "HTTP %s from endpoint: %s"
-            % (error.code, error.read().decode("utf-8", "replace")[:500])
+        return fail_http(
+            "status", error.read().decode("utf-8", "replace")[:500], error.code
         )
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        return Err("could not reach endpoint: %s" % error)
+        return fail_http("unreachable", str(error))
 
 
 def http_post_json(
     ctx: Context, payload: Mapping[str, Any]
-) -> IO[Result[dict[str, Any], str]]:
-    def thunk() -> Result[dict[str, Any], str]:
+) -> IO[Result[dict[str, Any], TranslationError]]:
+    def thunk() -> Result[dict[str, Any], TranslationError]:
         log_request(ctx.log, payload).run()
         opened = ctx.open_http(http_request(ctx.config, payload), ctx.config.timeout)
         if isinstance(opened, Err):
-            log_error(ctx.log, opened.error).run()
+            log_error(ctx.log, describe(opened.error)).run()
             return opened
 
         with opened.value as response:
@@ -305,30 +309,38 @@ def http_post_json(
                 log_entry(ctx.log, "RESPONSE", body).run()
                 return Ok(json.loads(body))
             except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                log_error(ctx.log, "invalid JSON response: %s" % error).run()
-                return Err("invalid JSON response: %s" % error)
+                failure = fail_http("protocol", "invalid JSON response: %s" % error)
+                log_error(ctx.log, describe(failure.error)).run()
+                return failure
 
     return IO(thunk)
 
 
-def http_open_stream(ctx: Context, payload: Mapping[str, Any]) -> IO[Result[Any, str]]:
-    def open_stream(body: Mapping[str, Any], label: str) -> Result[Any, str]:
+def http_open_stream(
+    ctx: Context, payload: Mapping[str, Any]
+) -> IO[Result[Any, TranslationError]]:
+    def open_stream(
+        body: Mapping[str, Any], label: str
+    ) -> Result[Any, TranslationError]:
         log_request(ctx.log, body, label).run()
         opened = ctx.open_http(
             http_request(ctx.config, body, accept="text/event-stream"),
             ctx.config.timeout,
         )
         if isinstance(opened, Err):
-            log_error(ctx.log, opened.error).run()
+            log_error(ctx.log, describe(opened.error)).run()
 
         return opened
 
-    def thunk() -> Result[Any, str]:
+    def thunk() -> Result[Any, TranslationError]:
         opened = open_stream(payload, "REQUEST (stream)")
         if (
             isinstance(opened, Ok)
             or "stream_options" not in payload
-            or "stream_options" not in str(opened.error)
+            or not (
+                isinstance(opened.error, HttpError)
+                and "stream_options" in opened.error.detail
+            )
         ):
             return opened
 
@@ -344,9 +356,13 @@ def drive_stream(
     response: Any,
     on_progress: ProgressCallback,
     on_raw_line: RawLineLogger | None = None,
-) -> IO[Result[StreamState, str]]:
-    def advance(state: StreamState, raw_line: bytes) -> IO[Result[StreamState, str]]:
-        def notify(outcome: Result[StreamState, str]) -> IO[Result[StreamState, str]]:
+) -> IO[Result[StreamState, TranslationError]]:
+    def advance(
+        state: StreamState, raw_line: bytes
+    ) -> IO[Result[StreamState, TranslationError]]:
+        def notify(
+            outcome: Result[StreamState, TranslationError],
+        ) -> IO[Result[StreamState, TranslationError]]:
             if isinstance(outcome, Err):
                 return io_result(outcome)
 
@@ -358,14 +374,14 @@ def drive_stream(
                 on_progress(request.label, request.count), lambda _: outcome
             )
 
-        def after_log(_: None) -> IO[Result[StreamState, str]]:
+        def after_log(_: None) -> IO[Result[StreamState, TranslationError]]:
             return io_bind(io_result(step_stream(state, raw_line)), notify)
 
         logged = io_pure(None) if on_raw_line is None else on_raw_line(raw_line)
         return io_bind(logged, after_log)
 
-    def thunk() -> Result[StreamState, str]:
-        outcome: Result[StreamState, str] = Ok(StreamState())
+    def thunk() -> Result[StreamState, TranslationError]:
+        outcome: Result[StreamState, TranslationError] = Ok(StreamState())
         lines = iter(response)
         while not isinstance(outcome, Err):
             try:
@@ -382,35 +398,40 @@ def drive_stream(
 
 def collect_stream(
     ctx: Context, payload: Mapping[str, Any], on_progress: ProgressCallback
-) -> IO[Result[StreamState, str]]:
+) -> IO[Result[StreamState, TranslationError]]:
     def on_raw_line(raw_line: bytes) -> IO[None]:
         return run_log_write(ctx.log, raw_line.decode("utf-8", "replace"))
 
-    def respond(opened: Result[Any, str]) -> IO[Result[StreamState, str]]:
+    def respond(
+        opened: Result[Any, TranslationError],
+    ) -> IO[Result[StreamState, TranslationError]]:
         if isinstance(opened, Err):
             return io_result(opened)
 
-        def thunk() -> Result[StreamState, str]:
+        def thunk() -> Result[StreamState, TranslationError]:
             try:
                 with opened.value as response:
                     outcome = drive_stream(response, on_progress, on_raw_line).run()
                     if isinstance(outcome, Err):
-                        log_error(ctx.log, outcome.error).run()
+                        log_error(ctx.log, describe(outcome.error)).run()
                     else:
                         run_log_write(ctx.log, "\n").run()
 
                     return outcome
             except (urllib.error.URLError, TimeoutError, OSError) as error:
-                log_error(ctx.log, "stream interrupted: %s" % error).run()
-                return Err("stream interrupted: %s" % error)
+                failure = fail_http("interrupted", str(error))
+                log_error(ctx.log, describe(failure.error)).run()
+                return failure
 
         return IO(thunk)
 
     return io_bind(http_open_stream(ctx, payload), respond)
 
 
-def log_all(console: Console, messages: tuple[str, ...]) -> IO[Result[tuple[()], str]]:
-    def step(_: tuple[()], message: str) -> IO[Result[tuple[()], str]]:
+def log_all(
+    console: Console, messages: tuple[str, ...]
+) -> IO[Result[tuple[()], TranslationError]]:
+    def step(_: tuple[()], message: str) -> IO[Result[tuple[()], TranslationError]]:
         return io_map(console.log(message), lambda _: Ok(()))
 
     return fold_io(messages, step, Ok(()))
@@ -423,22 +444,16 @@ def chat(
     model: str,
     params: Mapping[str, Any],
     usage: Usage,
-) -> IO[Result[Translated, str]]:
+) -> IO[Result[Translated, TranslationError]]:
     estimated = estimate_tokens(system) + estimate_tokens(user)
     if estimated > ctx.config.max_tokens:
-        return io_result(
-            Err(
-                "request is ~%d tokens, over the %d-token budget; raise "
-                "api.max_tokens (--max-tokens / TRANSLATE_MAX_TOKENS) or "
-                "shorten the input" % (estimated, ctx.config.max_tokens)
-            )
-        )
+        return io_result(fail_budget(estimated, ctx.config.max_tokens))
 
     payload = build_chat_payload(model, system, user, params)
 
     def stopped(
-        reply_result: Result[ChatReply, str],
-    ) -> IO[Result[Translated, str]]:
+        reply_result: Result[ChatReply, TranslationError],
+    ) -> IO[Result[Translated, TranslationError]]:
         return io_bind(
             ctx.console.stop(),
             lambda _: conclude_chat(ctx, reply_result, usage, estimated),
@@ -459,7 +474,7 @@ def chat(
 
 def streamed_call(
     ctx: Context, payload: Mapping[str, Any]
-) -> IO[Result[ChatReply, str]]:
+) -> IO[Result[ChatReply, TranslationError]]:
     full_payload = {**payload, "stream": True}
     if "stream_options" not in full_payload:
         full_payload = {**full_payload, "stream_options": {"include_usage": True}}
@@ -486,7 +501,9 @@ def streamed_call(
     )
 
 
-def plain_call(ctx: Context, payload: Mapping[str, Any]) -> IO[Result[ChatReply, str]]:
+def plain_call(
+    ctx: Context, payload: Mapping[str, Any]
+) -> IO[Result[ChatReply, TranslationError]]:
     return io_bind(
         http_post_json(ctx, payload),
         lambda body_result: io_result(result_bind(body_result, plain_reply)),
@@ -494,15 +511,22 @@ def plain_call(ctx: Context, payload: Mapping[str, Any]) -> IO[Result[ChatReply,
 
 
 def conclude_chat(
-    ctx: Context, reply_result: Result[ChatReply, str], usage: Usage, estimated: int
-) -> IO[Result[Translated, str]]:
+    ctx: Context,
+    reply_result: Result[ChatReply, TranslationError],
+    usage: Usage,
+    estimated: int,
+) -> IO[Result[Translated, TranslationError]]:
     if isinstance(reply_result, Err):
         return io_result(reply_result)
 
     reply = reply_result.value
     content, think_text = strip_think_tag(reply.content)
     if not isinstance(content, str):
-        return io_result(Err("unexpected content type: %s" % type(content).__name__))
+        return io_result(
+            fail_http(
+                "protocol", "unexpected content type: %s" % type(content).__name__
+            )
+        )
 
     messages = (
         tuple(
@@ -514,7 +538,9 @@ def conclude_chat(
         else ()
     )
 
-    def finish(_: Result[tuple[()], str]) -> Result[Translated, str]:
+    def finish(
+        _: Result[tuple[()], TranslationError],
+    ) -> Result[Translated, TranslationError]:
         reported = reply.reported
         return Ok(
             Translated(
