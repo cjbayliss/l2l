@@ -1,14 +1,15 @@
 from typing import Any
 
 from zh2en.config import (
+    DEFAULT_API_SETTINGS,
     Arguments,
     Config,
+    PartialApiSettings,
     PassDefinition,
     api_settings_from_arguments,
     api_settings_from_environment,
     apply_default_ascii,
     build_config,
-    default_api_settings,
     document_api_settings,
     load_instruction_text,
     max_tokens_api_setting,
@@ -40,26 +41,26 @@ def test_string_api_settings() -> None:
 
     result = string_api_settings("f", {"base_url": " http://x ", "api_key": "k"})
     assert isinstance(result, Ok)
-    assert result.value["base_url"] == "http://x"
+    assert result.value.base_url == "http://x"
 
 
 def test_timeout_api_setting() -> None:
-    base: dict[str, Any] = {}
+    base = PartialApiSettings()
     assert isinstance(timeout_api_setting("f", base, {"timeout": 0}), Err)
     assert isinstance(timeout_api_setting("f", base, {"timeout": True}), Err)
     assert isinstance(timeout_api_setting("f", base, {"timeout": "5"}), Err)
     result = timeout_api_setting("f", base, {"timeout": 5})
     assert isinstance(result, Ok)
-    assert result.value["timeout"] == 5.0
+    assert result.value.timeout == 5.0
 
 
 def test_max_tokens_api_setting() -> None:
-    base: dict[str, Any] = {}
+    base = PartialApiSettings()
     assert isinstance(max_tokens_api_setting("f", base, {"max_tokens": -1}), Err)
     assert isinstance(max_tokens_api_setting("f", base, {"max_tokens": 1.5}), Err)
     result = max_tokens_api_setting("f", base, {"max_tokens": 7})
     assert isinstance(result, Ok)
-    assert result.value["max_tokens"] == 7
+    assert result.value.max_tokens == 7
 
 
 def test_document_api_settings_unknown_key() -> None:
@@ -70,10 +71,10 @@ def test_document_api_settings_unknown_key() -> None:
 
 def test_merge_api_settings_params_deep_merge() -> None:
     merged = merge_api_settings(
-        {"model": "a", "params": {"x": 1, "y": 1}},
-        {"params": {"y": 2, "z": 3}, "model": "b"},
+        PartialApiSettings(model="a", params={"x": 1, "y": 1}),
+        PartialApiSettings(params={"y": 2, "z": 3}, model="b"),
     )
-    assert merged == {"model": "b", "params": {"x": 1, "y": 2, "z": 3}}
+    assert merged == PartialApiSettings(model="b", params={"x": 1, "y": 2, "z": 3})
 
 
 def test_api_settings_from_environment() -> None:
@@ -87,8 +88,8 @@ def test_api_settings_from_environment() -> None:
         {"TRANSLATE_BASE_URL": "http://e", "TRANSLATE_MAX_TOKENS": "9"}
     )
     assert isinstance(result, Ok)
-    assert result.value["base_url"] == "http://e"
-    assert result.value["max_tokens"] == 9
+    assert result.value.base_url == "http://e"
+    assert result.value.max_tokens == 9
 
 
 def test_api_settings_from_arguments() -> None:
@@ -105,10 +106,9 @@ def test_api_settings_from_arguments() -> None:
         show_log_path=False,
         cache_dir=None,
     )
-    assert api_settings_from_arguments(arguments) == {
-        "api_key": "k",
-        "timeout": 2.0,
-    }
+    assert api_settings_from_arguments(arguments) == PartialApiSettings(
+        api_key="k", timeout=2.0
+    )
 
 
 def test_merged_api_settings_precedence() -> None:
@@ -143,7 +143,7 @@ def test_merged_api_settings_precedence() -> None:
 
 
 def test_build_config_missing() -> None:
-    result = build_config(default_api_settings())
+    result = build_config(DEFAULT_API_SETTINGS)
     assert isinstance(result, Err)
     assert "missing required API settings" in result.error
 
