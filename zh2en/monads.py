@@ -141,6 +141,13 @@ def io_sequence(io_values: Iterable[IO[T]]) -> IO[tuple[T, ...]]:
     return IO(lambda: tuple(io_value.run() for io_value in io_values))
 
 
+def io_pair(first: IO[T], second: IO[R]) -> IO[tuple[T, R]]:
+    def thunk() -> tuple[T, R]:
+        return (first.run(), second.run())
+
+    return IO(thunk)
+
+
 def fold_io(
     items: Iterable[S],
     step: Callable[[A, S], IO[Result[A, E]]],

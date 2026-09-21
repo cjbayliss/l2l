@@ -22,7 +22,7 @@ from zh2en.config import (
     resolve_call_settings,
     resolve_config_path,
     resolve_passes,
-    string_api_settings,
+    string_api_setting,
     timeout_api_setting,
     validate_document,
 )
@@ -35,14 +35,16 @@ def ok_document(document: dict[str, Any]) -> Result[dict[str, Any], TranslationE
     return Ok(document)
 
 
-def test_string_api_settings() -> None:
-    result = string_api_settings("f", {"base_url": " http://x ", "model": 3})
+def test_string_api_setting() -> None:
+    base = PartialApiSettings()
+    result = string_api_setting("f", base, {"base_url": " http://x ", "model": 3})
     assert isinstance(result, Err)
     assert "[api] model" in describe(result.error)
 
-    result = string_api_settings("f", {"base_url": " http://x ", "api_key": "k"})
+    result = string_api_setting("f", base, {"base_url": " http://x ", "api_key": "k"})
     assert isinstance(result, Ok)
     assert result.value.base_url == "http://x"
+    assert result.value.api_key == "k"
 
 
 def test_timeout_api_setting() -> None:
