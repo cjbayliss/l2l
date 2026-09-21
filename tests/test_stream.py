@@ -1,4 +1,3 @@
-import json
 from collections.abc import Iterator
 
 from fakes import FakeStreamResponse, stream_chunks
@@ -9,13 +8,19 @@ from zh2en.http import (
     StreamState,
     drive_stream,
     flatten_content_parts,
-    parse_stream_line,
     plain_reply,
     step_stream,
     stream_step,
 )
 from zh2en.monads import IO, Err, Ok, io_pure
-from zh2en.text import THINK_CLOSE, ThinkState, strip_think_tag, think_step
+from zh2en.text import (
+    THINK_CLOSE,
+    SseState,
+    ThinkState,
+    sse_step,
+    strip_think_tag,
+    think_step,
+)
 
 
 def feed(state: StreamState, *texts: str) -> StreamState:
@@ -117,13 +122,19 @@ def test_step_stream_ignores_non_dict_chunks() -> None:
     state = feed(StreamState(), "keep")
     for raw in (
         b"data: [1,2,3]\n",
+        b"\n",
         b'data: "x"\n',
+        b"\n",
         b": keep-alive\n",
         b"data: [DONE]\n",
+        b"\n",
     ):
         result = step_stream(state, raw)
         assert isinstance(result, Ok)
-        assert result.value is state
+        state = result.value
+
+    assert state.contents == ("keep",)
+    assert state.counted == 1
 
 
 def test_step_stream_reports_endpoint_error() -> None:
@@ -131,17 +142,55 @@ def test_step_stream_reports_endpoint_error() -> None:
         StreamState(),
         b'data: {"error": {"message": "overloaded"}}\n',
     )
-    assert isinstance(result, Err)
-    assert "overloaded" in describe(result.error)
+    assert isinstance(result, Ok)
+    dispatched = step_stream(result.value, b"\n")
+    assert isinstance(dispatched, Err)
+    assert "overloaded" in describe(dispatched.error)
 
 
-def test_parse_stream_line() -> None:
-    payload = json.dumps({"choices": []}).encode("utf-8")
-    assert parse_stream_line(b"data: " + payload + b"\n") == {"choices": []}
-    assert parse_stream_line(b"data: [DONE]\n") is None
-    assert parse_stream_line(b"data: not json\n") is None
-    assert parse_stream_line(b"event: ping\n") is None
-    assert parse_stream_line(b"data: []\n") is None
+def test_sse_step_assembles_frames_on_blank_lines() -> None:
+    state = SseState()
+    state, chunk = sse_step(state, b'data: {"choices": []}\n')
+    assert chunk is None
+    state, chunk = sse_step(state, b"\n")
+    assert chunk == {"choices": []}
+
+
+def test_sse_step_joins_multi_line_data() -> None:
+    state = SseState()
+    state, _ = sse_step(state, b'data: {"a": \n')
+    state, _ = sse_step(state, b"data:1}\n")
+    state, chunk = sse_step(state, b"\r\n")
+    assert chunk == {"a": 1}
+
+
+def test_sse_step_ignores_comments_and_other_fields() -> None:
+    state = SseState()
+    for raw in (b": keep-alive\n", b"event: ping\n", b"id: 42\n"):
+        state, chunk = sse_step(state, raw)
+        assert (state, chunk) == (SseState(), None)
+
+
+def test_sse_step_ignores_blank_lines_without_pending_data() -> None:
+    assert sse_step(SseState(), b"\n") == (SseState(), None)
+
+
+def test_sse_step_holds_back_incomplete_json_frames() -> None:
+    state, chunk = sse_step(SseState(), b"data: not json\n")
+    assert chunk is None
+    state, chunk = sse_step(state, b"\n")
+    assert chunk is None
+    assert state == SseState()
+
+
+def test_step_stream_dispatches_completed_frames() -> None:
+    result = step_stream(StreamState(), b'data: {"choices": []}\n')
+    assert isinstance(result, Ok)
+    assert result.value.sse == SseState(pending=('{"choices": []}',))
+
+    result = step_stream(result.value, b"\n")
+    assert isinstance(result, Ok)
+    assert result.value.sse == SseState()
 
 
 def test_strip_think_tag() -> None:
@@ -208,10 +257,13 @@ def test_drive_stream_stops_on_error_without_reading_next() -> None:
         chunk = b'data: {"error": {"message": "boom"}}\n'
         pulled.append(chunk)
         yield chunk
+        blank = b"\n"
+        pulled.append(blank)
+        yield blank
         pulled.append(b"data: next\n")
         yield b"data: next\n"
 
     result = drive_stream(lines(), lambda label, count: io_pure(None)).run()
     assert isinstance(result, Err)
     assert "boom" in describe(result.error)
-    assert len(pulled) == 1
+    assert len(pulled) == 2

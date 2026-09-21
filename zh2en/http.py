@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypeVar
 
 from zh2en.config import Config, Context
 from zh2en.console import Console
@@ -24,18 +24,24 @@ from zh2en.monads import (
     io_map,
     io_pure,
     io_result,
+    io_when,
     result_bind,
     result_map,
 )
+from zh2en.plans import plan_backoff, retry_delay, transient
 from zh2en.text import (
+    SseState,
     ThinkState,
     Translated,
     Usage,
     add_usage,
     estimate_tokens,
+    sse_step,
     strip_think_tag,
     think_step,
 )
+
+T = TypeVar("T")
 
 ProgressCallback = Callable[[str, int], IO[None]]
 RawLineLogger = Callable[[bytes], IO[None]]
@@ -114,23 +120,6 @@ def message_reasoning_texts(message: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
-def parse_stream_line(raw_line: bytes) -> dict[str, Any] | None:
-    line = raw_line.decode("utf-8", "replace").strip()
-    if not line.startswith("data:"):
-        return None
-
-    data = line[5:].strip()
-    if not data or data == "[DONE]":
-        return None
-
-    try:
-        loaded = json.loads(data)
-    except json.JSONDecodeError:
-        return None
-
-    return loaded if isinstance(loaded, dict) else None
-
-
 def parse_chunk_delta(chunk: Mapping[str, Any]) -> dict[str, Any]:
     try:
         choices = chunk.get("choices")
@@ -178,6 +167,7 @@ class StreamState:
     counted: int = 0
     content_started: bool = False
     think: ThinkState = ThinkState()
+    sse: SseState = SseState()
     progress_request: ProgressRequest | None = None
 
 
@@ -226,9 +216,10 @@ def stream_step(
 def step_stream(
     state: StreamState, raw_line: bytes
 ) -> Result[StreamState, TranslationError]:
-    chunk = parse_stream_line(raw_line)
+    sse, chunk = sse_step(state.sse, raw_line)
+    state = state if sse == state.sse else replace(state, sse=sse)
     if chunk is None:
-        return Ok(state)
+        return Ok(replace(state, progress_request=None))
 
     if isinstance(chunk.get("error"), dict):
         return fail_http("stream", str(chunk["error"])[:500])
@@ -288,10 +279,70 @@ def urllib_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
         return Ok(urllib.request.urlopen(request, timeout=timeout))
     except urllib.error.HTTPError as error:
         return fail_http(
-            "status", error.read().decode("utf-8", "replace")[:500], error.code
+            "status",
+            error.read().decode("utf-8", "replace")[:500],
+            error.code,
+            retry_after_seconds(error.headers),
         )
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         return fail_http("unreachable", str(error))
+
+
+def retry_after_seconds(headers: Any) -> float | None:
+    raw = headers.get("Retry-After") if headers is not None else None
+    if raw is None:
+        return None
+
+    try:
+        return max(float(raw), 0.0)
+    except (TypeError, ValueError):
+        return None
+
+
+def verbose_retry_log(
+    ctx: Context, retry_number: int, retries: int, wait: float
+) -> IO[None]:
+    return io_when(
+        ctx.verbose,
+        ctx.console.log(
+            "zh2en: transient failure; retry %d/%d in %.1fs"
+            % (retry_number, retries, wait)
+        ),
+    )
+
+
+def with_retries(
+    ctx: Context, attempt: Callable[[], IO[Result[T, TranslationError]]]
+) -> IO[Result[T, TranslationError]]:
+    delays = plan_backoff(
+        ctx.settings.retry_base_delay,
+        ctx.settings.retry_cap,
+        ctx.settings.retry_attempts,
+    )
+
+    def attempt_at(index: int) -> IO[Result[T, TranslationError]]:
+        def decide(
+            outcome: Result[T, TranslationError],
+        ) -> IO[Result[T, TranslationError]]:
+            if isinstance(outcome, Ok):
+                return io_result(outcome)
+
+            failure = outcome.error
+            if index >= len(delays) or not transient(failure):
+                return io_result(outcome)
+
+            wait = retry_delay(failure, delays[index])
+            return io_bind(
+                verbose_retry_log(ctx, index + 1, len(delays), wait),
+                lambda _: io_and_then(
+                    IO(lambda: ctx.sleep(wait)),
+                    attempt_at(index + 1),
+                ),
+            )
+
+        return io_bind(attempt(), decide)
+
+    return attempt_at(0)
 
 
 def http_post_json(
@@ -451,10 +502,11 @@ def chat(
         return io_result(fail_budget(estimated, ctx.config.max_tokens))
 
     payload = build_chat_payload(model, system, user, params)
-    call = (
-        streamed_call(ctx, payload)
+    call = with_retries(
+        ctx,
+        lambda: streamed_call(ctx, payload)
         if payload.get("stream", True)
-        else plain_call(ctx, payload)
+        else plain_call(ctx, payload),
     )
 
     def stopped(

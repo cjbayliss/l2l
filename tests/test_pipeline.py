@@ -1,5 +1,7 @@
 import io
 import json
+import os
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -141,6 +143,76 @@ def test_chat_rejects_oversized_request() -> None:
     assert isinstance(result, Err)
     assert "over the 1-token budget" in describe(result.error)
     assert http.requests == []
+
+
+def test_run_pipeline_runs_analysis_before_translation() -> None:
+    console, stderr = make_console()
+    brief = with_usage(stream_chunks("Names: Qin Yu."), USAGE)
+    translated = with_usage(stream_chunks("Hello."), USAGE)
+    http = FakeHttp([FakeStreamResponse(brief), FakeStreamResponse(translated)])
+    ctx = make_context(console, http.open)
+    analysis = PassDefinition("prep", "Summarise.", "analysis", {}, None, False)
+    stdout = io.StringIO()
+    code = run_pipeline(ctx, (analysis, chunk_pass()), "你好。", 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n"
+    second_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    assert "Names: Qin Yu." in second_user
+
+
+def test_run_pipeline_wraps_analysis_failure() -> None:
+    console, stderr = make_console()
+
+    def open_fail(request: Any, timeout: float) -> Result[Any, TranslationError]:
+        return fail_http("unreachable", "down")
+
+    ctx = make_context(console, open_fail)
+    analysis = PassDefinition("prep", "Summarise.", "analysis", {}, None, False)
+    code = run_pipeline(ctx, (analysis,), "你好。", 0.0, io.StringIO()).run()
+    assert code == 1
+    logged = stderr.getvalue()
+    assert "pass [prep] failed" in logged
+    assert "could not reach endpoint: down" in logged
+
+
+def test_run_pipeline_repairs_non_ascii_via_llm() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("Hi 中"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hi there"), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx, (chunk_pass(ascii_output=True),), "文本。", 0.0, stdout
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hi there\n"
+    assert len(http.requests) == 2
+
+
+def test_run_pipeline_drops_non_ascii_after_failed_repairs() -> None:
+    console, stderr = make_console()
+    stubborn = "中 x"
+    http = FakeHttp(
+        [FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE))]
+        + [
+            FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE))
+            for _ in range(3)
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx, (chunk_pass(ascii_output=True),), "文本。", 0.0, stdout
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == " x\n"
+    logged = stderr.getvalue()
+    assert "still contained non-ASCII characters (中) after 3 LLM attempts" in logged
+    assert len(http.requests) == 4
 
 
 def test_run_pipeline_translates() -> None:
@@ -468,6 +540,49 @@ def test_main_end_to_end_with_config(
 def test_version_flag_exits() -> None:
     with pytest.raises(SystemExit):
         cli.parse_args(["--version"])
+
+
+def test_parse_arguments_reports_invalid_flags() -> None:
+    result = cli.parse_arguments(["--nope"]).run()
+    assert isinstance(result, Err)
+    assert "invalid arguments" in describe(result.error)
+
+
+def test_parse_arguments_reraises_version_exit() -> None:
+    with pytest.raises(SystemExit):
+        cli.parse_arguments(["--version"]).run()
+
+
+def test_cli_exits_with_program_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    exits: list[int] = []
+    monkeypatch.setattr(cli, "main", lambda *args: io_pure(3))
+    monkeypatch.setattr(sys, "exit", exits.append)
+    cli.cli()
+    assert exits == [3]
+
+
+def test_cli_handles_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    def interrupted(*args: Any, **kwargs: Any) -> Any:
+        raise KeyboardInterrupt
+
+    exits: list[int] = []
+    monkeypatch.setattr(cli, "main", interrupted)
+    monkeypatch.setattr(sys, "exit", exits.append)
+    cli.cli()
+    assert exits == [130]
+
+
+def test_cli_handles_broken_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*args: Any, **kwargs: Any) -> Any:
+        raise BrokenPipeError
+
+    exits: list[int] = []
+    monkeypatch.setattr(cli, "main", broken)
+    monkeypatch.setattr(os, "open", lambda path, flags: -1)
+    monkeypatch.setattr(os, "dup2", lambda fd, target: None)
+    monkeypatch.setattr(sys, "exit", exits.append)
+    cli.cli()
+    assert exits == [141]
 
 
 def test_parse_args_defaults() -> None:

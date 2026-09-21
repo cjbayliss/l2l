@@ -30,6 +30,7 @@ class HttpError:
     kind: HttpKind
     detail: str
     status: int | None = None
+    retry_after: float | None = None
 
 
 @dataclass(frozen=True)
@@ -81,9 +82,12 @@ def fail_missing_settings(fields: tuple[str, ...]) -> Err[TranslationError]:
 
 
 def fail_http(
-    kind: HttpKind, detail: str, status: int | None = None
+    kind: HttpKind,
+    detail: str,
+    status: int | None = None,
+    retry_after: float | None = None,
 ) -> Err[TranslationError]:
-    return Err(HttpError(kind, detail, status))
+    return Err(HttpError(kind, detail, status, retry_after))
 
 
 def fail_budget(

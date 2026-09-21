@@ -6,7 +6,7 @@ import os
 import re
 import unicodedata
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import reduce
 from itertools import accumulate, chain
 from typing import Any
@@ -255,6 +255,45 @@ def strip_think_tag(content: Any) -> tuple[Any, str | None]:
         return content, None
 
     return content[match.end() :], match.group(1).strip()
+
+
+@dataclass(frozen=True)
+class SseState:
+    pending: tuple[str, ...] = ()
+
+
+def decode_sse_data(data: str) -> dict[str, Any] | None:
+    if not data or data == "[DONE]":
+        return None
+
+    try:
+        loaded = json.loads(data)
+    except json.JSONDecodeError:
+        return None
+
+    return loaded if isinstance(loaded, dict) else None
+
+
+def sse_step(
+    state: SseState, raw_line: bytes
+) -> tuple[SseState, dict[str, Any] | None]:
+    line = raw_line.decode("utf-8", "replace").strip("\r\n")
+    if line == "":
+        if not state.pending:
+            return state, None
+
+        return SseState(), decode_sse_data("\n".join(state.pending))
+
+    if line.startswith(":"):
+        return state, None
+
+    if line.startswith("data:"):
+        payload = line[len("data:") :]
+        payload = payload.removeprefix(" ")
+
+        return replace(state, pending=state.pending + (payload,)), None
+
+    return state, None
 
 
 THINK_OPEN = "<think>"

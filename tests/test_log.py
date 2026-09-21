@@ -92,7 +92,7 @@ def test_run_log_captures_plain_request_and_response(tmp_path: Path) -> None:
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
     http = FakeHttp([FakePlainResponse(body)])
-    ctx = make_context(console, http.open, log=RunLog(str(log_path)))
+    ctx = make_context(console, http.open, log=RunLog(str(log_path), time.time))
     result = chat(ctx, "sys", "user", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Ok)
     content = log_path.read_text(encoding="utf-8")
@@ -105,15 +105,16 @@ def test_run_log_captures_plain_request_and_response(tmp_path: Path) -> None:
 def test_run_log_captures_http_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def open_fail(
-        request: Any, timeout: float
-    ) -> Result[Any, TranslationError]:
+    def open_fail(request: Any, timeout: float) -> Result[Any, TranslationError]:
         return fail_http("unreachable", "down")
 
+    slept: list[float] = []
+    monkeypatch.setattr(cli, "time_sleep", lambda seconds: slept.append(seconds))
     code, _, _ = run_zh2en(
         write_config(tmp_path), tmp_path, monkeypatch, open_fail, ["--no-cache"]
     )
     assert code == 1
+    assert len(slept) == 2
 
     logs = list((tmp_path / "cache" / "logs").glob("*.log"))
     assert len(logs) == 1
@@ -171,8 +172,8 @@ def test_without_verbose_log_path_not_printed(
 
 
 def test_run_log_write_ignores_empty_path() -> None:
-    run_log_write(RunLog(""), "x").run()
-    log_error(RunLog(""), "boom").run()
+    run_log_write(RunLog("", time.time), "x").run()
+    log_error(RunLog("", time.time), "boom").run()
 
 
 def test_parse_args_show_log_path() -> None:
