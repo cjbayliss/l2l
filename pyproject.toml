@@ -29,16 +29,20 @@ version = { attr = "zh2en.__version__" }
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+addopts = "--cov=zh2en --cov-report=term-missing"
+
+[tool.coverage.run]
+branch = true
 
 [tool.ruff]
 line-length = 88
 target-version = "py314"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B"]
+select = ["C4", "E", "F", "PERF", "FURB", "W", "I", "B"]
 
 [tool.mypy]
 strict = true
-python_version = "3.11"
+python_version = "3.14"
 mypy_path = [".", "tests"]
 files = ["zh2en", "tests"]
