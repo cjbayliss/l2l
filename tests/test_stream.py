@@ -12,9 +12,10 @@ from zh2en.http import (
     step_stream,
     stream_step,
 )
-from zh2en.monads import IO, Err, Ok, io_pure
+from zh2en.monads import IO, NOTHING, Err, Just, Ok, io_pure
 from zh2en.text import (
     THINK_CLOSE,
+    THINK_OPEN,
     SseState,
     ThinkState,
     sse_step,
@@ -194,13 +195,15 @@ def test_step_stream_dispatches_completed_frames() -> None:
 
 
 def test_strip_think_tag() -> None:
-    content, think = strip_think_tag("<think>hmm</think>Body")
+    content, think = strip_think_tag(THINK_OPEN + "hmm" + THINK_CLOSE + "Body")
     assert content == "Body"
-    assert think == "hmm"
+    assert think == Just("hmm")
     content, think = strip_think_tag("Body")
-    assert (content, think) == ("Body", None)
+    assert content == "Body"
+    assert think == NOTHING
     content, think = strip_think_tag(42)
-    assert (content, think) == (42, None)
+    assert content == 42
+    assert think == NOTHING
 
 
 def test_plain_reply() -> None:

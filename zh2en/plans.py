@@ -11,6 +11,7 @@ from zh2en.config import (
     resolve_call_settings,
 )
 from zh2en.errors import HttpError, TranslationError
+from zh2en.monads import NOTHING, Just, Maybe
 from zh2en.text import (
     AsciiDrop,
     cache_key,
@@ -52,22 +53,22 @@ def retry_delay(error: TranslationError, planned: float) -> float:
 
 def unit_output_problem(
     source_text: str, output: str, settings: Settings
-) -> str | None:
+) -> Maybe[str]:
     if not output.strip():
-        return "the reply was empty"
+        return Just("the reply was empty")
 
     expected = count_paragraphs(source_text)
     found = count_paragraphs(output)
     if found != expected:
-        return "the reply has %d paragraph(s) but the source has %d" % (
-            found,
-            expected,
+        return Just(
+            "the reply has %d paragraph(s) but the source has %d"
+            % (found, expected)
         )
 
     source_estimate = estimate_tokens(source_text)
     output_estimate = estimate_tokens(output)
     if output_estimate > settings.unit_output_max_ratio * max(source_estimate, 1):
-        return (
+        return Just(
             "the reply is ~%d tokens against a source of ~%d tokens "
             "(limit %.0fx)"
             % (
@@ -77,7 +78,7 @@ def unit_output_problem(
             )
         )
 
-    return None
+    return NOTHING
 
 
 def context_parts(context: tuple[str, ...]) -> tuple[str, ...]:
@@ -133,12 +134,12 @@ def resolve_work_groups(
     plan: tuple[tuple[str, ...], ...],
     pass_name: str,
     budget: int,
-) -> tuple[tuple[tuple[str, ...], ...], str | None]:
-    groups = regroup_by_plan(work_paragraphs, plan)
-    if groups is not None:
-        return groups, None
+) -> tuple[tuple[tuple[str, ...], ...], Maybe[str]]:
+    grouped = regroup_by_plan(work_paragraphs, plan)
+    if isinstance(grouped, Just):
+        return grouped.value, NOTHING
 
-    warning = (
+    warning: Maybe[str] = Just(
         "zh2en: [%s] paragraph count changed by a previous pass; "
         "grouping working text independently" % pass_name
     )
@@ -315,8 +316,8 @@ def plan_report(
             )
             for call in calls
         )
-        if warning:
-            lines.append("  warning: %s" % warning)
+        if isinstance(warning, Just):
+            lines.append("  warning: %s" % warning.value)
 
     for indexed in enumerate(pass_definitions, 1):
         report_pass(indexed)

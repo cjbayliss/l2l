@@ -33,16 +33,17 @@ from zh2en.errors import TranslationError, describe, fail_config
 from zh2en.http import urllib_open
 from zh2en.monads import (
     IO,
+    NOTHING,
     Err,
     Ok,
     Result,
     fold_io,
-    io_and_then,
     io_bind,
     io_map,
     io_pure,
     io_result,
     io_when,
+    maybe_either,
     result_or_else,
 )
 from zh2en.pipeline import run_pipeline
@@ -321,7 +322,7 @@ def run_main_program(
                     or setup.ensure_paragraphs,
                     console=console,
                     open_http=urllib_open,
-                    log=RunLog("", clock),
+                    log=RunLog(NOTHING, clock),
                     clock=clock,
                     sleep=time_sleep,
                     stream=parsed.stream,
@@ -336,12 +337,17 @@ def run_main_program(
 
             def with_cache_dir(cache_directory: str) -> IO[int]:
                 def with_log(log: RunLog) -> IO[int]:
-                    return io_and_then(
-                        io_when(
+                    announced: IO[None] = maybe_either(
+                        log.path,
+                        lambda path: io_when(
                             parsed.show_log_path,
-                            console.log("zh2en: log: %s" % log.path),
+                            console.log("zh2en: log: %s" % path),
                         ),
-                        run_pipeline(
+                        lambda: io_pure(None),
+                    )
+
+                    def run_with_log(_: None) -> IO[int]:
+                        return run_pipeline(
                             Context(
                                 config=setup.config,
                                 settings=build_settings(),
@@ -361,8 +367,9 @@ def run_main_program(
                             text,
                             started,
                             stdout,
-                        ),
-                    )
+                        )
+
+                    return io_bind(announced, run_with_log)
 
                 return io_bind(open_run_log(cache_directory, clock), with_log)
 

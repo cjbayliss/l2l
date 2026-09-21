@@ -20,7 +20,7 @@ from zh2en import cli
 from zh2en.effects import RunLog, log_error, run_log_write
 from zh2en.errors import TranslationError, fail_http
 from zh2en.http import chat
-from zh2en.monads import Ok, Result
+from zh2en.monads import NOTHING, Just, Ok, Result
 from zh2en.text import Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
@@ -92,7 +92,7 @@ def test_run_log_captures_plain_request_and_response(tmp_path: Path) -> None:
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
     http = FakeHttp([FakePlainResponse(body)])
-    ctx = make_context(console, http.open, log=RunLog(str(log_path), time.time))
+    ctx = make_context(console, http.open, log=RunLog(Just(str(log_path)), time.time))
     result = chat(ctx, "sys", "user", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Ok)
     content = log_path.read_text(encoding="utf-8")
@@ -171,9 +171,9 @@ def test_without_verbose_log_path_not_printed(
     assert "zh2en: log:" not in stderr
 
 
-def test_run_log_write_ignores_empty_path() -> None:
-    run_log_write(RunLog("", time.time), "x").run()
-    log_error(RunLog("", time.time), "boom").run()
+def test_run_log_write_ignores_absent_path() -> None:
+    run_log_write(RunLog(NOTHING, time.time), "x").run()
+    log_error(RunLog(NOTHING, time.time), "boom").run()
 
 
 def test_parse_args_show_log_path() -> None:

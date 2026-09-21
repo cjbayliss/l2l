@@ -23,7 +23,11 @@ from zh2en.errors import (
 from zh2en.http import chat
 from zh2en.monads import (
     IO,
+    NOTHING,
     Err,
+    Just,
+    Maybe,
+    Nothing,
     Ok,
     Result,
     fold_io,
@@ -33,6 +37,7 @@ from zh2en.monads import (
     io_pure,
     io_result,
     io_when,
+    maybe_either,
     result_bind_io,
     result_map,
 )
@@ -165,13 +170,13 @@ def run_analysis_once(
     if not ctx.use_cache:
         return compute(usage)
 
-    def use_cached(cached: str | None) -> IO[Result[Translated, TranslationError]]:
-        if cached is None:
+    def use_cached(cached: Maybe[str]) -> IO[Result[Translated, TranslationError]]:
+        if isinstance(cached, Nothing):
             return compute(usage)
 
         return io_map(
             verbose_log(ctx, "zh2en: [%s] cache hit" % pass_definition.name),
-            lambda _: Ok(Translated(cached, usage)),
+            lambda _: Ok(Translated(cached.value, usage)),
         )
 
     return io_bind(cache_read(ctx.cache_directory, key), use_cached)
@@ -277,13 +282,13 @@ def ascii_fix_llm(
     if not ctx.use_cache:
         return start(usage)
 
-    def use_cached(cached: str | None) -> IO[Result[Translated, TranslationError]]:
-        if cached is None or not cached.isascii():
+    def use_cached(cached: Maybe[str]) -> IO[Result[Translated, TranslationError]]:
+        if isinstance(cached, Nothing) or not cached.value.isascii():
             return start(usage)
 
         return io_map(
             verbose_log(ctx, "zh2en: ascii: cache hit"),
-            lambda _: Ok(Translated(cached, usage)),
+            lambda _: Ok(Translated(cached.value, usage)),
         )
 
     return io_bind(cache_read(ctx.cache_directory, key), use_cached)
@@ -327,8 +332,8 @@ def repair_paragraph(
             return Ok(Translated(final + separator, result.value.usage))
 
         return (
-            io_map(ctx.console.log(ascii_drop_warning(drop)), emit)
-            if drop is not None
+            io_map(ctx.console.log(ascii_drop_warning(drop.value)), emit)
+            if isinstance(drop, Just)
             else io_result(emit(None))
         )
 
@@ -554,10 +559,10 @@ def run_unit(
         translated: str, unit_usage: Usage
     ) -> IO[Result[UnitResult, TranslationError]]:
         problem = unit_output_problem(call.source_chunk, translated, ctx.settings)
-        if problem is None:
-            return io_result(Ok(UnitResult(translated, True, unit_usage)))
+        if isinstance(problem, Just):
+            return repair(1, translated, unit_usage, problem.value)
 
-        return repair(1, translated, unit_usage, problem)
+        return io_result(Ok(UnitResult(translated, True, unit_usage)))
 
     def repair(
         attempt_index: int,
@@ -625,13 +630,13 @@ def run_unit(
             problem = unit_output_problem(
                 call.source_chunk, translated.text, ctx.settings
             )
-            if problem is None:
-                return io_result(
-                    Ok(UnitResult(translated.text, True, translated.usage))
+            if isinstance(problem, Just):
+                return repair(
+                    attempt_index + 1, translated.text, translated.usage, problem.value
                 )
 
-            return repair(
-                attempt_index + 1, translated.text, translated.usage, problem
+            return io_result(
+                Ok(UnitResult(translated.text, True, translated.usage))
             )
 
         return continue_after
@@ -722,8 +727,8 @@ def run_units(
                 ),
             )
 
-        def proceed(cached: str | None) -> IO[Result[UnitsSoFar, TranslationError]]:
-            if cached is not None:
+        def proceed(cached: Maybe[str]) -> IO[Result[UnitsSoFar, TranslationError]]:
+            if isinstance(cached, Just):
                 return io_map(
                     verbose_log(
                         ctx,
@@ -733,7 +738,7 @@ def run_units(
                     lambda _: Ok(
                         UnitsSoFar(
                             accumulator.outputs
-                            + (cached + call.trailing_separator,),
+                            + (cached.value + call.trailing_separator,),
                             accumulator.usage,
                         )
                     ),
@@ -744,10 +749,10 @@ def run_units(
                 store,
             )
 
-        looked_up: IO[str | None] = (
+        looked_up: IO[Maybe[str]] = (
             cache_read(ctx.cache_directory, call.key)
             if ctx.use_cache
-            else io_pure(None)
+            else io_pure(NOTHING)
         )
         return io_bind(looked_up, proceed)
 
@@ -824,7 +829,9 @@ def run_text_pass_once(
             ),
         )
 
-    reported_warning = io_pure(None) if warning is None else ctx.console.log(warning)
+    reported_warning: IO[None] = maybe_either(
+        warning, ctx.console.log, lambda: io_pure(None)
+    )
     return io_bind(reported_warning, proceed)
 
 
