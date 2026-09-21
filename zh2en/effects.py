@@ -13,10 +13,15 @@ from zh2en.monads import IO, Ok, Result
 from zh2en.text import cache_path
 
 Clock = Callable[[], float]
+Sleep = Callable[[float], None]
 
 
 def now(clock: Clock) -> IO[float]:
     return IO(clock)
+
+
+def time_sleep(seconds: float) -> None:
+    time.sleep(seconds)
 
 
 def read_stdin(stream: TextIO) -> IO[str]:
@@ -125,7 +130,7 @@ def log_stamp(now_value: float) -> str:
 @dataclass(frozen=True)
 class RunLog:
     path: str
-    clock: Clock = time.time
+    clock: Clock
 
 
 def run_log_path(cache_directory: str, now_value: float) -> str:

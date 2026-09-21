@@ -10,6 +10,7 @@ from zh2en.config import (
     pass_salt,
     resolve_call_settings,
 )
+from zh2en.errors import HttpError, TranslationError
 from zh2en.text import (
     AsciiDrop,
     cache_key,
@@ -19,6 +20,32 @@ from zh2en.text import (
     non_ascii_sample,
     regroup_by_plan,
 )
+
+
+def transient(error: TranslationError) -> bool:
+    if isinstance(error, HttpError):
+        if error.kind == "unreachable":
+            return True
+
+        if error.kind == "status" and error.status is not None:
+            return error.status == 429 or error.status >= 500
+
+    return False
+
+
+def plan_backoff(base_delay: float, cap: float, attempts: int) -> tuple[float, ...]:
+    def delay(index: int) -> float:
+        exponential: float = base_delay * 2.0**index
+        return min(exponential, cap)
+
+    return tuple(delay(index) for index in range(max(attempts, 0)))
+
+
+def retry_delay(error: TranslationError, planned: float) -> float:
+    if isinstance(error, HttpError) and error.retry_after is not None:
+        return max(planned, error.retry_after)
+
+    return planned
 
 
 def unit_output_problem(

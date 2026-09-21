@@ -12,11 +12,26 @@ from zh2en.effects import RunLog
 from zh2en.errors import TranslationError
 from zh2en.monads import Ok, Result
 
+SLEEPS: list[float] = []
+
+
+def recording_sleep(seconds: float) -> None:
+    SLEEPS.append(seconds)
+
+
+def reset_sleeps() -> None:
+    SLEEPS.clear()
+
 
 class FakeStreamResponse:
     def __init__(self, chunks: list[dict[str, Any]]) -> None:
         self._lines = [
-            b"data: " + json.dumps(chunk).encode("utf-8") + b"\n" for chunk in chunks
+            line
+            for chunk in chunks
+            for line in (
+                b"data: " + json.dumps(chunk).encode("utf-8") + b"\n",
+                b"\n",
+            )
         ]
 
     def __iter__(self) -> Any:
@@ -86,8 +101,9 @@ def make_context(
         ensure_paragraphs=ensure_paragraphs,
         console=console,
         open_http=open_http,
-        log=log if log is not None else RunLog(""),
+        log=log if log is not None else RunLog("", time.time),
         clock=time.time,
+        sleep=recording_sleep,
     )
 
 

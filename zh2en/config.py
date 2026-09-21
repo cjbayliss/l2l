@@ -11,6 +11,7 @@ from zh2en.console import Console
 from zh2en.effects import (
     Clock,
     RunLog,
+    Sleep,
     cwd,
     load_toml,
     path_exists,
@@ -68,6 +69,9 @@ class Settings:
     ascii_character_map: Mapping[str, str]
     unit_fix_attempts: int
     unit_output_max_ratio: float
+    retry_attempts: int
+    retry_base_delay: float
+    retry_cap: float
 
 
 @dataclass(frozen=True)
@@ -107,6 +111,7 @@ class Context:
     open_http: OpenHTTP
     log: RunLog
     clock: Clock
+    sleep: Sleep
 
 
 def build_settings() -> Settings:
@@ -116,6 +121,9 @@ def build_settings() -> Settings:
         ascii_fix_attempts=3,
         unit_fix_attempts=2,
         unit_output_max_ratio=6.0,
+        retry_attempts=2,
+        retry_base_delay=1.0,
+        retry_cap=30.0,
         sentence_boundary_characters="。！？!?；;\n",
         ascii_fix_instruction="""
 This paragraph failed to be fully translated or contains non-ASCII

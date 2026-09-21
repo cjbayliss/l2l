@@ -16,10 +16,21 @@ from zh2en.effects import (
     open_run_log,
     read_stdin,
     resolve_cache_dir,
+    time_sleep,
 )
-from zh2en.errors import TranslationError, describe
+from zh2en.errors import TranslationError, describe, fail_config
 from zh2en.http import urllib_open
-from zh2en.monads import IO, Err, Result, io_and_then, io_bind, io_map, io_pure, io_when
+from zh2en.monads import (
+    IO,
+    Err,
+    Ok,
+    Result,
+    io_and_then,
+    io_bind,
+    io_map,
+    io_pure,
+    io_when,
+)
 from zh2en.pipeline import run_pipeline
 
 
@@ -107,8 +118,18 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
     )
 
 
-def parse_arguments(arguments: Sequence[str]) -> IO[Arguments]:
-    return IO(lambda: parse_args(arguments))
+def parse_arguments(
+    arguments: Sequence[str],
+) -> IO[Result[Arguments, TranslationError]]:
+    def thunk() -> Result[Arguments, TranslationError]:
+        try:
+            return Ok(parse_args(arguments))
+        except SystemExit as exit_error:
+            if exit_error.code == 0:
+                raise
+            return fail_config("invalid arguments; run zh2en --help")
+
+    return IO(thunk)
 
 
 def main(
@@ -119,15 +140,26 @@ def main(
     stderr: TextIO,
     clock: Callable[[], float],
 ) -> IO[int]:
-    return io_bind(
-        parse_arguments(arguments),
-        lambda parsed: io_bind(
+    def after_parse(
+        parsed_result: Result[Arguments, TranslationError],
+    ) -> IO[int]:
+        if isinstance(parsed_result, Err):
+            def report_parse_failure(live: bool) -> IO[int]:
+                console = Console(stderr, StatusLine(stderr, live))
+                return io_map(
+                    console.log(describe(parsed_result.error)), lambda _: 2
+                )
+
+            return io_bind(io_isatty(stderr), report_parse_failure)
+
+        return io_bind(
             read_stdin(stdin),
             lambda text: run_main_program(
-                parsed, environment, text, stdout, stderr, clock
+                parsed_result.value, environment, text, stdout, stderr, clock
             ),
-        ),
-    )
+        )
+
+    return io_bind(parse_arguments(arguments), after_parse)
 
 
 def run_main_program(
@@ -173,6 +205,7 @@ def run_main_program(
                                 open_http=urllib_open,
                                 log=log,
                                 clock=clock,
+                                sleep=time_sleep,
                             ),
                             setup.passes,
                             text,
@@ -205,6 +238,9 @@ def cli() -> None:
     except KeyboardInterrupt:
         print("zh2en: interrupted", file=sys.stderr)
         code = 130
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        code = 141
 
     sys.exit(code)
 
