@@ -29,6 +29,7 @@ from zh2en.text import (
     split_units_to_budget,
     to_ascii_mechanical,
     unit_separators,
+    usage_add,
     usage_delta,
 )
 
@@ -124,6 +125,11 @@ def test_drop_non_ascii_paths() -> None:
     kept, drop = drop_non_ascii("a 中 b", character_map, 3, 1)
     assert kept == "a b"
     assert drop == Just(AsciiDrop(1, "中", 3))
+
+
+def test_usage_add_accumulates_usages() -> None:
+    total = usage_add(Usage(10, 5, 0.5), Usage(4, 9, 0.25))
+    assert total == Usage(14, 14, 0.75)
 
 
 def test_usage_line_and_delta() -> None:

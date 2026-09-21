@@ -84,6 +84,7 @@ def make_context(
     log: RunLog | None = None,
     ensure_paragraphs: bool = False,
     stream: bool | None = None,
+    verbose: bool = False,
 ) -> Context:
     config = Config(
         base_url="http://endpoint.test/v1",
@@ -98,7 +99,7 @@ def make_context(
         settings=build_settings(),
         use_cache=use_cache,
         cache_directory=cache_directory,
-        verbose=False,
+        verbose=verbose,
         ensure_paragraphs=ensure_paragraphs,
         console=console,
         open_http=open_http,

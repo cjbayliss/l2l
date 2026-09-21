@@ -1,8 +1,11 @@
+from collections.abc import Iterator
+
 from zh2en.monads import (
     IO,
     Err,
     Ok,
     Result,
+    fold_io_lazy,
     io_and_then,
     io_bind,
     io_catch,
@@ -162,3 +165,37 @@ def test_io_result_bind_chains_io_results() -> None:
 
     assert io_result_bind(io_result(Ok(2)), step).run() == Ok(3)
     assert io_result_bind(io_result(Err("e")), step).run() == Err("e")
+
+
+def test_fold_io_lazy_pulls_items_lazily_and_stops_on_error() -> None:
+    consumed: list[int] = []
+
+    def items() -> Iterator[int]:
+        for number in range(5):
+            consumed.append(number)
+            yield number
+
+    def step(total: int, number: int) -> IO[Result[int, str]]:
+        if number == 2:
+            return io_result(Err("stopped at 2"))
+
+        return io_result(Ok(total + number))
+
+    program = fold_io_lazy(items(), step, Ok(0))
+    assert program.run() == Err("stopped at 2")
+    assert consumed == [0, 1, 2]
+
+
+def test_fold_io_lazy_consumes_everything_on_success() -> None:
+    def step(total: int, number: int) -> IO[Result[int, str]]:
+        return io_result(Ok(total + number))
+
+    program = fold_io_lazy((1, 2, 3), step, Ok(0))
+    assert program.run() == Ok(6)
+
+
+def test_fold_io_lazy_empty_items_returns_initial() -> None:
+    program: IO[Result[int, str]] = fold_io_lazy(
+        (), lambda total, value: io_result(Ok(total)), Ok(7)
+    )
+    assert program.run() == Ok(7)

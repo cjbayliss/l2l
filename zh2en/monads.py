@@ -272,6 +272,27 @@ def fold_io(
     return IO(thunk)
 
 
+def fold_io_lazy(
+    items: Iterable[S],
+    step: Callable[[A, S], IO[Result[A, E]]],
+    initial: Result[A, E],
+) -> IO[Result[A, E]]:
+    def thunk() -> Result[A, E]:
+        outcome = initial
+        iterator = iter(items)
+        while isinstance(outcome, Ok):
+            try:
+                item = next(iterator)
+            except StopIteration:
+                return outcome
+
+            outcome = step(outcome.value, item).run()
+
+        return outcome
+
+    return IO(thunk)
+
+
 def io_traverse(
     items: Iterable[S], fn: Callable[[S], IO[Result[T, E]]]
 ) -> IO[Result[tuple[T, ...], E]]:
