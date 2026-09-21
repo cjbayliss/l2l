@@ -8,6 +8,7 @@ from zh2en.effects import (
     resolve_cache_dir,
     user_config_path,
 )
+from zh2en.monads import NOTHING, Just
 
 
 def test_io_isatty_handles_errors() -> None:
@@ -37,8 +38,8 @@ def test_user_config_path_honours_xdg() -> None:
 
 def test_cache_write_and_read_roundtrip(tmp_path: Path) -> None:
     cache_write(str(tmp_path), "key1", "value").run()
-    assert cache_read(str(tmp_path), "key1").run() == "value"
+    assert cache_read(str(tmp_path), "key1").run() == Just("value")
 
 
-def test_cache_read_missing_returns_none(tmp_path: Path) -> None:
-    assert cache_read(str(tmp_path), "nope").run() is None
+def test_cache_read_missing_returns_nothing(tmp_path: Path) -> None:
+    assert cache_read(str(tmp_path), "nope").run() == NOTHING

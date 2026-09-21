@@ -11,6 +11,8 @@ from functools import reduce
 from itertools import accumulate, chain
 from typing import Any
 
+from zh2en.monads import NOTHING, Just, Maybe
+
 
 @dataclass(frozen=True)
 class Usage:
@@ -146,14 +148,16 @@ def unit_separators(
 
 def regroup_by_plan(
     paragraphs: tuple[str, ...], plan: tuple[tuple[str, ...], ...]
-) -> tuple[tuple[str, ...], ...] | None:
+) -> Maybe[tuple[tuple[str, ...], ...]]:
     if len(paragraphs) != sum(map(len, plan)):
-        return None
+        return NOTHING
 
-    return tuple(
-        tuple(paragraphs[start : start + len(chunk)])
-        for start, chunk in zip(
-            accumulate(map(len, plan), initial=0), plan, strict=False
+    return Just(
+        tuple(
+            tuple(paragraphs[start : start + len(chunk)])
+            for start, chunk in zip(
+                accumulate(map(len, plan), initial=0), plan, strict=False
+            )
         )
     )
 
@@ -230,31 +234,31 @@ class AsciiDrop:
 
 def drop_non_ascii(
     text: str, character_map: Mapping[str, str], attempts: int, index: int
-) -> tuple[str, AsciiDrop | None]:
+) -> tuple[str, Maybe[AsciiDrop]]:
     if text.isascii():
-        return text, None
+        return text, NOTHING
 
     fallback = to_ascii_mechanical(text, character_map)
     if fallback.isascii():
-        return fallback, None
+        return fallback, NOTHING
 
     return (
         re.sub(
             r"  +", " ", "".join(character for character in text if character.isascii())
         ),
-        AsciiDrop(index, non_ascii_sample(text), attempts),
+        Just(AsciiDrop(index, non_ascii_sample(text), attempts)),
     )
 
 
-def strip_think_tag(content: Any) -> tuple[Any, str | None]:
+def strip_think_tag(content: Any) -> tuple[Any, Maybe[str]]:
     if not isinstance(content, str):
-        return content, None
+        return content, NOTHING
 
     match = re.match(r"\s*<think>(.*?)</think>", content, re.DOTALL)
     if not match:
-        return content, None
+        return content, NOTHING
 
-    return content[match.end() :], match.group(1).strip()
+    return content[match.end() :], Just(match.group(1).strip())
 
 
 @dataclass(frozen=True)

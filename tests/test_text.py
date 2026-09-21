@@ -2,6 +2,7 @@ import pytest
 
 from zh2en.config import build_settings
 from zh2en.http import build_chat_payload
+from zh2en.monads import NOTHING, Just
 from zh2en.plans import (
     build_pass_user,
     build_unit_retry_user,
@@ -85,8 +86,8 @@ def test_unit_separators() -> None:
 def test_regroup_by_plan() -> None:
     plan = (("a", "b"), ("c",))
     groups = regroup_by_plan(("a", "b", "c"), plan)
-    assert groups == (("a", "b"), ("c",))
-    assert regroup_by_plan(("a", "b"), plan) is None
+    assert groups == Just((("a", "b"), ("c",)))
+    assert regroup_by_plan(("a", "b"), plan) == NOTHING
 
 
 def test_estimate_tokens() -> None:
@@ -114,13 +115,13 @@ def test_to_ascii_mechanical() -> None:
 
 def test_drop_non_ascii_paths() -> None:
     character_map = build_settings().ascii_character_map
-    assert drop_non_ascii("fine", character_map, 3, 0) == ("fine", None)
+    assert drop_non_ascii("fine", character_map, 3, 0) == ("fine", NOTHING)
     fixed, drop = drop_non_ascii("café", character_map, 3, 0)
     assert fixed == "cafe"
-    assert drop is None
+    assert drop == NOTHING
     kept, drop = drop_non_ascii("a 中 b", character_map, 3, 1)
     assert kept == "a b"
-    assert drop == AsciiDrop(1, "中", 3)
+    assert drop == Just(AsciiDrop(1, "中", 3))
 
 
 def test_usage_line_and_delta() -> None:
@@ -151,31 +152,31 @@ def test_build_pass_user() -> None:
 def test_unit_output_problem_accepts_matching_reply() -> None:
     settings = build_settings()
     problem = unit_output_problem("你好。\n\n世界。", "Hello.\n\nWorld.", settings)
-    assert problem is None
+    assert problem == NOTHING
 
 
 def test_unit_output_problem_flags_empty_reply() -> None:
     settings = build_settings()
     problem = unit_output_problem("你好。", "   ", settings)
-    assert problem is not None
-    assert "empty" in problem
+    assert isinstance(problem, Just)
+    assert "empty" in problem.value
 
 
 def test_unit_output_problem_flags_paragraph_mismatch() -> None:
     settings = build_settings()
     extra = unit_output_problem("你好。", "Hello.\n\nWorld.", settings)
-    assert extra is not None
-    assert "has 2 paragraph(s) but the source has 1" in extra
+    assert isinstance(extra, Just)
+    assert "has 2 paragraph(s) but the source has 1" in extra.value
     missing = unit_output_problem("你好。\n\n世界。", "Hello.", settings)
-    assert missing is not None
-    assert "has 1 paragraph(s) but the source has 2" in missing
+    assert isinstance(missing, Just)
+    assert "has 1 paragraph(s) but the source has 2" in missing.value
 
 
 def test_unit_output_problem_flags_implausible_length() -> None:
     settings = build_settings()
     problem = unit_output_problem("嗯。", "word " * 40, settings)
-    assert problem is not None
-    assert "tokens" in problem
+    assert isinstance(problem, Just)
+    assert "tokens" in problem.value
 
 
 def test_context_parts_and_build_pass_user_with_context() -> None:

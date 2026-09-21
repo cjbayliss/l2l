@@ -10,7 +10,7 @@ from zh2en.config import Config, Context, build_settings
 from zh2en.console import Console, StatusLine
 from zh2en.effects import RunLog
 from zh2en.errors import TranslationError
-from zh2en.monads import Ok, Result
+from zh2en.monads import NOTHING, Ok, Result
 
 SLEEPS: list[float] = []
 
@@ -102,7 +102,7 @@ def make_context(
         ensure_paragraphs=ensure_paragraphs,
         console=console,
         open_http=open_http,
-        log=log if log is not None else RunLog("", time.time),
+        log=log if log is not None else RunLog(NOTHING, time.time),
         clock=time.time,
         sleep=recording_sleep,
         stream=stream,

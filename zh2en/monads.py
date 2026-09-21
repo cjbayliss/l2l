@@ -149,6 +149,10 @@ def maybe_to_result(maybe: Maybe[T], if_nothing: Callable[[], E]) -> Result[T, E
     return Ok(maybe.value) if isinstance(maybe, Just) else Err(if_nothing())
 
 
+def maybe_or(first: Maybe[T], second: Maybe[T]) -> Maybe[T]:
+    return first if isinstance(first, Just) else second
+
+
 def maybe_zip(first: Maybe[T], second: Maybe[R]) -> Maybe[tuple[T, R]]:
     return (
         Just((first.value, second.value))

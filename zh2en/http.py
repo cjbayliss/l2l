@@ -16,7 +16,11 @@ from zh2en.effects import log_entry, log_error, log_request, run_log_write
 from zh2en.errors import HttpError, TranslationError, describe, fail_budget, fail_http
 from zh2en.monads import (
     IO,
+    NOTHING,
     Err,
+    Just,
+    Maybe,
+    Nothing,
     Ok,
     Result,
     fold_io,
@@ -26,6 +30,8 @@ from zh2en.monads import (
     io_pure,
     io_result,
     io_when,
+    maybe_either,
+    maybe_or,
     result_bind,
     result_map,
 )
@@ -110,15 +116,16 @@ def flatten_content_parts(content: Any) -> tuple[Any, tuple[str, ...]]:
 
 
 def message_reasoning_texts(message: Mapping[str, Any]) -> tuple[str, ...]:
-    def reasoning_at(key: str) -> tuple[str, ...]:
+    def reasoning_at(key: str) -> Maybe[str]:
         value = message.get(key)
-        return (value.rstrip(),) if isinstance(value, str) and value.strip() else ()
+        return (
+            Just(value.rstrip())
+            if isinstance(value, str) and value.strip()
+            else NOTHING
+        )
 
-    return reduce(
-        lambda found, key: found or reasoning_at(key),
-        ("reasoning_content", "reasoning"),
-        (),
-    )
+    found = maybe_or(reasoning_at("reasoning_content"), reasoning_at("reasoning"))
+    return maybe_either(found, lambda text: (text,), tuple)
 
 
 def parse_chunk_delta(chunk: Mapping[str, Any]) -> dict[str, Any]:
@@ -132,15 +139,12 @@ def parse_chunk_delta(chunk: Mapping[str, Any]) -> dict[str, Any]:
         return {}
 
 
-def delta_reasoning_text(delta: Mapping[str, Any]) -> str | None:
-    def reasoning_at(key: str) -> str | None:
+def delta_reasoning_text(delta: Mapping[str, Any]) -> Maybe[str]:
+    def reasoning_at(key: str) -> Maybe[str]:
         value = delta.get(key)
-        return value if isinstance(value, str) and value else None
+        return Just(value) if isinstance(value, str) and value else NOTHING
 
-    def step(found: str | None, key: str) -> str | None:
-        return found if found is not None else reasoning_at(key)
-
-    return reduce(step, ("reasoning_content", "reasoning"), None)
+    return maybe_or(reasoning_at("reasoning_content"), reasoning_at("reasoning"))
 
 
 def delta_text(delta: Mapping[str, Any]) -> str:
@@ -182,15 +186,18 @@ def stream_step(
         else state.reported
     )
     delta = parse_chunk_delta(chunk)
-    reasoning_text = delta_reasoning_text(delta)
+    reasoning_found = delta_reasoning_text(delta)
     text = delta_text(delta)
-    if not reasoning_text and not text:
+    if isinstance(reasoning_found, Nothing) and not text:
         return Ok(replace(state, reported=reported, progress_request=None))
 
     think_state, thinking, visible = (
         think_step(state.think, text) if text else (state.think, False, "")
     )
-    thinking_progress = 1 if reasoning_text and not state.content_started else 0
+    reasoning_texts: tuple[str, ...] = maybe_either(
+        reasoning_found, lambda value: (value,), lambda: ()
+    )
+    thinking_progress = 1 if reasoning_texts and not state.content_started else 0
     text_progress = 1 if text else 0
     progress_request: ProgressRequest | None = None
     if thinking_progress or text_progress:
@@ -199,11 +206,7 @@ def stream_step(
 
     return Ok(
         StreamState(
-            reasoning=(
-                state.reasoning + (reasoning_text,)
-                if reasoning_text
-                else state.reasoning
-            ),
+            reasoning=state.reasoning + reasoning_texts,
             contents=state.contents + (visible,) if visible else state.contents,
             reported=reported,
             counted=state.counted + thinking_progress + text_progress,
@@ -588,10 +591,13 @@ def conclude_chat(
             )
         )
 
+    think_texts: tuple[str, ...] = maybe_either(
+        think_text, lambda text: (text,), lambda: ()
+    )
     messages = (
         tuple(
             text.rstrip()
-            for text in reply.reasoning + ((think_text,) if think_text else ())
+            for text in reply.reasoning + think_texts
             if text.strip()
         )
         if ctx.verbose

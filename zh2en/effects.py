@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, TextIO
 
 from zh2en.errors import TranslationError, fail_config
-from zh2en.monads import IO, Ok, Result
+from zh2en.monads import IO, NOTHING, Just, Maybe, Nothing, Ok, Result
 from zh2en.text import cache_path
 
 Clock = Callable[[], float]
@@ -100,13 +100,13 @@ def load_toml(
     return IO(thunk)
 
 
-def cache_read(cache_directory: str, key: str) -> IO[str | None]:
-    def thunk() -> str | None:
+def cache_read(cache_directory: str, key: str) -> IO[Maybe[str]]:
+    def thunk() -> Maybe[str]:
         try:
             with open(cache_path(cache_directory, key), encoding="utf-8") as handle:
-                return handle.read()
+                return Just(handle.read())
         except OSError:
-            return None
+            return NOTHING
 
     return IO(thunk)
 
@@ -129,7 +129,7 @@ def log_stamp(now_value: float) -> str:
 
 @dataclass(frozen=True)
 class RunLog:
-    path: str
+    path: Maybe[str]
     clock: Clock
 
 
@@ -146,18 +146,18 @@ def open_run_log(cache_directory: str, clock: Clock) -> IO[RunLog]:
     def thunk() -> RunLog:
         path = run_log_path(cache_directory, clock())
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        return RunLog(path=path, clock=clock)
+        return RunLog(path=Just(path), clock=clock)
 
     return IO(thunk)
 
 
 def run_log_write(log: RunLog, content: str) -> IO[None]:
     def thunk() -> None:
-        if not log.path:
+        if isinstance(log.path, Nothing):
             return
 
         try:
-            with open(log.path, "a", encoding="utf-8") as handle:
+            with open(log.path.value, "a", encoding="utf-8") as handle:
                 handle.write(content)
         except OSError:
             pass
