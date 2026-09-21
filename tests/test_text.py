@@ -1,6 +1,5 @@
 import pytest
 
-from zh2en.config import build_settings
 from zh2en.http import build_chat_payload
 from zh2en.messages import usage_line
 from zh2en.monads import NOTHING, Just
@@ -10,6 +9,7 @@ from zh2en.plans import (
     context_parts,
     unit_output_problem,
 )
+from zh2en.settings import build_settings
 from zh2en.text import (
     AsciiDrop,
     Usage,

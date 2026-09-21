@@ -365,3 +365,13 @@ def modify_ref(reference: Ref[T], fn: Callable[[T], T]) -> IO[T]:
             return updated
 
     return IO(thunk)
+
+
+def modify_ref_with(reference: Ref[T], fn: Callable[[T], tuple[T, R]]) -> IO[R]:
+    def thunk() -> R:
+        with reference.lock:
+            updated, result = fn(reference.value)
+            reference.value = updated
+            return result
+
+    return IO(thunk)

@@ -3,15 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import accumulate, chain
 
-from zh2en.config import (
+from zh2en.errors import HttpError, TranslationError
+from zh2en.monads import NOTHING, Just, Maybe
+from zh2en.settings import (
     Context,
     PassDefinition,
     Settings,
     pass_salt,
     resolve_call_settings,
 )
-from zh2en.errors import HttpError, TranslationError
-from zh2en.monads import NOTHING, Just, Maybe
 from zh2en.text import (
     AsciiDrop,
     cache_key,

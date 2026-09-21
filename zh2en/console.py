@@ -3,10 +3,18 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TextIO
 
-from zh2en.monads import IO
+from zh2en.monads import (
+    IO,
+    Ref,
+    io_when,
+    modify_ref,
+    modify_ref_with,
+    read_ref,
+    write_ref,
+)
 
 
 @dataclass(frozen=True)
@@ -31,58 +39,111 @@ def status_erase_text(view: StatusView) -> str:
     return "\r" + " " * len(view.drawn) + "\r" if view.drawn else ""
 
 
+def draw_render(view: StatusView, now_value: float) -> tuple[StatusView, str]:
+    full = status_line_text(view, now_value)
+    text = "\r" + full + " " * max(len(view.drawn) - len(full), 0)
+    return replace(view, drawn=full), text
+
+
+def start_render(
+    view: StatusView, label: str, now_value: float
+) -> tuple[StatusView, str]:
+    return draw_render(
+        replace(view, label=label, started=now_value, tokens=0), now_value
+    )
+
+
+def progress_render(view: StatusView, label: str, count: int) -> StatusView:
+    return replace(view, label=label, tokens=view.tokens + count)
+
+
+def stop_render(view: StatusView) -> tuple[StatusView, str]:
+    erased = status_erase_text(view)
+    if not erased:
+        return view, ""
+
+    if view.prefix:
+        return replace(view, drawn=view.prefix), erased + view.prefix
+
+    return replace(view, drawn=""), erased
+
+
+def interrupt_render(view: StatusView, live: bool) -> tuple[StatusView, str]:
+    erased = status_erase_text(view)
+    had_drawn = bool(view.drawn)
+    view = replace(view, drawn="")
+    if not view.prefix:
+        return view, erased
+
+    if live and had_drawn:
+        return replace(view, prefix=""), erased
+
+    return replace(view, prefix=""), erased + "\n"
+
+
+def finish_render(view: StatusView, text: str) -> tuple[StatusView, str]:
+    erased = status_erase_text(view)
+    prefix = view.prefix if erased else ""
+    return replace(view, prefix="", drawn=""), erased + prefix + text + "\n"
+
+
+@dataclass(frozen=True, eq=False)
 class StatusLine:
-    def __init__(
-        self,
-        stream: TextIO,
-        live: bool,
-        monotonic: Callable[[], float] = time.monotonic,
-    ):
-        self._stream = stream
-        self._live = live
-        self._monotonic = monotonic
-        self._view = StatusView()
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+    stream: TextIO
+    live: bool
+    monotonic: Callable[[], float] = time.monotonic
+    view: Ref[StatusView] = field(default_factory=lambda: Ref(StatusView()))
+    lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
+    halt: threading.Event = field(
+        default_factory=threading.Event, repr=False, compare=False
+    )
+    worker: Ref[threading.Thread | None] = field(
+        default_factory=lambda: Ref(None), repr=False, compare=False
+    )
 
     def write_partial(self, text: str) -> IO[None]:
         def thunk() -> None:
-            with self._lock:
-                self._view = replace(self._view, prefix=self._view.prefix + text)
-                self._stream.write(text)
-                self._stream.flush()
+            with self.lock:
+                modify_ref(
+                    self.view,
+                    lambda view: replace(view, prefix=view.prefix + text),
+                ).run()
+                self.stream.write(text)
+                self.stream.flush()
 
         return IO(thunk)
 
     def start(self, label: str) -> IO[None]:
         def thunk() -> None:
-            if not self._live:
+            if not self.live:
                 return None
 
-            with self._lock:
-                self._view = replace(
-                    self._view, label=label, started=self._monotonic(), tokens=0
-                )
-                self._draw(self._monotonic())
+            with self.lock:
+                text = modify_ref_with(
+                    self.view,
+                    lambda view: start_render(view, label, self.monotonic()),
+                ).run()
+                self.stream.write(text)
+                self.stream.flush()
 
-            self._stop.clear()
-            self._thread = threading.Thread(target=self._tick, daemon=True)
-            self._thread.start()
+            self.halt.clear()
+            thread = threading.Thread(target=self._tick, daemon=True)
+            write_ref(self.worker, thread).run()
+            thread.start()
             return None
 
         return IO(thunk)
 
     def progress(self, label: str, count: int = 1) -> IO[None]:
         def thunk() -> None:
-            if not self._live:
+            if not self.live:
                 return None
 
-            with self._lock:
-                self._view = replace(
-                    self._view, label=label, tokens=self._view.tokens + count
-                )
-
+            modify_ref(
+                self.view, lambda view: progress_render(view, label, count)
+            ).run()
             return None
 
         return IO(thunk)
@@ -90,12 +151,10 @@ class StatusLine:
     def stop(self) -> IO[None]:
         def thunk() -> None:
             self._halt()
-            with self._lock:
-                if self._erase() and self._view.prefix:
-                    self._stream.write(self._view.prefix)
-                    self._view = replace(self._view, drawn=self._view.prefix)
-
-                self._stream.flush()
+            with self.lock:
+                text = modify_ref_with(self.view, stop_render).run()
+                self.stream.write(text)
+                self.stream.flush()
 
             return None
 
@@ -104,15 +163,12 @@ class StatusLine:
     def interrupt(self) -> IO[None]:
         def thunk() -> None:
             self._halt()
-            with self._lock:
-                had_drawn = self._erase()
-                if self._view.prefix:
-                    if not (self._live and had_drawn):
-                        self._stream.write("\n")
-
-                    self._view = replace(self._view, prefix="")
-
-                self._stream.flush()
+            with self.lock:
+                text = modify_ref_with(
+                    self.view, lambda view: interrupt_render(view, self.live)
+                ).run()
+                self.stream.write(text)
+                self.stream.flush()
 
             return None
 
@@ -121,42 +177,31 @@ class StatusLine:
     def finish(self, text: str) -> IO[None]:
         def thunk() -> None:
             self._halt()
-            with self._lock:
-                self._stream.write(
-                    (self._view.prefix if self._erase() else "") + text + "\n"
-                )
-                self._view = replace(self._view, prefix="", drawn="")
-                self._stream.flush()
+            with self.lock:
+                line = modify_ref_with(
+                    self.view, lambda view: finish_render(view, text)
+                ).run()
+                self.stream.write(line)
+                self.stream.flush()
 
             return None
 
         return IO(thunk)
 
     def _halt(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            self._stop.set()
-            self._thread.join(timeout=1.0)
+        worker = read_ref(self.worker).run()
+        if worker is not None and worker.is_alive():
+            self.halt.set()
+            worker.join(timeout=1.0)
 
     def _tick(self) -> None:
-        while not self._stop.wait(0.1):
-            with self._lock:
-                self._draw(self._monotonic())
-
-    def _draw(self, now_value: float) -> None:
-        full = status_line_text(self._view, now_value)
-        self._stream.write(
-            "\r" + full + " " * max(len(self._view.drawn) - len(full), 0)
-        )
-        self._stream.flush()
-        self._view = replace(self._view, drawn=full)
-
-    def _erase(self) -> bool:
-        if not self._view.drawn:
-            return False
-
-        self._stream.write(status_erase_text(self._view))
-        self._view = replace(self._view, drawn="")
-        return True
+        while not self.halt.wait(0.1):
+            with self.lock:
+                text = modify_ref_with(
+                    self.view, lambda view: draw_render(view, self.monotonic())
+                ).run()
+                self.stream.write(text)
+                self.stream.flush()
 
 
 @dataclass(frozen=True)
@@ -188,3 +233,7 @@ class Console:
 
     def finish(self, text: str) -> IO[None]:
         return self.status.finish(text)
+
+
+def log_when(verbose: bool, console: Console, message: str) -> IO[None]:
+    return io_when(verbose, console.log(message))

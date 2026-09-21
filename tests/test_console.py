@@ -1,6 +1,17 @@
 import io
 
-from zh2en.console import StatusLine, StatusView, status_erase_text, status_line_text
+from zh2en.console import (
+    StatusLine,
+    StatusView,
+    draw_render,
+    finish_render,
+    interrupt_render,
+    progress_render,
+    start_render,
+    status_erase_text,
+    status_line_text,
+    stop_render,
+)
 
 
 def test_status_line_text_renders_prefix_and_values() -> None:
@@ -46,3 +57,69 @@ def test_status_line_without_live_is_quiet() -> None:
     status.progress("Working", 1).run()
     status.stop().run()
     assert stream.getvalue() == ""
+
+
+def test_draw_render_writes_line_and_records_drawn() -> None:
+    view, text = draw_render(StatusView(started=1.0), 3.0)
+    assert text == "\rWorking: time elapsed: 2.00s, tokens received: 0"
+    assert view.drawn == "Working: time elapsed: 2.00s, tokens received: 0"
+
+
+def test_draw_render_pads_over_longer_previous_line() -> None:
+    long_view = StatusView(drawn="a much longer previous line")
+    _, text = draw_render(long_view, 1.0)
+    assert text.endswith(" " * (len("a much longer previous line") - len(
+        "Working: time elapsed: 0.00s, tokens received: 0"
+    )))
+
+
+def test_start_render_resets_tokens_and_label() -> None:
+    view, text = start_render(
+        StatusView(label="Old", tokens=99, drawn="stale"), "Working", 5.0
+    )
+    assert view.label == "Working"
+    assert view.tokens == 0
+    assert view.started == 5.0
+    assert "Working" in text
+    assert text.startswith("\r")
+
+
+def test_progress_render_updates_label_and_accumulates() -> None:
+    view = progress_render(StatusView(label="Working", tokens=2), "Thinking", 3)
+    assert view == StatusView(label="Thinking", tokens=5)
+
+
+def test_stop_render_erases_and_restores_prefix() -> None:
+    view, text = stop_render(StatusView(prefix="p: ", drawn="line"))
+    assert text == "\r" + " " * 4 + "\r" + "p: "
+    assert view == StatusView(prefix="p: ", drawn="p: ")
+    clean, text = stop_render(StatusView(drawn="line"))
+    assert clean == StatusView()
+    assert text == "\r" + " " * 4 + "\r"
+    empty, text = stop_render(StatusView())
+    assert empty == StatusView()
+    assert text == ""
+
+
+def test_interrupt_render_newlines_when_nothing_drawn() -> None:
+    view, text = interrupt_render(StatusView(prefix="p: "), live=True)
+    assert view == StatusView()
+    assert text == "\n"
+
+    view, text = interrupt_render(StatusView(prefix="p: ", drawn="line"), live=True)
+    assert view == StatusView()
+    assert text == "\r" + " " * 4 + "\r"
+
+    view, text = interrupt_render(StatusView(), live=False)
+    assert view == StatusView()
+    assert text == ""
+
+
+def test_finish_render_writes_prefix_then_text() -> None:
+    view, line = finish_render(StatusView(prefix="p: ", drawn="line"), "Done")
+    assert view == StatusView()
+    assert line == "\r" + " " * 4 + "\r" + "p: " + "Done\n"
+
+    view, line = finish_render(StatusView(), "Done")
+    assert view == StatusView()
+    assert line == "Done\n"

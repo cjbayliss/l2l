@@ -19,12 +19,12 @@ from fakes import (
 )
 
 from zh2en import cli
-from zh2en.config import PassDefinition
 from zh2en.errors import TranslationError, describe, fail_http
 from zh2en.http import chat
 from zh2en.monads import IO, Err, Ok, Result, fold_io, fold_while, io_pure, io_result
 from zh2en.pipeline import analyze_document, run_pipeline
 from zh2en.plans import ascii_drop_warning, plan_report, plan_unit_calls
+from zh2en.settings import PassDefinition
 from zh2en.text import AsciiDrop, Usage, unit_separators
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}

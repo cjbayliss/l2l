@@ -10,7 +10,6 @@ from types import MappingProxyType
 from typing import Any, TypeVar
 
 from zh2en import __version__
-from zh2en.config import Config, Context
 from zh2en.console import Console
 from zh2en.effects import log_entry, log_error, log_request, run_log_write
 from zh2en.errors import HttpError, TranslationError, describe, fail_budget, fail_http
@@ -37,6 +36,7 @@ from zh2en.monads import (
     result_map,
 )
 from zh2en.plans import plan_backoff, retry_delay, transient
+from zh2en.settings import Config, Context
 from zh2en.text import (
     SseState,
     ThinkState,

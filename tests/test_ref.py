@@ -4,6 +4,7 @@ from zh2en.monads import (
     IO,
     io_memoize,
     modify_ref,
+    modify_ref_with,
     new_ref,
     read_ref,
     write_ref,
@@ -19,6 +20,16 @@ def test_modify_ref_applies_function_and_returns_new_value() -> None:
     reference = new_ref(7).run()
     assert modify_ref(reference, lambda value: value + 1).run() == 8
     assert read_ref(reference).run() == 8
+
+
+def test_modify_ref_with_returns_transition_output() -> None:
+    reference = new_ref(7).run()
+
+    def double_and_label(value: int) -> tuple[int, str]:
+        return value * 2, "was %d" % value
+
+    assert modify_ref_with(reference, double_and_label).run() == "was 7"
+    assert read_ref(reference).run() == 14
 
 
 def test_write_ref_replaces_value() -> None:
