@@ -188,15 +188,47 @@ PASS_KEYS = (
 )
 
 
-def default_api_settings() -> dict[str, Any]:
-    return {
-        "base_url": "",
-        "api_key": "",
-        "model": "",
-        "timeout": 120.0,
-        "max_tokens": 100000,
-        "params": {},
-    }
+DEFAULT_TIMEOUT = 120.0
+DEFAULT_MAX_TOKENS = 100000
+
+
+@dataclass(frozen=True)
+class PartialApiSettings:
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    timeout: float | None = None
+    max_tokens: int | None = None
+    params: Mapping[str, Any] | None = None
+
+    def merge(self, extra: PartialApiSettings) -> PartialApiSettings:
+        if self.params is not None and extra.params is not None:
+            params: Mapping[str, Any] | None = {**self.params, **extra.params}
+        elif extra.params is None:
+            params = self.params
+        else:
+            params = extra.params
+
+        return PartialApiSettings(
+            base_url=extra.base_url if extra.base_url is not None else self.base_url,
+            api_key=extra.api_key if extra.api_key is not None else self.api_key,
+            model=extra.model if extra.model is not None else self.model,
+            timeout=extra.timeout if extra.timeout is not None else self.timeout,
+            max_tokens=extra.max_tokens
+            if extra.max_tokens is not None
+            else self.max_tokens,
+            params=params,
+        )
+
+
+DEFAULT_API_SETTINGS = PartialApiSettings(
+    base_url="",
+    api_key="",
+    model="",
+    timeout=DEFAULT_TIMEOUT,
+    max_tokens=DEFAULT_MAX_TOKENS,
+    params=MappingProxyType({}),
+)
 
 
 def validate_document(path: str, document: dict[str, Any]) -> Result[None, str]:
@@ -214,71 +246,82 @@ def validate_document(path: str, document: dict[str, Any]) -> Result[None, str]:
 
 
 def string_api_settings(
-    path: str, table: dict[str, Any]
-) -> Result[dict[str, Any], str]:
-    def add(settings: dict[str, Any], key: str) -> Result[dict[str, Any], str]:
+    path: str, table: Mapping[str, Any]
+) -> Result[PartialApiSettings, str]:
+    def updated(
+        partial: PartialApiSettings, key: str, value: str
+    ) -> PartialApiSettings:
+        if key == "base_url":
+            return replace(partial, base_url=value)
+
+        if key == "api_key":
+            return replace(partial, api_key=value)
+
+        return replace(partial, model=value)
+
+    def add(partial: PartialApiSettings, key: str) -> Result[PartialApiSettings, str]:
         if key not in table:
-            return Ok(settings)
+            return Ok(partial)
 
         value = table[key]
         if not isinstance(value, str) or not value.strip():
             return Err("%s: [api] %s must be a non-empty string" % (path, key))
 
-        return Ok({**settings, key: value.strip()})
+        return Ok(updated(partial, key, value.strip()))
 
     def step(
-        settings_result: Result[dict[str, Any], str], key: str
-    ) -> Result[dict[str, Any], str]:
-        return result_bind(settings_result, lambda settings: add(settings, key))
+        partial_result: Result[PartialApiSettings, str], key: str
+    ) -> Result[PartialApiSettings, str]:
+        return result_bind(partial_result, lambda partial: add(partial, key))
 
-    initial: Result[dict[str, Any], str] = Ok({})
+    initial: Result[PartialApiSettings, str] = Ok(PartialApiSettings())
     return reduce(step, ("base_url", "api_key", "model"), initial)
 
 
 def timeout_api_setting(
-    path: str, settings: dict[str, Any], table: dict[str, Any]
-) -> Result[dict[str, Any], str]:
+    path: str, partial: PartialApiSettings, table: Mapping[str, Any]
+) -> Result[PartialApiSettings, str]:
     if "timeout" not in table:
-        return Ok(settings)
+        return Ok(partial)
 
     value = table["timeout"]
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         return Err("%s: [api] timeout must be a positive number" % path)
 
-    return Ok({**settings, "timeout": float(value)})
+    return Ok(replace(partial, timeout=float(value)))
 
 
 def max_tokens_api_setting(
-    path: str, settings: dict[str, Any], table: dict[str, Any]
-) -> Result[dict[str, Any], str]:
+    path: str, partial: PartialApiSettings, table: Mapping[str, Any]
+) -> Result[PartialApiSettings, str]:
     if "max_tokens" not in table:
-        return Ok(settings)
+        return Ok(partial)
 
     value = table["max_tokens"]
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         return Err("%s: [api] max_tokens must be a positive integer" % path)
 
-    return Ok({**settings, "max_tokens": value})
+    return Ok(replace(partial, max_tokens=value))
 
 
 def params_api_setting(
-    path: str, settings: dict[str, Any], table: dict[str, Any]
-) -> Result[dict[str, Any], str]:
+    path: str, partial: PartialApiSettings, table: Mapping[str, Any]
+) -> Result[PartialApiSettings, str]:
     if "params" not in table:
-        return Ok(settings)
+        return Ok(partial)
 
     value = table["params"]
     if not isinstance(value, dict):
         return Err("%s: [api] params must be a table" % path)
 
-    return Ok({**settings, "params": value})
+    return Ok(replace(partial, params=value))
 
 
 def document_api_settings(
     path: str, document: dict[str, Any]
-) -> Result[dict[str, Any], str]:
+) -> Result[PartialApiSettings, str]:
     if "api" not in document:
-        return Ok({})
+        return Ok(PartialApiSettings())
 
     table = document["api"]
     if not isinstance(table, dict):
@@ -290,139 +333,122 @@ def document_api_settings(
 
     return result_bind(
         string_api_settings(path, table),
-        lambda settings: result_bind(
-            timeout_api_setting(path, settings, table),
-            lambda settings: result_bind(
-                max_tokens_api_setting(path, settings, table),
-                lambda settings: params_api_setting(path, settings, table),
+        lambda partial: result_bind(
+            timeout_api_setting(path, partial, table),
+            lambda partial: result_bind(
+                max_tokens_api_setting(path, partial, table),
+                lambda partial: params_api_setting(path, partial, table),
             ),
         ),
     )
 
 
 def merge_api_settings(
-    base: Mapping[str, Any], extra: Mapping[str, Any]
-) -> dict[str, Any]:
-    def merge_one(settings: dict[str, Any], key: str, value: Any) -> dict[str, Any]:
-        if key == "params" and isinstance(settings.get("params"), dict):
-            return {**settings, "params": {**settings["params"], **value}}
+    base: PartialApiSettings, extra: PartialApiSettings
+) -> PartialApiSettings:
+    return base.merge(extra)
 
-        return {**settings, key: value}
 
-    return reduce(
-        lambda settings, entry: merge_one(settings, entry[0], entry[1]),
-        extra.items(),
-        dict(base),
+def env_string_settings(environment: Mapping[str, str]) -> PartialApiSettings:
+    def value(variable: str) -> str | None:
+        raw = environment.get(variable, "").strip()
+        return raw or None
+
+    return PartialApiSettings(
+        base_url=value("TRANSLATE_BASE_URL"),
+        api_key=value("TRANSLATE_API_KEY"),
+        model=value("TRANSLATE_MODEL"),
     )
 
 
-def parse_number_setting(
-    environment: Mapping[str, str],
-    settings: dict[str, Any],
-    variable: str,
-    key: str,
-    convert: Callable[[str], Any],
-    invalid_label: str,
-) -> Result[dict[str, Any], str]:
-    raw = environment.get(variable, "").strip()
+def env_timeout_setting(
+    environment: Mapping[str, str], partial: PartialApiSettings
+) -> Result[PartialApiSettings, str]:
+    raw = environment.get("TRANSLATE_TIMEOUT", "").strip()
     if not raw:
-        return Ok(settings)
+        return Ok(partial)
 
     try:
-        value = convert(raw)
+        timeout = float(raw)
     except ValueError:
-        return Err("%s must be %s, got %r" % (variable, invalid_label, raw))
+        return Err("TRANSLATE_TIMEOUT must be a number, got %r" % raw)
 
-    if value <= 0:
-        return Err("%s must be positive" % variable)
+    if timeout <= 0:
+        return Err("TRANSLATE_TIMEOUT must be positive")
 
-    return Ok({**settings, key: value})
+    return Ok(replace(partial, timeout=timeout))
+
+
+def env_max_tokens_setting(
+    environment: Mapping[str, str], partial: PartialApiSettings
+) -> Result[PartialApiSettings, str]:
+    raw = environment.get("TRANSLATE_MAX_TOKENS", "").strip()
+    if not raw:
+        return Ok(partial)
+
+    try:
+        max_tokens = int(raw)
+    except ValueError:
+        return Err("TRANSLATE_MAX_TOKENS must be an integer, got %r" % raw)
+
+    if max_tokens <= 0:
+        return Err("TRANSLATE_MAX_TOKENS must be positive")
+
+    return Ok(replace(partial, max_tokens=max_tokens))
 
 
 def api_settings_from_environment(
     environment: Mapping[str, str],
-) -> Result[dict[str, Any], str]:
-    def string_step(
-        settings_result: Result[dict[str, Any], str], binding: tuple[str, str]
-    ) -> Result[dict[str, Any], str]:
-        variable, key = binding
-        value = environment.get(variable, "").strip()
-        return result_bind(
-            settings_result,
-            lambda settings: Ok({**settings, key: value}) if value else Ok(settings),
-        )
-
-    initial: Result[dict[str, Any], str] = Ok({})
+) -> Result[PartialApiSettings, str]:
     return result_bind(
-        reduce(
-            string_step,
-            (
-                ("TRANSLATE_BASE_URL", "base_url"),
-                ("TRANSLATE_API_KEY", "api_key"),
-                ("TRANSLATE_MODEL", "model"),
-            ),
-            initial,
-        ),
-        lambda settings: result_bind(
-            parse_number_setting(
-                environment, settings, "TRANSLATE_TIMEOUT", "timeout", float, "a number"
-            ),
-            lambda settings: parse_number_setting(
-                environment,
-                settings,
-                "TRANSLATE_MAX_TOKENS",
-                "max_tokens",
-                int,
-                "an integer",
-            ),
-        ),
+        env_timeout_setting(environment, env_string_settings(environment)),
+        lambda partial: env_max_tokens_setting(environment, partial),
     )
 
 
-def api_settings_from_arguments(arguments: Arguments) -> dict[str, Any]:
-    def step(settings: dict[str, Any], binding: tuple[Any, str]) -> dict[str, Any]:
-        value, key = binding
-        return {**settings, key: value} if value is not None else settings
-
-    return reduce(
-        step,
-        (
-            (arguments.base_url, "base_url"),
-            (arguments.api_key, "api_key"),
-            (arguments.model, "model"),
-            (arguments.timeout, "timeout"),
-            (arguments.max_tokens, "max_tokens"),
-        ),
-        {},
+def api_settings_from_arguments(arguments: Arguments) -> PartialApiSettings:
+    return PartialApiSettings(
+        base_url=arguments.base_url,
+        api_key=arguments.api_key,
+        model=arguments.model,
+        timeout=arguments.timeout,
+        max_tokens=arguments.max_tokens,
     )
 
 
-def missing_api_settings(config: Config) -> tuple[str, ...]:
+def missing_api_settings(partial: PartialApiSettings) -> tuple[str, ...]:
     return tuple(
         description
         for value, description in (
-            (config.base_url, "api.base_url (--base-url / TRANSLATE_BASE_URL)"),
-            (config.api_key, "api.api_key (--api-key / TRANSLATE_API_KEY)"),
-            (config.model, "api.model (--model / TRANSLATE_MODEL)"),
+            (partial.base_url, "api.base_url (--base-url / TRANSLATE_BASE_URL)"),
+            (partial.api_key, "api.api_key (--api-key / TRANSLATE_API_KEY)"),
+            (partial.model, "api.model (--model / TRANSLATE_MODEL)"),
         )
         if not value
     )
 
 
-def build_config(settings: Mapping[str, Any]) -> Result[Config, str]:
-    config = Config(
-        base_url=settings["base_url"].rstrip("/"),
-        api_key=settings["api_key"],
-        model=settings["model"],
-        timeout=settings["timeout"],
-        max_tokens=settings["max_tokens"],
-        params=MappingProxyType(dict(settings["params"])),
-    )
-    missing = missing_api_settings(config)
+def build_config(partial: PartialApiSettings) -> Result[Config, str]:
+    missing = missing_api_settings(partial)
     if missing:
         return Err("missing required API settings: " + ", ".join(missing))
 
-    return Ok(config)
+    return Ok(
+        Config(
+            base_url=str(partial.base_url).rstrip("/"),
+            api_key=str(partial.api_key),
+            model=str(partial.model),
+            timeout=partial.timeout
+            if partial.timeout is not None
+            else DEFAULT_TIMEOUT,
+            max_tokens=partial.max_tokens
+            if partial.max_tokens is not None
+            else DEFAULT_MAX_TOKENS,
+            params=partial.params
+            if partial.params is not None
+            else MappingProxyType({}),
+        )
+    )
 
 
 def merged_api_settings(
@@ -436,41 +462,41 @@ def merged_api_settings(
     def merge_document(
         path: str | None,
         document_result: Result[dict[str, Any], str],
-        settings: dict[str, Any],
-    ) -> Result[dict[str, Any], str]:
+        partial: PartialApiSettings,
+    ) -> Result[PartialApiSettings, str]:
         return result_bind(
             document_result,
             lambda document: result_map(
                 document_api_settings(path or "", document),
-                lambda extra: merge_api_settings(settings, extra),
+                lambda extra: merge_api_settings(partial, extra),
             ),
         )
 
-    pipeline: Result[dict[str, Any], str] = Ok(default_api_settings())
-    pipeline = result_bind(
-        pipeline,
-        lambda settings: merge_document(user_path, user_document_result, settings),
+    layer: Result[PartialApiSettings, str] = Ok(DEFAULT_API_SETTINGS)
+    layer = result_bind(
+        layer,
+        lambda partial: merge_document(user_path, user_document_result, partial),
     )
-    pipeline = result_bind(
-        pipeline,
-        lambda settings: merge_document(
-            selected_path, selected_document_result, settings
+    layer = result_bind(
+        layer,
+        lambda partial: merge_document(
+            selected_path, selected_document_result, partial
         ),
     )
-    pipeline = result_bind(
-        pipeline,
-        lambda settings: result_map(
+    layer = result_bind(
+        layer,
+        lambda partial: result_map(
             api_settings_from_environment(environment),
-            lambda extra: merge_api_settings(settings, extra),
+            lambda extra: merge_api_settings(partial, extra),
         ),
     )
-    pipeline = result_bind(
-        pipeline,
-        lambda settings: Ok(
-            merge_api_settings(settings, api_settings_from_arguments(arguments))
+    layer = result_map(
+        layer,
+        lambda partial: merge_api_settings(
+            partial, api_settings_from_arguments(arguments)
         ),
     )
-    return result_bind(pipeline, build_config)
+    return result_bind(layer, build_config)
 
 
 def parse_options_table(path: str, table: Any) -> Result[dict[str, bool], str]:
