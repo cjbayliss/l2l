@@ -15,15 +15,12 @@ from zh2en.http import (
     StreamState,
     chat,
     drive_stream,
-    emit_reasoning,
     flatten_content_parts,
-    flush_reasoning,
     plain_reply,
-    split_reasoning_lines,
     step_stream,
     stream_step,
 )
-from zh2en.monads import IO, NOTHING, Err, Just, Ok, Ref, io_pure
+from zh2en.monads import IO, NOTHING, Err, Just, Ok, io_pure
 from zh2en.text import (
     THINK_CLOSE,
     THINK_OPEN,
@@ -291,28 +288,7 @@ def test_drive_stream_emits_reasoning_text() -> None:
     assert events == [("Thinking", 1), ("Thinking", 1), ("Working", 1)]
 
 
-def test_split_reasoning_lines_buffers_partial_lines() -> None:
-    assert split_reasoning_lines("", "Check") == ("Check", ())
-    assert split_reasoning_lines("Check", " details.\nNext") == (
-        "Next",
-        ("Check details.",),
-    )
-    assert split_reasoning_lines("Next", " line.\n") == ("", ("Next line.",))
-    assert split_reasoning_lines("", "two\nlines\n") == ("", ("two", "lines"))
-
-
-def test_emit_and_flush_reasoning_log_complete_lines() -> None:
-    console, stderr = make_console()
-    ref = Ref("")
-    emit_reasoning(console, ref, "Check").run()
-    emit_reasoning(console, ref, " details.\n").run()
-    emit_reasoning(console, ref, "partial line").run()
-    flush_reasoning(console, ref).run()
-    flush_reasoning(console, ref).run()
-    assert stderr.getvalue() == "Check details.\npartial line\n"
-
-
-def test_chat_streams_reasoning_lines_when_verbose() -> None:
+def test_chat_streams_reasoning_live_when_verbose() -> None:
     console, stderr = make_console()
     chunks = [
         {"choices": [{"delta": {"reasoning_content": "Check details.\n"}}]},

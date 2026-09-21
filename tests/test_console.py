@@ -1,4 +1,5 @@
 import io
+import time
 
 from zh2en.console import (
     StatusLine,
@@ -7,6 +8,9 @@ from zh2en.console import (
     finish_render,
     interrupt_render,
     progress_render,
+    raw_begin_render,
+    raw_end_render,
+    raw_write_render,
     start_render,
     status_erase_text,
     status_line_text,
@@ -127,3 +131,97 @@ def test_finish_render_writes_prefix_then_text() -> None:
     view, line = finish_render(StatusView(), "Done")
     assert view == StatusView()
     assert line == "Done\n"
+
+
+def test_raw_begin_erases_drawn_line_and_is_idempotent() -> None:
+    view, text = raw_begin_render(StatusView(drawn="status line", prefix="p: "))
+    assert text == "\r" + " " * 11 + "\r"
+    assert view == StatusView(raw=True)
+
+    again, text = raw_begin_render(view)
+    assert again == view
+    assert text == ""
+
+
+def test_raw_write_tracks_open_line_state() -> None:
+    view = raw_write_render(StatusView(raw=True), "thought ")
+    assert view == StatusView(raw=True, raw_open=True)
+
+    view = raw_write_render(view, "more\n")
+    assert view == StatusView(raw=True)
+
+    assert raw_write_render(view, "") == view
+
+
+def test_raw_end_terminates_open_line_once_and_resets() -> None:
+    view, text = raw_end_render(StatusView(raw=True, raw_open=True))
+    assert text == "\n"
+    assert view == StatusView()
+
+    again, text = raw_end_render(view)
+    assert again == view
+    assert text == ""
+
+
+def test_raw_end_after_trailing_newline_writes_nothing() -> None:
+    view, text = raw_end_render(StatusView(raw=True))
+    assert text == ""
+    assert view == StatusView()
+
+
+def test_interrupt_and_stop_during_raw_terminate_the_block() -> None:
+    view, text = interrupt_render(StatusView(raw=True, raw_open=True), live=True)
+    assert text == "\n"
+    assert view == StatusView()
+
+    view, text = stop_render(StatusView(raw=True, raw_open=True))
+    assert text == "\n"
+    assert view == StatusView()
+
+
+def test_finish_render_terminates_raw_block_before_text() -> None:
+    view, line = finish_render(StatusView(raw=True, raw_open=True), "Done.")
+    assert line == "\nDone.\n"
+    assert view == StatusView()
+
+    view, line = finish_render(StatusView(raw=True), "Done.")
+    assert line == "Done.\n"
+    assert view == StatusView()
+
+
+def test_start_render_leaves_raw_mode() -> None:
+    view, _ = start_render(StatusView(raw=True, drawn="x"), "Working", 5.0)
+    assert not view.raw
+
+
+def test_status_line_raw_streams_deltas_to_the_stream() -> None:
+    stream = io.StringIO()
+    status = StatusLine(stream, live=True, monotonic=lambda: 1.0)
+    status.begin_raw().run()
+    status.begin_raw().run()
+    status.write_raw("thought ").run()
+    status.write_raw("more").run()
+    status.end_raw().run()
+    status.end_raw().run()
+    assert stream.getvalue() == "thought more\n"
+
+
+def test_status_line_tick_suppressed_while_raw() -> None:
+    stream = io.StringIO()
+    status = StatusLine(stream, live=True, monotonic=lambda: 1.0)
+    status.start("Working").run()
+    status.begin_raw().run()
+    status.write_raw("thinking...").run()
+    time.sleep(0.25)
+    assert stream.getvalue().count("Working") == 1
+    status.stop().run()
+    assert stream.getvalue().endswith("thinking...\n")
+
+
+def test_status_line_raw_without_live_still_writes() -> None:
+    stream = io.StringIO()
+    status = StatusLine(stream, live=False)
+    status.begin_raw().run()
+    status.write_raw("thought\n").run()
+    status.end_raw().run()
+    assert stream.getvalue() == "thought\n"

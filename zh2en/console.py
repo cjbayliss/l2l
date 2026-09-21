@@ -24,6 +24,8 @@ class StatusView:
     tokens: int = 0
     prefix: str = ""
     drawn: str = ""
+    raw: bool = False
+    raw_open: bool = False
 
 
 def status_line_text(view: StatusView, now_value: float) -> str:
@@ -49,7 +51,15 @@ def start_render(
     view: StatusView, label: str, now_value: float
 ) -> tuple[StatusView, str]:
     return draw_render(
-        replace(view, label=label, started=now_value, tokens=0), now_value
+        replace(
+            view,
+            label=label,
+            started=now_value,
+            tokens=0,
+            raw=False,
+            raw_open=False,
+        ),
+        now_value,
     )
 
 
@@ -57,7 +67,35 @@ def progress_render(view: StatusView, label: str, count: int) -> StatusView:
     return replace(view, label=label, tokens=view.tokens + count)
 
 
+def raw_begin_render(view: StatusView) -> tuple[StatusView, str]:
+    if view.raw:
+        return view, ""
+
+    return (
+        replace(view, raw=True, drawn="", prefix="", raw_open=False),
+        status_erase_text(view),
+    )
+
+
+def raw_write_render(view: StatusView, text: str) -> StatusView:
+    if not text:
+        return view
+
+    return replace(view, raw=True, raw_open=not text.endswith("\n"))
+
+
+def raw_end_render(view: StatusView) -> tuple[StatusView, str]:
+    if not view.raw:
+        return view, ""
+
+    terminated = "\n" if view.raw_open else ""
+    return replace(view, raw=False, drawn="", raw_open=False), terminated
+
+
 def stop_render(view: StatusView) -> tuple[StatusView, str]:
+    if view.raw:
+        return raw_end_render(view)
+
     erased = status_erase_text(view)
     if not erased:
         return view, ""
@@ -69,6 +107,9 @@ def stop_render(view: StatusView) -> tuple[StatusView, str]:
 
 
 def interrupt_render(view: StatusView, live: bool) -> tuple[StatusView, str]:
+    if view.raw:
+        return raw_end_render(view)
+
     erased = status_erase_text(view)
     had_drawn = bool(view.drawn)
     view = replace(view, drawn="")
@@ -82,9 +123,13 @@ def interrupt_render(view: StatusView, live: bool) -> tuple[StatusView, str]:
 
 
 def finish_render(view: StatusView, text: str) -> tuple[StatusView, str]:
+    separator = "\n" if view.raw and view.raw_open else ""
     erased = status_erase_text(view)
     prefix = view.prefix if erased else ""
-    return replace(view, prefix="", drawn=""), erased + prefix + text + "\n"
+    return (
+        replace(view, raw=False, raw_open=False, prefix="", drawn=""),
+        separator + erased + prefix + text + "\n",
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -112,6 +157,35 @@ class StatusLine:
                 ).run()
                 self.stream.write(text)
                 self.stream.flush()
+
+        return IO(thunk)
+
+    def begin_raw(self) -> IO[None]:
+        def thunk() -> None:
+            with self.lock:
+                text = modify_ref_with(self.view, raw_begin_render).run()
+                if text:
+                    self.stream.write(text)
+                    self.stream.flush()
+
+        return IO(thunk)
+
+    def write_raw(self, text: str) -> IO[None]:
+        def thunk() -> None:
+            with self.lock:
+                modify_ref(self.view, lambda view: raw_write_render(view, text)).run()
+                self.stream.write(text)
+                self.stream.flush()
+
+        return IO(thunk)
+
+    def end_raw(self) -> IO[None]:
+        def thunk() -> None:
+            with self.lock:
+                text = modify_ref_with(self.view, raw_end_render).run()
+                if text:
+                    self.stream.write(text)
+                    self.stream.flush()
 
         return IO(thunk)
 
@@ -197,6 +271,9 @@ class StatusLine:
     def _tick(self) -> None:
         while not self.halt.wait(0.1):
             with self.lock:
+                if self.view.value.raw:
+                    continue
+
                 text = modify_ref_with(
                     self.view, lambda view: draw_render(view, self.monotonic())
                 ).run()
@@ -218,6 +295,15 @@ class Console:
 
     def write_partial(self, text: str) -> IO[None]:
         return self.status.write_partial(text)
+
+    def begin_raw(self) -> IO[None]:
+        return self.status.begin_raw()
+
+    def write_raw(self, text: str) -> IO[None]:
+        return self.status.write_raw(text)
+
+    def end_raw(self) -> IO[None]:
+        return self.status.end_raw()
 
     def start(self, label: str) -> IO[None]:
         return self.status.start(label)
