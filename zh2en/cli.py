@@ -19,7 +19,7 @@ from zh2en.effects import (
 )
 from zh2en.errors import TranslationError, describe
 from zh2en.http import urllib_open
-from zh2en.monads import IO, Err, Result, io_bind, io_map, io_pure
+from zh2en.monads import IO, Err, Result, io_and_then, io_bind, io_map, io_pure, io_when
 from zh2en.pipeline import run_pipeline
 
 
@@ -155,13 +155,12 @@ def run_main_program(
 
             def with_cache_dir(cache_directory: str) -> IO[int]:
                 def with_log(log: RunLog) -> IO[int]:
-                    return io_bind(
-                        (
-                            console.log("zh2en: log: %s" % log.path)
-                            if parsed.show_log_path
-                            else io_pure(None)
+                    return io_and_then(
+                        io_when(
+                            parsed.show_log_path,
+                            console.log("zh2en: log: %s" % log.path),
                         ),
-                        lambda _: run_pipeline(
+                        run_pipeline(
                             Context(
                                 config=setup.config,
                                 settings=build_settings(),

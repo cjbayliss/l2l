@@ -23,6 +23,7 @@ from zh2en.monads import (
     Result,
     io_bind,
     io_map,
+    io_pair,
     io_pure,
     io_result,
     io_sequence,
@@ -249,10 +250,13 @@ def validate_document(
     return Ok(None)
 
 
-def string_api_settings(
-    path: str, table: Mapping[str, Any]
+STRING_API_KEYS = ("base_url", "api_key", "model")
+
+
+def string_api_setting(
+    path: str, partial: PartialApiSettings, table: Mapping[str, Any]
 ) -> Result[PartialApiSettings, TranslationError]:
-    def updated(
+    def set_field(
         partial: PartialApiSettings, key: str, value: str
     ) -> PartialApiSettings:
         if key == "base_url":
@@ -263,7 +267,7 @@ def string_api_settings(
 
         return replace(partial, model=value)
 
-    def add(
+    def set_field_checked(
         partial: PartialApiSettings, key: str
     ) -> Result[PartialApiSettings, TranslationError]:
         if key not in table:
@@ -273,15 +277,17 @@ def string_api_settings(
         if not isinstance(value, str) or not value.strip():
             return fail_config("%s: [api] %s must be a non-empty string" % (path, key))
 
-        return Ok(updated(partial, key, value.strip()))
+        return Ok(set_field(partial, key, value.strip()))
 
     def step(
         partial_result: Result[PartialApiSettings, TranslationError], key: str
     ) -> Result[PartialApiSettings, TranslationError]:
-        return result_bind(partial_result, lambda partial: add(partial, key))
+        return result_bind(
+            partial_result, lambda partial: set_field_checked(partial, key)
+        )
 
-    initial: Result[PartialApiSettings, TranslationError] = Ok(PartialApiSettings())
-    return reduce(step, ("base_url", "api_key", "model"), initial)
+    initial: Result[PartialApiSettings, TranslationError] = Ok(partial)
+    return reduce(step, STRING_API_KEYS, initial)
 
 
 def timeout_api_setting(
@@ -323,6 +329,14 @@ def params_api_setting(
     return Ok(replace(partial, params=value))
 
 
+API_FIELD_PARSERS = (
+    string_api_setting,
+    timeout_api_setting,
+    max_tokens_api_setting,
+    params_api_setting,
+)
+
+
 def document_api_settings(
     path: str, document: dict[str, Any]
 ) -> Result[PartialApiSettings, TranslationError]:
@@ -337,16 +351,17 @@ def document_api_settings(
     if unknown:
         return fail_config("%s: [api]: unknown key(s): %s" % (path, ", ".join(unknown)))
 
-    return result_bind(
-        string_api_settings(path, table),
-        lambda partial: result_bind(
-            timeout_api_setting(path, partial, table),
-            lambda partial: result_bind(
-                max_tokens_api_setting(path, partial, table),
-                lambda partial: params_api_setting(path, partial, table),
-            ),
-        ),
-    )
+    def step(
+        partial_result: Result[PartialApiSettings, TranslationError],
+        parse: Callable[
+            [str, PartialApiSettings, Mapping[str, Any]],
+            Result[PartialApiSettings, TranslationError],
+        ],
+    ) -> Result[PartialApiSettings, TranslationError]:
+        return result_bind(partial_result, lambda partial: parse(path, partial, table))
+
+    initial: Result[PartialApiSettings, TranslationError] = Ok(PartialApiSettings())
+    return reduce(step, API_FIELD_PARSERS, initial)
 
 
 def merge_api_settings(
@@ -704,6 +719,22 @@ def document_passes(
     )
 
 
+def document_layers(
+    user_path: str,
+    user_document: dict[str, Any],
+    selected_path: str | None,
+    selected_document: dict[str, Any],
+) -> tuple[tuple[str | None, dict[str, Any]], ...]:
+    layers: tuple[tuple[str | None, dict[str, Any]], ...] = ()
+    if selected_document:
+        layers += ((selected_path, selected_document),)
+
+    if user_document:
+        layers += ((user_path, user_document),)
+
+    return layers
+
+
 def resolve_passes(
     user_path: str,
     user_document_result: Result[dict[str, Any], TranslationError],
@@ -715,18 +746,11 @@ def resolve_passes(
     def resolve(
         documents: tuple[dict[str, Any], dict[str, Any]],
     ) -> IO[Result[pair_type, TranslationError]]:
-        user_document, selected_document = documents
-        sources: tuple[tuple[str | None, dict[str, Any]], ...] = ()
-        if selected_document:
-            sources += ((selected_path, selected_document),)
-
-        if user_document:
-            sources += ((user_path, user_document),)
-
-        candidates = tuple(
-            (path, document) for path, document in sources if "pass" in document
+        layers = document_layers(
+            user_path, documents[0], selected_path, documents[1]
         )
-        if not candidates:
+        pass_sources = tuple(layer for layer in layers if "pass" in layer[1])
+        if not pass_sources:
             return io_result(
                 fail_config(
                     "no [[pass]] tables found; define at least one pass in %s"
@@ -734,25 +758,25 @@ def resolve_passes(
                 )
             )
 
-        option_sources = tuple(
-            (path, document) for path, document in sources if "options" in document
-        )
+        option_sources = tuple(layer for layer in layers if "options" in layer[1])
         options: Result[dict[str, bool], TranslationError]
         if option_sources:
             option_path, option_document = option_sources[0]
-            options = parse_options_table(option_path or "", option_document["options"])
+            options = parse_options_table(
+                option_path or "", option_document["options"]
+            )
         else:
             options = Ok({})
 
-        pass_path, pass_document = candidates[0]
+        pass_path, pass_document = pass_sources[0]
 
         def combine(
-            result: Result[tuple[PassDefinition, ...], TranslationError],
+            resolved_passes: Result[tuple[PassDefinition, ...], TranslationError],
         ) -> Result[pair_type, TranslationError]:
             return result_bind(
                 options,
                 lambda option_values: result_map(
-                    result, lambda passes: (option_values, passes)
+                    resolved_passes, lambda passes: (option_values, passes)
                 ),
             )
 
@@ -836,61 +860,40 @@ def build_setup(
 def load_setup(
     arguments: Arguments, environment: Mapping[str, str]
 ) -> IO[SetupResult]:
-    def after_user(
-        user_path: str, selected_path: str | None
-    ) -> Callable[[bool], IO[tuple[DocumentResult, DocumentResult]]]:
-        def read_both(user_exists: bool) -> IO[tuple[DocumentResult, DocumentResult]]:
-            return io_bind(
-                read_document(user_path, "user config", user_exists),
-                lambda user_document: io_map(
-                    read_document(selected_path, "config file", bool(selected_path)),
-                    lambda selected_document: (user_document, selected_document),
-                ),
-            )
-
-        return read_both
-
     def with_paths(user_path: str, selected_path: str | None) -> IO[SetupResult]:
-        def after_documents(
-            documents: tuple[DocumentResult, DocumentResult],
-        ) -> IO[
-            tuple[
-                DocumentResult,
-                DocumentResult,
-                Result[ResolvedPasses, TranslationError],
-            ]
-        ]:
-            return io_map(
-                resolve_passes(
-                    user_path, documents[0], selected_path, documents[1]
-                ),
-                lambda passes_result: (documents[0], documents[1], passes_result),
+        def read_documents(
+            user_exists: bool,
+        ) -> IO[tuple[DocumentResult, DocumentResult]]:
+            return io_pair(
+                read_document(user_path, "user config", user_exists),
+                read_document(selected_path, "config file", bool(selected_path)),
             )
 
         def assemble(
-            resolved: tuple[
-                DocumentResult,
-                DocumentResult,
-                Result[ResolvedPasses, TranslationError],
-            ],
-        ) -> SetupResult:
-            return result_bind(
-                merged_api_settings(
-                    arguments,
-                    environment,
-                    user_path,
-                    resolved[0],
-                    selected_path,
-                    resolved[1],
-                ),
-                lambda config: build_setup(config, resolved[2]),
+            documents: tuple[DocumentResult, DocumentResult],
+        ) -> IO[SetupResult]:
+            def setup_with(
+                resolved: Result[ResolvedPasses, TranslationError],
+            ) -> SetupResult:
+                return result_bind(
+                    merged_api_settings(
+                        arguments,
+                        environment,
+                        user_path,
+                        documents[0],
+                        selected_path,
+                        documents[1],
+                    ),
+                    lambda config: build_setup(config, resolved),
+                )
+
+            return io_map(
+                resolve_passes(user_path, documents[0], selected_path, documents[1]),
+                setup_with,
             )
 
-        return io_map(
-            io_bind(
-                io_bind(path_exists(user_path), after_user(user_path, selected_path)),
-                after_documents,
-            ),
+        return io_bind(
+            io_bind(path_exists(user_path), read_documents),
             assemble,
         )
 

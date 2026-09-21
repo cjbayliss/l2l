@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from itertools import accumulate, chain
 from typing import TextIO
 
 from zh2en.config import (
     Context,
     PassDefinition,
-    Settings,
     pass_salt,
     resolve_call_settings,
 )
@@ -29,16 +27,29 @@ from zh2en.monads import (
     Ok,
     Result,
     fold_io,
+    io_and_then,
     io_bind,
     io_map,
     io_pure,
     io_result,
+    io_when,
     result_bind_io,
     result_map,
 )
+from zh2en.plans import (
+    UnitCall,
+    ascii_drop_warning,
+    build_ascii_fix_user,
+    build_ascii_retry_user,
+    build_pass_user,
+    build_unit_retry_user,
+    plan_info_message,
+    plan_unit_calls,
+    resolve_work_groups,
+    unit_output_problem,
+)
 from zh2en.text import (
     CACHE_SALT_VERSION,
-    AsciiDrop,
     Translated,
     Usage,
     cache_key,
@@ -47,8 +58,6 @@ from zh2en.text import (
     ensure_blank_line_separators,
     estimate_tokens,
     make_chunks,
-    non_ascii_sample,
-    regroup_by_plan,
     split_paragraphs,
     split_units_to_budget,
     to_ascii_mechanical,
@@ -82,149 +91,7 @@ StateResult = Result[State, TranslationError]
 
 
 def verbose_log(ctx: Context, message: str) -> IO[None]:
-    return ctx.console.log(message) if ctx.verbose else io_pure(None)
-
-
-def unit_output_problem(
-    source_text: str, output: str, settings: Settings
-) -> str | None:
-    if not output.strip():
-        return "the reply was empty"
-
-    expected = count_paragraphs(source_text)
-    found = count_paragraphs(output)
-    if found != expected:
-        return "the reply has %d paragraph(s) but the source has %d" % (
-            found,
-            expected,
-        )
-
-    source_estimate = estimate_tokens(source_text)
-    output_estimate = estimate_tokens(output)
-    if output_estimate > settings.unit_output_max_ratio * max(source_estimate, 1):
-        return (
-            "the reply is ~%d tokens against a source of ~%d tokens "
-            "(limit %.0fx)"
-            % (
-                output_estimate,
-                source_estimate,
-                settings.unit_output_max_ratio,
-            )
-        )
-
-    return None
-
-
-def context_parts(context: tuple[str, ...]) -> tuple[str, ...]:
-    if not context:
-        return ()
-
-    return (
-        "Context paragraphs (reference only — do not translate them, do not "
-        "continue the story from them, and do not include them in the "
-        "output):",
-        *context,
-        "Translate only the paragraph that follows, as exactly one paragraph:",
-    )
-
-
-def build_pass_user(
-    source_chunk: str,
-    work_chunk: str | None,
-    analysis: str | None,
-    context: tuple[str, ...] = (),
-) -> str:
-    parts = [
-        analysis.strip() if analysis else "",
-        *context_parts(context),
-        source_chunk,
-    ]
-    if work_chunk is not None and work_chunk != source_chunk:
-        parts.append(work_chunk)
-    return "\n\n".join(part for part in parts if part)
-
-
-def plan_info_message(
-    pass_definition: PassDefinition,
-    work_paragraphs: tuple[str, ...],
-    work_groups: tuple[tuple[str, ...], ...],
-) -> str:
-    if pass_definition.mode == "paragraph":
-        return "zh2en: [%s] %d paragraph(s), one call per paragraph" % (
-            pass_definition.name,
-            len(work_groups),
-        )
-
-    return "zh2en: [%s] %d paragraph(s) in %d chunk(s)" % (
-        pass_definition.name,
-        len(work_paragraphs),
-        len(work_groups),
-    )
-
-
-def resolve_work_groups(
-    mode: str,
-    work_paragraphs: tuple[str, ...],
-    plan: tuple[tuple[str, ...], ...],
-    pass_name: str,
-    budget: int,
-) -> tuple[tuple[tuple[str, ...], ...], str | None]:
-    groups = regroup_by_plan(work_paragraphs, plan)
-    if groups is not None:
-        return groups, None
-
-    warning = (
-        "zh2en: [%s] paragraph count changed by a previous pass; "
-        "grouping working text independently" % pass_name
-    )
-    if mode == "paragraph":
-        return tuple((paragraph,) for paragraph in work_paragraphs), warning
-
-    return make_chunks(work_paragraphs, budget), warning
-
-
-def build_ascii_fix_user(source_paragraph: str, output_paragraph: str) -> str:
-    return (
-        "Source paragraph (original language):\n%s\n\n"
-        "Translated paragraph (must become pure ASCII English):\n%s\n\n"
-        "Rewrite the translated paragraph as pure ASCII English."
-        % (source_paragraph, output_paragraph)
-    )
-
-
-def build_ascii_retry_user(
-    source_paragraph: str, output_paragraph: str, result: str
-) -> str:
-    return (
-        "Source paragraph (original language):\n%s\n\n"
-        "Translated paragraph (must become pure ASCII English):\n%s\n\n"
-        "Your previous reply still contained these non-ASCII "
-        "characters: %s. Rewrite the translated paragraph again, "
-        "inferring English for every one of them from the source and "
-        "context. Reply with ASCII characters only."
-        % (source_paragraph, output_paragraph, non_ascii_sample(result))
-    )
-
-
-def build_unit_retry_user(
-    source_chunk: str,
-    context: tuple[str, ...],
-    bad_output: str,
-    problem: str,
-) -> str:
-    return "\n\n".join(
-        part
-        for part in (
-            "Your previous reply below does not satisfy the output rules: %s."
-            % problem,
-            "Previous reply:\n%s" % bad_output,
-            *context_parts(context),
-            source_chunk,
-            "Translate the source text again, fixing the problem; output only "
-            "the translation.",
-        )
-        if part
-    )
+    return io_when(ctx.verbose, ctx.console.log(message))
 
 
 def run_analysis(
@@ -284,10 +151,9 @@ def run_analysis_once(
                 return io_result(result)
 
             return io_map(
-                (
-                    cache_write(ctx.cache_directory, key, result.value.text)
-                    if ctx.use_cache
-                    else io_pure(None)
+                io_when(
+                    ctx.use_cache,
+                    cache_write(ctx.cache_directory, key, result.value.text),
                 ),
                 lambda _: result,
             )
@@ -382,11 +248,7 @@ def ascii_fix_llm(
     ) -> IO[Result[Translated, TranslationError]]:
         if result.isascii():
             return io_map(
-                (
-                    cache_write(ctx.cache_directory, key, result)
-                    if ctx.use_cache
-                    else io_pure(None)
-                ),
+                io_when(ctx.use_cache, cache_write(ctx.cache_directory, key, result)),
                 lambda _: Ok(Translated(result, current_usage)),
             )
 
@@ -425,14 +287,6 @@ def ascii_fix_llm(
         )
 
     return io_bind(cache_read(ctx.cache_directory, key), use_cached)
-
-
-def ascii_drop_warning(drop: AsciiDrop) -> str:
-    return (
-        "zh2en: ascii: warning: paragraph %d still contained "
-        "non-ASCII characters (%s) after %d LLM attempts; dropping "
-        "them" % (drop.index + 1, drop.sample, drop.attempts)
-    )
 
 
 def repair_paragraph(
@@ -478,13 +332,13 @@ def repair_paragraph(
             else io_result(emit(None))
         )
 
-    return io_bind(
+    return io_and_then(
         verbose_log(
             ctx,
             "zh2en: ascii: paragraph %d/%d still non-ASCII; asking the "
             "LLM to repair it" % (index + 1, total),
         ),
-        lambda _: io_bind(
+        io_bind(
             ascii_fix_llm(
                 ctx,
                 pass_definition,
@@ -586,14 +440,12 @@ def enforce_pass_ascii(
 
         return io_bind(now(ctx.clock), report)
 
-    return io_bind(
+    return io_and_then(
+        ctx.console.write_partial("Enforcing ASCII... "),
         io_bind(
-            ctx.console.write_partial("Enforcing ASCII... "),
-            lambda _: ensure_ascii_output(
-                ctx, pass_definition, text, source_paragraphs, usage
-            ),
+            ensure_ascii_output(ctx, pass_definition, text, source_paragraphs, usage),
+            conclude,
         ),
-        conclude,
     )
 
 
@@ -687,64 +539,6 @@ def run_analysis_pass(
             after_analysis,
         ),
     )
-
-
-@dataclass(frozen=True)
-class UnitCall:
-    index: int
-    total: int
-    source_chunk: str
-    work_chunk: str
-    context: tuple[str, ...]
-    key: str
-    trailing_separator: str
-
-
-def plan_unit_calls(
-    ctx: Context,
-    pass_definition: PassDefinition,
-    plan: tuple[tuple[str, ...], ...],
-    work_groups: tuple[tuple[str, ...], ...],
-    trailing_separators: tuple[str, ...],
-) -> tuple[UnitCall, ...]:
-    model, params = resolve_call_settings(ctx.config, pass_definition)
-    flat_plan = tuple(chain.from_iterable(plan))
-    plan_starts = tuple(accumulate(map(len, plan), initial=0))
-
-    def neighbour_context(index: int) -> tuple[str, ...]:
-        if pass_definition.mode != "paragraph" or index >= len(plan):
-            return ()
-
-        start = plan_starts[index]
-        end = plan_starts[index + 1]
-        return (flat_plan[start - 1 : start] if start > 0 else ()) + (
-            flat_plan[end : end + 1] if end < len(flat_plan) else ()
-        )
-
-    def call(index: int, work_group: tuple[str, ...]) -> UnitCall:
-        source_chunk = "\n\n".join(plan[index]) if index < len(plan) else ""
-        work_chunk = "\n\n".join(work_group)
-        context = neighbour_context(index)
-        return UnitCall(
-            index=index,
-            total=len(work_groups),
-            source_chunk=source_chunk,
-            work_chunk=work_chunk,
-            context=context,
-            key=cache_key(
-                source_chunk,
-                model,
-                pass_salt(pass_definition),
-                work_chunk,
-                overrides=params,
-                context="\n\n".join(context),
-            ),
-            trailing_separator=trailing_separators[index]
-            if index < len(trailing_separators)
-            else "",
-        )
-
-    return tuple(call(index, group) for index, group in enumerate(work_groups))
 
 
 def run_unit(
@@ -906,19 +700,19 @@ def run_units(
                 )
 
             outcome = result.value
-            return io_map(
-                io_bind(
-                    (
-                        cache_write(ctx.cache_directory, call.key, outcome.text)
-                        if outcome.validated and ctx.use_cache
-                        else io_pure(None)
-                    ),
-                    lambda _: verbose_log(
-                        ctx,
-                        "zh2en: [%s] unit %d/%d done"
-                        % (pass_definition.name, call.index + 1, call.total),
-                    ),
+            stored = io_map(
+                io_when(
+                    outcome.validated and ctx.use_cache,
+                    cache_write(ctx.cache_directory, call.key, outcome.text),
                 ),
+                lambda _: verbose_log(
+                    ctx,
+                    "zh2en: [%s] unit %d/%d done"
+                    % (pass_definition.name, call.index + 1, call.total),
+                ),
+            )
+            return io_map(
+                stored,
                 lambda _: Ok(
                     UnitsSoFar(
                         accumulator.outputs
@@ -928,13 +722,7 @@ def run_units(
                 ),
             )
 
-        if not ctx.use_cache:
-            return io_bind(
-                run_unit(ctx, pass_definition, call, analysis, accumulator.usage),
-                store,
-            )
-
-        def with_cached(cached: str | None) -> IO[Result[UnitsSoFar, TranslationError]]:
+        def proceed(cached: str | None) -> IO[Result[UnitsSoFar, TranslationError]]:
             if cached is not None:
                 return io_map(
                     verbose_log(
@@ -956,7 +744,12 @@ def run_units(
                 store,
             )
 
-        return io_bind(cache_read(ctx.cache_directory, call.key), with_cached)
+        looked_up: IO[str | None] = (
+            cache_read(ctx.cache_directory, call.key)
+            if ctx.use_cache
+            else io_pure(None)
+        )
+        return io_bind(looked_up, proceed)
 
     return fold_io(calls, step, Ok(UnitsSoFar((), usage)))
 
@@ -1013,11 +806,11 @@ def run_text_pass_once(
 
             return io_bind(now(ctx.clock), after_stage)
 
-        return io_bind(
+        return io_and_then(
             verbose_log(
                 ctx, plan_info_message(pass_definition, work_paragraphs, work_groups)
             ),
-            lambda _: io_bind(
+            io_bind(
                 run_units(
                     ctx,
                     pass_definition,
@@ -1031,7 +824,8 @@ def run_text_pass_once(
             ),
         )
 
-    return io_bind(ctx.console.log(warning) if warning else io_pure(None), proceed)
+    reported_warning = io_pure(None) if warning is None else ctx.console.log(warning)
+    return io_bind(reported_warning, proceed)
 
 
 def run_text_pass(
@@ -1099,20 +893,21 @@ def run_text_pass(
                 lambda _: result,
             )
 
-        return io_bind(
+        retried = io_bind(
+            attempt(
+                replace(pass_definition, mode="paragraph"),
+                replace(state, usage=result.value.usage),
+                ctx.clock(),
+            ),
+            after_retry,
+        )
+        return io_and_then(
             ctx.console.log(
                 mismatch_message(
                     count, "re-running the pass with one call per paragraph"
                 )
             ),
-            lambda _: io_bind(
-                attempt(
-                    replace(pass_definition, mode="paragraph"),
-                    replace(state, usage=result.value.usage),
-                    ctx.clock(),
-                ),
-                after_retry,
-            ),
+            retried,
         )
 
     return io_bind(attempt(pass_definition, state, started_at), check)
@@ -1160,12 +955,12 @@ def run_passes(
         number, pass_definition = indexed
 
         def launch(stage_started: float) -> IO[StateResult]:
-            return io_bind(
+            return io_and_then(
                 ctx.console.log(
                     "Starting pass %d/%d [%s]..."
                     % (number, len(pass_definitions), pass_definition.name)
                 ),
-                lambda _: run_pass(
+                run_pass(
                     ctx,
                     pass_definition,
                     current_state,
@@ -1235,11 +1030,7 @@ def finish_output(
             )
 
         return io_bind(
-            (
-                ctx.console.log("zh2en: done in %.1fs" % total_elapsed)
-                if ctx.verbose
-                else io_pure(None)
-            ),
+            verbose_log(ctx, "zh2en: done in %.1fs" % total_elapsed),
             after_done,
         )
 

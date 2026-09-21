@@ -19,6 +19,7 @@ from zh2en.monads import (
     Ok,
     Result,
     fold_io,
+    io_and_then,
     io_bind,
     io_map,
     io_pure,
@@ -450,26 +451,21 @@ def chat(
         return io_result(fail_budget(estimated, ctx.config.max_tokens))
 
     payload = build_chat_payload(model, system, user, params)
+    call = (
+        streamed_call(ctx, payload)
+        if payload.get("stream", True)
+        else plain_call(ctx, payload)
+    )
 
     def stopped(
         reply_result: Result[ChatReply, TranslationError],
     ) -> IO[Result[Translated, TranslationError]]:
-        return io_bind(
+        return io_and_then(
             ctx.console.stop(),
-            lambda _: conclude_chat(ctx, reply_result, usage, estimated),
+            conclude_chat(ctx, reply_result, usage, estimated),
         )
 
-    return io_bind(
-        ctx.console.start("Working"),
-        lambda _: io_bind(
-            (
-                streamed_call(ctx, payload)
-                if payload.get("stream", True)
-                else plain_call(ctx, payload)
-            ),
-            stopped,
-        ),
-    )
+    return io_and_then(ctx.console.start("Working"), io_bind(call, stopped))
 
 
 def streamed_call(
@@ -557,7 +553,4 @@ def conclude_chat(
             )
         )
 
-    if messages:
-        return io_map(log_all(ctx.console, messages), finish)
-
-    return io_result(finish(Ok(())))
+    return io_map(log_all(ctx.console, messages), finish)

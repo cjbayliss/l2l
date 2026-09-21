@@ -2,7 +2,7 @@ import pytest
 
 from zh2en.config import build_settings
 from zh2en.http import build_chat_payload
-from zh2en.pipeline import (
+from zh2en.plans import (
     build_pass_user,
     build_unit_retry_user,
     context_parts,

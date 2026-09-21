@@ -7,6 +7,7 @@ from zh2en.monads import (
     io_bind,
     io_catch,
     io_map,
+    io_pair,
     io_pure,
     io_result,
     io_result_bind,
@@ -108,6 +109,21 @@ def test_io_traverse_short_circuits_on_error() -> None:
 
     program: IO[Result[tuple[int, ...], str]] = io_traverse((1, 2, 3), step)
     assert program.run() == Err("bad 2")
+
+
+def test_io_pair_runs_both_and_pairs_results() -> None:
+    log: list[str] = []
+
+    def record(label: str, value: int) -> IO[int]:
+        def thunk() -> int:
+            log.append(label)
+            return value
+
+        return IO(thunk)
+
+    program = io_pair(record("first", 1), record("second", 2))
+    assert program.run() == (1, 2)
+    assert log == ["first", "second"]
 
 
 def test_io_result_map_lifts_over_io() -> None:
