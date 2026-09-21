@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 from zh2en.console import Console
 from zh2en.effects import (
@@ -44,11 +44,14 @@ class Config:
     params: Mapping[str, Any]
 
 
+PassMode = Literal["analysis", "chunk", "paragraph"]
+
+
 @dataclass(frozen=True)
 class PassDefinition:
     name: str
     instruction: str
-    mode: str
+    mode: PassMode
     params: Mapping[str, Any]
     model: str | None
     ascii: bool | None

@@ -9,6 +9,7 @@ from zh2en.pipeline import (
     unit_output_problem,
 )
 from zh2en.text import (
+    AsciiDrop,
     Usage,
     cache_key,
     drop_non_ascii,
@@ -114,13 +115,12 @@ def test_to_ascii_mechanical() -> None:
 def test_drop_non_ascii_paths() -> None:
     character_map = build_settings().ascii_character_map
     assert drop_non_ascii("fine", character_map, 3, 0) == ("fine", None)
-    fixed, warning = drop_non_ascii("café", character_map, 3, 0)
+    fixed, drop = drop_non_ascii("café", character_map, 3, 0)
     assert fixed == "cafe"
-    assert warning is None
-    kept, warning = drop_non_ascii("a 中 b", character_map, 3, 1)
+    assert drop is None
+    kept, drop = drop_non_ascii("a 中 b", character_map, 3, 1)
     assert kept == "a b"
-    assert warning is not None
-    assert "paragraph 2" in warning
+    assert drop == AsciiDrop(1, "中", 3)
 
 
 def test_usage_line_and_delta() -> None:

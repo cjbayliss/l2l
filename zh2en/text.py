@@ -19,7 +19,10 @@ class Usage:
     cost: float = 0.0
 
 
-ChatOutcome = tuple[str, Usage]
+@dataclass(frozen=True)
+class Translated:
+    text: str
+    usage: Usage
 
 
 def is_cjk_char(char: str) -> bool:
@@ -218,9 +221,16 @@ def to_ascii_mechanical(text: str, character_map: Mapping[str, str]) -> str:
     )
 
 
+@dataclass(frozen=True)
+class AsciiDrop:
+    index: int
+    sample: str
+    attempts: int
+
+
 def drop_non_ascii(
     text: str, character_map: Mapping[str, str], attempts: int, index: int
-) -> tuple[str, str | None]:
+) -> tuple[str, AsciiDrop | None]:
     if text.isascii():
         return text, None
 
@@ -232,11 +242,7 @@ def drop_non_ascii(
         re.sub(
             r"  +", " ", "".join(character for character in text if character.isascii())
         ),
-        (
-            "zh2en: ascii: warning: paragraph %d still contained "
-            "non-ASCII characters (%s) after %d LLM attempts; dropping "
-            "them" % (index + 1, non_ascii_sample(text), attempts)
-        ),
+        AsciiDrop(index, non_ascii_sample(text), attempts),
     )
 
 

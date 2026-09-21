@@ -20,8 +20,13 @@ from zh2en import cli
 from zh2en.config import PassDefinition
 from zh2en.http import chat
 from zh2en.monads import IO, Err, Ok, Result, fold_io, fold_while, io_pure, io_result
-from zh2en.pipeline import analyze_document, plan_unit_calls, run_pipeline
-from zh2en.text import Usage, unit_separators
+from zh2en.pipeline import (
+    analyze_document,
+    ascii_drop_warning,
+    plan_unit_calls,
+    run_pipeline,
+)
+from zh2en.text import AsciiDrop, Usage, unit_separators
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -102,9 +107,8 @@ def test_chat_streamed_reports_usage() -> None:
     ctx = make_context(console, http.open)
     result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
     assert isinstance(result, Ok)
-    content, usage = result.value
-    assert content == "Hi"
-    assert usage == Usage(5, 6, 0.2)
+    assert result.value.text == "Hi"
+    assert result.value.usage == Usage(5, 6, 0.2)
 
 
 def test_chat_streamed_filters_think_prefix() -> None:
@@ -114,7 +118,7 @@ def test_chat_streamed_filters_think_prefix() -> None:
     ctx = make_context(console, http.open)
     result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
     assert isinstance(result, Ok)
-    assert result.value[0] == "Body"
+    assert result.value.text == "Body"
 
 
 def test_chat_plain_when_stream_disabled() -> None:
@@ -127,7 +131,7 @@ def test_chat_plain_when_stream_disabled() -> None:
     ctx = make_context(console, http.open)
     result = chat(ctx, "s", "u", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Ok)
-    assert result.value[0] == "Plain"
+    assert result.value.text == "Plain"
     payload = json.loads(http.requests[0].data)
     assert payload["stream"] is False
 
@@ -154,6 +158,14 @@ def test_run_pipeline_translates() -> None:
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nWorld.\n"
     assert "TOTAL" in stderr.getvalue()
+
+
+def test_ascii_drop_warning_mentions_paragraph_sample_and_attempts() -> None:
+    warning = ascii_drop_warning(AsciiDrop(index=1, sample="中", attempts=3))
+    assert warning == (
+        "zh2en: ascii: warning: paragraph 2 still contained non-ASCII "
+        "characters (中) after 3 LLM attempts; dropping them"
+    )
 
 
 def test_run_pipeline_reports_unit_failure() -> None:
