@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from fakes import FakeStreamResponse, stream_chunks
 
 from zh2en.http import (
+    ProgressRequest,
     StreamState,
     drive_stream,
     flatten_content_parts,
@@ -84,7 +85,7 @@ def test_stream_step_accumulates_reasoning_and_usage() -> None:
     assert isinstance(result, Ok)
     state = result.value
     assert state.reasoning == ("ponder",)
-    assert state.progress_request == ("Thinking", 1)
+    assert state.progress_request == ProgressRequest("Thinking", 1)
 
     result = stream_step(
         state,
@@ -98,7 +99,7 @@ def test_stream_step_accumulates_reasoning_and_usage() -> None:
     assert state.contents == ("Hi",)
     assert state.reported == {"prompt_tokens": 3, "completion_tokens": 4, "cost": 0.5}
     assert state.counted == 2
-    assert state.progress_request == ("Working", 1)
+    assert state.progress_request == ProgressRequest("Working", 1)
 
 
 def test_stream_step_content_part_list() -> None:

@@ -26,8 +26,8 @@ from zh2en.monads import (
     result_map,
 )
 from zh2en.text import (
-    ChatOutcome,
     ThinkState,
+    Translated,
     Usage,
     add_usage,
     estimate_tokens,
@@ -161,6 +161,12 @@ def delta_text(delta: Mapping[str, Any]) -> str:
 
 
 @dataclass(frozen=True)
+class ProgressRequest:
+    label: str
+    count: int
+
+
+@dataclass(frozen=True)
 class StreamState:
     reasoning: tuple[str, ...] = ()
     contents: tuple[str, ...] = ()
@@ -168,7 +174,7 @@ class StreamState:
     counted: int = 0
     content_started: bool = False
     think: ThinkState = ThinkState()
-    progress_request: tuple[str, int] | None = None
+    progress_request: ProgressRequest | None = None
 
 
 def stream_step(
@@ -191,12 +197,10 @@ def stream_step(
     )
     thinking_progress = 1 if reasoning_text and not state.content_started else 0
     text_progress = 1 if text else 0
-    progress_request = None
+    progress_request: ProgressRequest | None = None
     if thinking_progress or text_progress:
-        progress_request = (
-            ("Thinking" if thinking else "Working") if text else "Thinking",
-            thinking_progress + text_progress,
-        )
+        label = ("Thinking" if thinking else "Working") if text else "Thinking"
+        progress_request = ProgressRequest(label, thinking_progress + text_progress)
 
     return Ok(
         StreamState(
@@ -350,8 +354,9 @@ def drive_stream(
             if request is None:
                 return io_result(outcome)
 
-            label, count = request
-            return io_map(on_progress(label, count), lambda _: outcome)
+            return io_map(
+                on_progress(request.label, request.count), lambda _: outcome
+            )
 
         def after_log(_: None) -> IO[Result[StreamState, str]]:
             return io_bind(io_result(step_stream(state, raw_line)), notify)
@@ -418,7 +423,7 @@ def chat(
     model: str,
     params: Mapping[str, Any],
     usage: Usage,
-) -> IO[Result[ChatOutcome, str]]:
+) -> IO[Result[Translated, str]]:
     estimated = estimate_tokens(system) + estimate_tokens(user)
     if estimated > ctx.config.max_tokens:
         return io_result(
@@ -433,7 +438,7 @@ def chat(
 
     def stopped(
         reply_result: Result[ChatReply, str],
-    ) -> IO[Result[ChatOutcome, str]]:
+    ) -> IO[Result[Translated, str]]:
         return io_bind(
             ctx.console.stop(),
             lambda _: conclude_chat(ctx, reply_result, usage, estimated),
@@ -490,7 +495,7 @@ def plain_call(ctx: Context, payload: Mapping[str, Any]) -> IO[Result[ChatReply,
 
 def conclude_chat(
     ctx: Context, reply_result: Result[ChatReply, str], usage: Usage, estimated: int
-) -> IO[Result[ChatOutcome, str]]:
+) -> IO[Result[Translated, str]]:
     if isinstance(reply_result, Err):
         return io_result(reply_result)
 
@@ -509,21 +514,19 @@ def conclude_chat(
         else ()
     )
 
-    def finish(_: Result[tuple[()], str]) -> Result[ChatOutcome, str]:
+    def finish(_: Result[tuple[()], str]) -> Result[Translated, str]:
         reported = reply.reported
         return Ok(
-            (
+            Translated(
                 content,
-                (
-                    add_usage(usage, reported)
-                    if reported
-                    else add_usage(
-                        usage,
-                        {
-                            "prompt_tokens": estimated,
-                            "completion_tokens": reply.counted,
-                        },
-                    )
+                add_usage(usage, reported)
+                if reported
+                else add_usage(
+                    usage,
+                    {
+                        "prompt_tokens": estimated,
+                        "completion_tokens": reply.counted,
+                    },
                 ),
             )
         )
