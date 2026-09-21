@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from zh2en.config import Context
 from zh2en.effects import cache_read, cache_write
 from zh2en.errors import TranslationError
 from zh2en.monads import (
@@ -18,6 +17,7 @@ from zh2en.monads import (
     io_result,
     io_when,
 )
+from zh2en.settings import Context
 from zh2en.text import Translated, Usage
 
 

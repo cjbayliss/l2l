@@ -8,14 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import TextIO
 
 from zh2en import __version__
-from zh2en.config import (
-    Arguments,
-    Context,
-    Setup,
-    build_settings,
-    load_setup,
-    setup_report,
-)
+from zh2en.config import load_setup, setup_report
 from zh2en.console import Console, StatusLine
 from zh2en.effects import (
     RunLog,
@@ -48,6 +41,7 @@ from zh2en.monads import (
 )
 from zh2en.pipeline import run_pipeline
 from zh2en.plans import plan_report
+from zh2en.settings import Arguments, Context, Setup, build_settings
 
 
 def parse_args(arguments: Sequence[str]) -> Arguments:

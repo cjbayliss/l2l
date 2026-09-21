@@ -6,11 +6,11 @@ import time
 from collections.abc import Callable
 from typing import Any, Literal
 
-from zh2en.config import Config, Context, build_settings
 from zh2en.console import Console, StatusLine
 from zh2en.effects import RunLog
 from zh2en.errors import TranslationError
 from zh2en.monads import NOTHING, Ok, Result
+from zh2en.settings import Config, Context, build_settings
 
 SLEEPS: list[float] = []
 

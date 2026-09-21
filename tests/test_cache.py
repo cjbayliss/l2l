@@ -10,9 +10,9 @@ from zh2en.cache import (
     cached_translation,
     const_acceptable,
 )
-from zh2en.config import Context
 from zh2en.errors import TranslationError, fail_http
 from zh2en.monads import IO, NOTHING, Err, Just, Ok, Result, io_pure
+from zh2en.settings import Context
 from zh2en.text import Translated, Usage, cache_key
 
 

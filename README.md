@@ -124,11 +124,12 @@ nudge toward functional idioms.
 
 ## Design notes
 
-- `Result[T, E]` (`Ok`/`Err`) for error handling without exceptions in the
-  core; the error channel is a typed ADT (`TranslationError`) built through
-  `fail_*` constructors and rendered exactly once by `describe()`.
-  `IO[T]` thunks keep the whole program a composed value that runs
-  exactly once at the entry point.
+- `Result[T, E]` (`Ok`/`Err`) and `Maybe[T]` (`Just`/`Nothing`) for error
+  handling and optional values without exceptions in the core; the error
+  channel is a typed ADT (`TranslationError`) built through `fail_*`
+  constructors and rendered exactly once by `describe()`. `IO[T]` thunks
+  keep the whole program a composed value that runs exactly once at the
+  entry point; `Ref[T]` is the sanctioned single-cell mutation primitive.
 - Pure text machinery (paragraph splitting, token-budget chunking, cache
   keys, SSE and `<think>` tag state machines) is fully separated from
   effects, which live in the console/status line and the injected HTTP
@@ -137,9 +138,11 @@ nudge toward functional idioms.
   as does the HTTP opener, so retries and status lines are testable.
 - Module map (dependencies point downward only):
 
-  - `monads` — `Result`, `IO`, and their combinators (`fold_io`, lazy
-    `fold_while`, `io_traverse`, `io_when`, `io_pair`); no imports from
-    the rest of the package.
+  - `monads` — `Result`, `Maybe`, `IO`, `Ref`, and their combinators
+    (`fold_io`, lazy `fold_while`, `fold_io_lazy`, `io_traverse`,
+    `io_when`, `io_pair`, `io_memoize`, `modify_ref_with`); no imports
+    from the rest of the package.
+  - `messages` — pure user-facing string builders; no imports.
   - `errors` — the error ADT (`ConfigError`, `HttpError`, `BudgetError`,
     pass/unit wrappers) with `fail_*` constructors and the single
     `describe()` renderer; depends only on `monads`.
@@ -147,16 +150,23 @@ nudge toward functional idioms.
     cache keys, usage arithmetic.
   - `effects` — the IO vocabulary: stdin/stdout, TOML and cache files
     (including pruning), the run log (with an injected clock).
-  - `console` — the status line and stderr reporting; the one mutable
-    component, by design.
-  - `config` — TOML/config/argument parsing and merging; `Context`, the
-    immutable bundle everything downstream receives.
+  - `console` — the status line as a `Ref[StatusView]` plus pure render
+    transitions, and stderr reporting.
+  - `settings` — the frozen data vocabulary (`Config`, `Settings`,
+    `PassDefinition`, `Arguments`, `Context`) with defaults and small
+    pure accessors.
+  - `config` — TOML/config/argument parsing and merging that builds the
+    data in `settings`.
   - `plans` — pure pass planning: `UnitCall`/`plan_unit_calls`, prompt
     builders, validation (`unit_output_problem`), retry policies
     (`transient`, `plan_backoff`), and the `--dry-run` report; data in,
     data out.
+  - `cache` — the cache algebra: `cache_lookup`, `cache_store`, and
+    `cached_translation` (read, else compute, then store if acceptable).
   - `http` — request payloads, reply parsing, the SSE stream fold,
     retries, and `chat`; effects are IO values, never executed inline.
+  - `ascii` — ASCII enforcement: mechanical folding, LLM repair with
+    retries, and per-pass output checks.
   - `pipeline` — pass execution: IO executors (`run_units`, `run_pass`)
     that run the plans produced by `plans`.
   - `cli` — argument parsing, wiring, and the single entry point that
