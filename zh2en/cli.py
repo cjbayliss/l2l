@@ -17,6 +17,7 @@ from zh2en.effects import (
     read_stdin,
     resolve_cache_dir,
 )
+from zh2en.errors import TranslationError, describe
 from zh2en.http import urllib_open
 from zh2en.monads import IO, Err, Result, io_bind, io_map, io_pure
 from zh2en.pipeline import run_pipeline
@@ -144,10 +145,10 @@ def run_main_program(
         console = Console(stderr, StatusLine(stderr, live))
         started = clock()
 
-        def use_setup(setup_result: Result[Setup, str]) -> IO[int]:
+        def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
             if isinstance(setup_result, Err):
                 return io_map(
-                    console.log("zh2en: %s" % setup_result.error), lambda _: 2
+                    console.log(describe(setup_result.error)), lambda _: 2
                 )
 
             setup = setup_result.value

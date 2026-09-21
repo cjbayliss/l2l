@@ -26,18 +26,19 @@ from zh2en.config import (
     timeout_api_setting,
     validate_document,
 )
+from zh2en.errors import TranslationError, describe
 from zh2en.monads import Err, Ok, Result
 from zh2en.text import CACHE_SALT_VERSION, cache_key
 
 
-def ok_document(document: dict[str, Any]) -> Result[dict[str, Any], str]:
+def ok_document(document: dict[str, Any]) -> Result[dict[str, Any], TranslationError]:
     return Ok(document)
 
 
 def test_string_api_settings() -> None:
     result = string_api_settings("f", {"base_url": " http://x ", "model": 3})
     assert isinstance(result, Err)
-    assert "[api] model" in result.error
+    assert "[api] model" in describe(result.error)
 
     result = string_api_settings("f", {"base_url": " http://x ", "api_key": "k"})
     assert isinstance(result, Ok)
@@ -66,7 +67,7 @@ def test_max_tokens_api_setting() -> None:
 def test_document_api_settings_unknown_key() -> None:
     result = document_api_settings("f", {"api": {"nope": 1}})
     assert isinstance(result, Err)
-    assert "unknown key(s): nope" in result.error
+    assert "unknown key(s): nope" in describe(result.error)
 
 
 def test_merge_api_settings_params_deep_merge() -> None:
@@ -82,7 +83,7 @@ def test_api_settings_from_environment() -> None:
         {"TRANSLATE_MODEL": " m ", "TRANSLATE_TIMEOUT": "bogus"}
     )
     assert isinstance(result, Err)
-    assert "TRANSLATE_TIMEOUT" in result.error
+    assert "TRANSLATE_TIMEOUT" in describe(result.error)
 
     result = api_settings_from_environment(
         {"TRANSLATE_BASE_URL": "http://e", "TRANSLATE_MAX_TOKENS": "9"}
@@ -131,7 +132,7 @@ def test_merged_api_settings_precedence() -> None:
         "TRANSLATE_API_KEY": "env-key",
     }
     user = ok_document({"api": {"timeout": 30, "params": {"a": 1}}})
-    selected: Result[dict[str, Any], str] = Ok({})
+    selected: Result[dict[str, Any], TranslationError] = Ok({})
     result = merged_api_settings(arguments, environment, "user", user, None, selected)
     assert isinstance(result, Ok)
     config = result.value
@@ -145,14 +146,14 @@ def test_merged_api_settings_precedence() -> None:
 def test_build_config_missing() -> None:
     result = build_config(DEFAULT_API_SETTINGS)
     assert isinstance(result, Err)
-    assert "missing required API settings" in result.error
+    assert "missing required API settings" in describe(result.error)
 
 
 def test_validate_document() -> None:
     assert isinstance(validate_document("f", {}), Ok)
     result = validate_document("f", {"weird": 1})
     assert isinstance(result, Err)
-    assert "weird" in result.error
+    assert "weird" in describe(result.error)
 
 
 def test_parse_options_table() -> None:
@@ -184,7 +185,7 @@ def test_pass_definition_from() -> None:
         "f", {"name": "p", "mode": "chunk", "strict_fidelity": True}, "."
     ).run()
     assert isinstance(result, Err)
-    assert "unknown key(s): strict_fidelity" in result.error
+    assert "unknown key(s): strict_fidelity" in describe(result.error)
 
 
 def test_apply_default_ascii() -> None:
@@ -224,7 +225,7 @@ def test_parse_pass_table_inline() -> None:
 
     result = parse_pass_table("f", {"name": "p"}, ".").run()
     assert isinstance(result, Err)
-    assert "exactly one of" in result.error
+    assert "exactly one of" in describe(result.error)
 
 
 def test_load_instruction_text_inline() -> None:
@@ -241,7 +242,7 @@ def test_load_instruction_text_inline() -> None:
 def test_resolve_passes_requires_pass_table() -> None:
     result = resolve_passes("user", ok_document({"api": {}}), None, Ok({})).run()
     assert isinstance(result, Err)
-    assert "no [[pass]] tables" in result.error
+    assert "no [[pass]] tables" in describe(result.error)
 
 
 def test_resolve_passes_selection_and_options() -> None:

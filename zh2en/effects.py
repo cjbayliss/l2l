@@ -8,7 +8,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, TextIO
 
-from zh2en.monads import IO, Err, Ok, Result
+from zh2en.errors import TranslationError, fail_config
+from zh2en.monads import IO, Ok, Result
 from zh2en.text import cache_path
 
 Clock = Callable[[], float]
@@ -77,17 +78,19 @@ def resolve_cache_dir(
     return IO(thunk)
 
 
-def load_toml(path: str, description: str) -> IO[Result[dict[str, Any], str]]:
-    def thunk() -> Result[dict[str, Any], str]:
+def load_toml(
+    path: str, description: str
+) -> IO[Result[dict[str, Any], TranslationError]]:
+    def thunk() -> Result[dict[str, Any], TranslationError]:
         try:
             with open(path, "rb") as handle:
                 return Ok(tomllib.load(handle))
         except FileNotFoundError:
-            return Err("%s not found: %s" % (description, path))
+            return fail_config("%s not found: %s" % (description, path))
         except OSError as error:
-            return Err("cannot read %s: %s" % (description, error))
+            return fail_config("cannot read %s: %s" % (description, error))
         except tomllib.TOMLDecodeError as error:
-            return Err("cannot parse %s %s: %s" % (description, path, error))
+            return fail_config("cannot parse %s %s: %s" % (description, path, error))
 
     return IO(thunk)
 

@@ -18,6 +18,7 @@ from fakes import (
 
 from zh2en import cli
 from zh2en.config import PassDefinition
+from zh2en.errors import TranslationError, describe, fail_http
 from zh2en.http import chat
 from zh2en.monads import IO, Err, Ok, Result, fold_io, fold_while, io_pure, io_result
 from zh2en.pipeline import (
@@ -142,7 +143,7 @@ def test_chat_rejects_oversized_request() -> None:
     ctx = make_context(console, http.open, max_tokens=1)
     result = chat(ctx, "s", "u", "m", {}, Usage()).run()
     assert isinstance(result, Err)
-    assert "over the 1-token budget" in result.error
+    assert "over the 1-token budget" in describe(result.error)
     assert http.requests == []
 
 
@@ -171,8 +172,10 @@ def test_ascii_drop_warning_mentions_paragraph_sample_and_attempts() -> None:
 def test_run_pipeline_reports_unit_failure() -> None:
     console, stderr = make_console()
 
-    def open_fail(request: Any, timeout: float) -> Result[Any, str]:
-        return Err("could not reach endpoint: down")
+    def open_fail(
+        request: Any, timeout: float
+    ) -> Result[Any, TranslationError]:
+        return fail_http("unreachable", "down")
 
     ctx = make_context(console, open_fail)
     code = run_pipeline(
@@ -215,7 +218,7 @@ def test_analysis_fails_fast_when_document_needs_multiple_parts() -> None:
     analysis_pass = PassDefinition("prep", "Brief.", "analysis", {}, None, False)
     result = analyze_document(ctx, analysis_pass, "一。二。三。四。", Usage()).run()
     assert isinstance(result, Err)
-    assert "requires analysis in" in result.error
+    assert "requires analysis in" in describe(result.error)
     assert http.requests == []
 
 

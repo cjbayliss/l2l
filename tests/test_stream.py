@@ -3,6 +3,7 @@ from collections.abc import Iterator
 
 from fakes import FakeStreamResponse, stream_chunks
 
+from zh2en.errors import describe
 from zh2en.http import (
     ProgressRequest,
     StreamState,
@@ -131,7 +132,7 @@ def test_step_stream_reports_endpoint_error() -> None:
         b'data: {"error": {"message": "overloaded"}}\n',
     )
     assert isinstance(result, Err)
-    assert "overloaded" in result.error
+    assert "overloaded" in describe(result.error)
 
 
 def test_parse_stream_line() -> None:
@@ -171,7 +172,7 @@ def test_plain_reply() -> None:
 def test_plain_reply_bad_shape() -> None:
     result = plain_reply({"nope": True})
     assert isinstance(result, Err)
-    assert "unexpected response shape" in result.error
+    assert "unexpected response shape" in describe(result.error)
 
 
 def test_flatten_content_parts_with_thinking() -> None:
@@ -212,5 +213,5 @@ def test_drive_stream_stops_on_error_without_reading_next() -> None:
 
     result = drive_stream(lines(), lambda label, count: io_pure(None)).run()
     assert isinstance(result, Err)
-    assert "boom" in result.error
+    assert "boom" in describe(result.error)
     assert len(pulled) == 1

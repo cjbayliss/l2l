@@ -18,8 +18,9 @@ from fakes import (
 
 from zh2en import cli
 from zh2en.effects import RunLog, log_error, run_log_write
+from zh2en.errors import TranslationError, fail_http
 from zh2en.http import chat
-from zh2en.monads import Err, Ok, Result
+from zh2en.monads import Ok, Result
 from zh2en.text import Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
@@ -47,7 +48,7 @@ def run_zh2en(
     config_path: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    open_http: Callable[[Any, float], Result[Any, str]],
+    open_http: Callable[[Any, float], Result[Any, TranslationError]],
     flags: list[str],
 ) -> tuple[int, str, str]:
     monkeypatch.setattr(cli, "urllib_open", open_http)
@@ -104,8 +105,10 @@ def test_run_log_captures_plain_request_and_response(tmp_path: Path) -> None:
 def test_run_log_captures_http_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def open_fail(request: Any, timeout: float) -> Result[Any, str]:
-        return Err("could not reach endpoint: down")
+    def open_fail(
+        request: Any, timeout: float
+    ) -> Result[Any, TranslationError]:
+        return fail_http("unreachable", "down")
 
     code, _, _ = run_zh2en(
         write_config(tmp_path), tmp_path, monkeypatch, open_fail, ["--no-cache"]
