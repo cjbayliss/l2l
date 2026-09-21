@@ -16,7 +16,11 @@ from fakes import (
     with_usage,
 )
 
-import zh2en as z
+from zh2en import cli
+from zh2en.effects import RunLog, log_error, run_log_write
+from zh2en.http import chat
+from zh2en.monads import Err, Ok, Result
+from zh2en.text import Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -43,12 +47,12 @@ def run_zh2en(
     config_path: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    open_http: Callable[[Any, float], z.Result[Any, str]],
+    open_http: Callable[[Any, float], Result[Any, str]],
     flags: list[str],
 ) -> tuple[int, str, str]:
-    monkeypatch.setattr(z, "urllib_open", open_http)
+    monkeypatch.setattr(cli, "urllib_open", open_http)
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = z.main(
+    code = cli.main(
         [str(config_path), "--cache-dir", str(tmp_path / "cache"), *flags],
         {},
         io.StringIO("你好。"),
@@ -87,9 +91,9 @@ def test_run_log_captures_plain_request_and_response(tmp_path: Path) -> None:
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
     http = FakeHttp([FakePlainResponse(body)])
-    ctx = make_context(console, http.open, log=z.RunLog(str(log_path)))
-    result = z.chat(ctx, "sys", "user", "m", {"stream": False}, z.Usage()).run()
-    assert isinstance(result, z.Ok)
+    ctx = make_context(console, http.open, log=RunLog(str(log_path)))
+    result = chat(ctx, "sys", "user", "m", {"stream": False}, Usage()).run()
+    assert isinstance(result, Ok)
     content = log_path.read_text(encoding="utf-8")
     assert "REQUEST" in content
     assert '"stream": false' in content
@@ -100,8 +104,8 @@ def test_run_log_captures_plain_request_and_response(tmp_path: Path) -> None:
 def test_run_log_captures_http_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def open_fail(request: Any, timeout: float) -> z.Result[Any, str]:
-        return z.Err("could not reach endpoint: down")
+    def open_fail(request: Any, timeout: float) -> Result[Any, str]:
+        return Err("could not reach endpoint: down")
 
     code, _, _ = run_zh2en(
         write_config(tmp_path), tmp_path, monkeypatch, open_fail, ["--no-cache"]
@@ -164,11 +168,11 @@ def test_without_verbose_log_path_not_printed(
 
 
 def test_run_log_write_ignores_empty_path() -> None:
-    z.run_log_write(z.RunLog(""), "x").run()
-    z.log_error(z.RunLog(""), "boom").run()
+    run_log_write(RunLog(""), "x").run()
+    log_error(RunLog(""), "boom").run()
 
 
 def test_parse_args_show_log_path() -> None:
-    assert z.parse_args(["cfg.toml", "-l"]).show_log_path
-    assert z.parse_args(["cfg.toml", "--show-log-path"]).show_log_path
-    assert not z.parse_args(["cfg.toml"]).show_log_path
+    assert cli.parse_args(["cfg.toml", "-l"]).show_log_path
+    assert cli.parse_args(["cfg.toml", "--show-log-path"]).show_log_path
+    assert not cli.parse_args(["cfg.toml"]).show_log_path

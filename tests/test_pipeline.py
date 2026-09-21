@@ -15,25 +15,30 @@ from fakes import (
     with_usage,
 )
 
-import zh2en as z
+from zh2en import cli
+from zh2en.config import PassDefinition
+from zh2en.http import chat
+from zh2en.monads import IO, Err, Ok, Result, fold_io, io_pure, io_result
+from zh2en.pipeline import analyze_document, run_pipeline
+from zh2en.text import Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
 
-def chunk_pass(name: str = "translate", ascii_output: bool = False) -> z.PassDefinition:
-    return z.PassDefinition(name, "T.", "chunk", {}, None, ascii_output)
+def chunk_pass(name: str = "translate", ascii_output: bool = False) -> PassDefinition:
+    return PassDefinition(name, "T.", "chunk", {}, None, ascii_output)
 
 
-def paragraph_pass(name: str = "translate") -> z.PassDefinition:
-    return z.PassDefinition(name, "T.", "paragraph", {}, None, False)
+def paragraph_pass(name: str = "translate") -> PassDefinition:
+    return PassDefinition(name, "T.", "paragraph", {}, None, False)
 
 
 def test_fold_io_handles_thousands_of_items() -> None:
-    def step(pair: tuple[int, None], _: int) -> z.IO[z.Result[tuple[int, None], str]]:
-        return z.io_pure(z.Ok((pair[0] + 1, None)))
+    def step(pair: tuple[int, None], _: int) -> IO[Result[tuple[int, None], str]]:
+        return io_pure(Ok((pair[0] + 1, None)))
 
-    outcome = z.fold_io(range(5000), step, z.Ok((0, None))).run()
-    assert isinstance(outcome, z.Ok)
+    outcome = fold_io(range(5000), step, Ok((0, None))).run()
+    assert isinstance(outcome, Ok)
     assert outcome.value[0] == 5000
 
 
@@ -42,15 +47,15 @@ def test_fold_io_short_circuits_on_error() -> None:
 
     def step(
         pair: tuple[int, None], item: int
-    ) -> z.IO[z.Result[tuple[int, None], str]]:
+    ) -> IO[Result[tuple[int, None], str]]:
         calls.append(item)
         if item == 1:
-            return z.io_result(z.Err("boom"))
+            return io_result(Err("boom"))
 
-        return z.io_pure(z.Ok((pair[0] + 1, None)))
+        return io_pure(Ok((pair[0] + 1, None)))
 
-    outcome = z.fold_io(range(4), step, z.Ok((0, None))).run()
-    assert isinstance(outcome, z.Err)
+    outcome = fold_io(range(4), step, Ok((0, None))).run()
+    assert isinstance(outcome, Err)
     assert outcome.error == "boom"
     assert calls == [0, 1]
 
@@ -59,11 +64,11 @@ def test_chat_streamed_reports_usage() -> None:
     console, stderr = make_console()
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hi"), USAGE))])
     ctx = make_context(console, http.open)
-    result = z.chat(ctx, "sys", "user text", "m", {}, z.Usage()).run()
-    assert isinstance(result, z.Ok)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
     content, usage = result.value
     assert content == "Hi"
-    assert usage == z.Usage(5, 6, 0.2)
+    assert usage == Usage(5, 6, 0.2)
 
 
 def test_chat_streamed_filters_think_prefix() -> None:
@@ -71,8 +76,8 @@ def test_chat_streamed_filters_think_prefix() -> None:
     chunks = stream_chunks("<think>h</think>", "Body")
     http = FakeHttp([FakeStreamResponse(with_usage(chunks, USAGE))])
     ctx = make_context(console, http.open)
-    result = z.chat(ctx, "sys", "user text", "m", {}, z.Usage()).run()
-    assert isinstance(result, z.Ok)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
     assert result.value[0] == "Body"
 
 
@@ -84,8 +89,8 @@ def test_chat_plain_when_stream_disabled() -> None:
     }
     http = FakeHttp([FakePlainResponse(body)])
     ctx = make_context(console, http.open)
-    result = z.chat(ctx, "s", "u", "m", {"stream": False}, z.Usage()).run()
-    assert isinstance(result, z.Ok)
+    result = chat(ctx, "s", "u", "m", {"stream": False}, Usage()).run()
+    assert isinstance(result, Ok)
     assert result.value[0] == "Plain"
     payload = json.loads(http.requests[0].data)
     assert payload["stream"] is False
@@ -95,8 +100,8 @@ def test_chat_rejects_oversized_request() -> None:
     console, stderr = make_console()
     http = FakeHttp([])
     ctx = make_context(console, http.open, max_tokens=1)
-    result = z.chat(ctx, "s", "u", "m", {}, z.Usage()).run()
-    assert isinstance(result, z.Err)
+    result = chat(ctx, "s", "u", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
     assert "over the 1-token budget" in result.error
     assert http.requests == []
 
@@ -107,8 +112,8 @@ def test_run_pipeline_translates() -> None:
     http = FakeHttp([FakeStreamResponse(chunks)])
     ctx = make_context(console, http.open)
     stdout = io.StringIO()
-    code = z.run_pipeline(
-        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout, time.time
+    code = run_pipeline(
+        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nWorld.\n"
@@ -118,12 +123,12 @@ def test_run_pipeline_translates() -> None:
 def test_run_pipeline_reports_unit_failure() -> None:
     console, stderr = make_console()
 
-    def open_fail(request: Any, timeout: float) -> z.Result[Any, str]:
-        return z.Err("could not reach endpoint: down")
+    def open_fail(request: Any, timeout: float) -> Result[Any, str]:
+        return Err("could not reach endpoint: down")
 
     ctx = make_context(console, open_fail)
-    code = z.run_pipeline(
-        ctx, (chunk_pass(),), "你好。", 0.0, io.StringIO(), time.time
+    code = run_pipeline(
+        ctx, (chunk_pass(),), "你好。", 0.0, io.StringIO()
     ).run()
     assert code == 1
     logged = stderr.getvalue()
@@ -143,8 +148,8 @@ def test_run_pipeline_cache_hit(tmp_path: Path) -> None:
             console, http.open, cache_directory=str(cache_directory), use_cache=True
         )
         stdout = io.StringIO()
-        code = z.run_pipeline(
-            ctx, (chunk_pass(),), "你好。", 0.0, stdout, time.time
+        code = run_pipeline(
+            ctx, (chunk_pass(),), "你好。", 0.0, stdout
         ).run()
         return code, stdout.getvalue(), len(http.requests)
 
@@ -159,9 +164,9 @@ def test_analysis_fails_fast_when_document_needs_multiple_parts() -> None:
     console, stderr = make_console()
     http = FakeHttp([])
     ctx = make_context(console, http.open, max_tokens=40)
-    analysis_pass = z.PassDefinition("prep", "Brief.", "analysis", {}, None, False)
-    result = z.analyze_document(ctx, analysis_pass, "一。二。三。四。", z.Usage()).run()
-    assert isinstance(result, z.Err)
+    analysis_pass = PassDefinition("prep", "Brief.", "analysis", {}, None, False)
+    result = analyze_document(ctx, analysis_pass, "一。二。三。四。", Usage()).run()
+    assert isinstance(result, Err)
     assert "requires analysis in" in result.error
     assert http.requests == []
 
@@ -172,8 +177,8 @@ def test_run_pipeline_enforces_ascii_mechanically() -> None:
     http = FakeHttp([FakeStreamResponse(chunks)])
     ctx = make_context(console, http.open)
     stdout = io.StringIO()
-    code = z.run_pipeline(
-        ctx, (chunk_pass(ascii_output=True),), "文本。", 0.0, stdout, time.time
+    code = run_pipeline(
+        ctx, (chunk_pass(ascii_output=True),), "文本。", 0.0, stdout
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Cafe - deja.\n"
@@ -194,8 +199,8 @@ def test_ensure_paragraphs_retries_pass_in_paragraph_mode() -> None:
     )
     ctx = make_context(console, http.open, ensure_paragraphs=True)
     stdout = io.StringIO()
-    code = z.run_pipeline(
-        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout, time.time
+    code = run_pipeline(
+        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nWorld.\n"
@@ -223,8 +228,8 @@ def test_ensure_paragraphs_warns_when_retry_still_differs() -> None:
     )
     ctx = make_context(console, http.open, ensure_paragraphs=True)
     stdout = io.StringIO()
-    code = z.run_pipeline(
-        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout, time.time
+    code = run_pipeline(
+        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nSurprise.\n\nWorld.\n"
@@ -256,13 +261,12 @@ def test_unit_validation_repairs_hallucinated_paragraph(tmp_path: Path) -> None:
         console, http.open, cache_directory=str(cache_directory), use_cache=True
     )
     stdout = io.StringIO()
-    code = z.run_pipeline(
+    code = run_pipeline(
         ctx,
         (paragraph_pass(),),
         "第413章 被亲妈祸害的女孩 2",
         0.0,
         stdout,
-        time.time,
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Chapter 4: Ruined.\n"
@@ -293,8 +297,8 @@ def test_unit_validation_gives_up_warns_and_skips_cache(tmp_path: Path) -> None:
         console, http.open, cache_directory=str(cache_directory), use_cache=True
     )
     stdout = io.StringIO()
-    code = z.run_pipeline(
-        ctx, (paragraph_pass(),), "你好。", 0.0, stdout, time.time
+    code = run_pipeline(
+        ctx, (paragraph_pass(),), "你好。", 0.0, stdout
     ).run()
     assert code == 0
     assert stdout.getvalue() == "One.\n\nTwo.\n"
@@ -315,8 +319,8 @@ def test_unit_validation_repairs_dropped_chunk_paragraph() -> None:
     )
     ctx = make_context(console, http.open)
     stdout = io.StringIO()
-    code = z.run_pipeline(
-        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout, time.time
+    code = run_pipeline(
+        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nWorld.\n"
@@ -335,8 +339,8 @@ def test_unit_validation_rejects_implausible_length() -> None:
     )
     ctx = make_context(console, http.open)
     stdout = io.StringIO()
-    code = z.run_pipeline(
-        ctx, (paragraph_pass(),), "嗯。", 0.0, stdout, time.time
+    code = run_pipeline(
+        ctx, (paragraph_pass(),), "嗯。", 0.0, stdout
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Okay.\n"
@@ -356,8 +360,8 @@ def test_paragraph_mode_supplies_neighbour_context() -> None:
     )
     ctx = make_context(console, http.open)
     stdout = io.StringIO()
-    code = z.run_pipeline(
-        ctx, (paragraph_pass(),), "一。\n\n二。\n\n三。", 0.0, stdout, time.time
+    code = run_pipeline(
+        ctx, (paragraph_pass(),), "一。\n\n二。\n\n三。", 0.0, stdout
     ).run()
     assert code == 0
     assert stdout.getvalue() == "One.\n\nTwo.\n\nThree.\n"
@@ -376,7 +380,7 @@ def test_paragraph_mode_supplies_neighbour_context() -> None:
 
 
 def test_main_empty_stdin_succeeds_without_config() -> None:
-    code = z.main(
+    code = cli.main(
         [], {}, io.StringIO("   "), io.StringIO(), io.StringIO(), time.time
     ).run()
     assert code == 0
@@ -399,9 +403,9 @@ def test_main_end_to_end_with_config(
     )
     chunks = with_usage(stream_chunks("Hello."), USAGE)
     http = FakeHttp([FakeStreamResponse(chunks)])
-    monkeypatch.setattr(z, "urllib_open", http.open)
+    monkeypatch.setattr(cli, "urllib_open", http.open)
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = z.main(
+    code = cli.main(
         [str(config_path), "--cache-dir", str(tmp_path / "cache"), "--no-cache"],
         {},
         io.StringIO("你好。"),
@@ -416,16 +420,16 @@ def test_main_end_to_end_with_config(
 
 def test_version_flag_exits() -> None:
     with pytest.raises(SystemExit):
-        z.parse_args(["--version"])
+        cli.parse_args(["--version"])
 
 
 def test_parse_args_defaults() -> None:
-    arguments = z.parse_args(["cfg.toml", "--no-cache", "-v"])
+    arguments = cli.parse_args(["cfg.toml", "--no-cache", "-v"])
     assert arguments.config == "cfg.toml"
     assert arguments.no_cache
     assert not arguments.ensure_paragraphs
     assert arguments.verbose
     assert arguments.cache_dir is None
 
-    arguments = z.parse_args(["cfg.toml", "--ensure-paragraphs"])
+    arguments = cli.parse_args(["cfg.toml", "--ensure-paragraphs"])
     assert arguments.ensure_paragraphs

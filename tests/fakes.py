@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from collections.abc import Callable
 from typing import Any, Literal
 
-import zh2en as z
+from zh2en.config import Config, Context, build_settings
+from zh2en.console import Console, StatusLine
+from zh2en.effects import RunLog
+from zh2en.monads import Ok, Result
 
 
 class FakeStreamResponse:
@@ -43,28 +47,28 @@ class FakeHttp:
         self.responses = responses
         self.requests: list[Any] = []
 
-    def open(self, request: Any, timeout: float) -> z.Result[Any, str]:
+    def open(self, request: Any, timeout: float) -> Result[Any, str]:
         self.requests.append(request)
         index = min(len(self.requests) - 1, len(self.responses) - 1)
-        return z.Ok(self.responses[index])
+        return Ok(self.responses[index])
 
 
-def make_console() -> tuple[z.Console, io.StringIO]:
+def make_console() -> tuple[Console, io.StringIO]:
     stream = io.StringIO()
-    console = z.Console(stream, z.StatusLine(stream, live=False))
+    console = Console(stream, StatusLine(stream, live=False))
     return console, stream
 
 
 def make_context(
-    console: z.Console,
-    open_http: Callable[[Any, float], z.Result[Any, str]],
+    console: Console,
+    open_http: Callable[[Any, float], Result[Any, str]],
     cache_directory: str = "",
     use_cache: bool = False,
     max_tokens: int = 100000,
-    log: z.RunLog | None = None,
+    log: RunLog | None = None,
     ensure_paragraphs: bool = False,
-) -> z.Context:
-    config = z.Config(
+) -> Context:
+    config = Config(
         base_url="http://endpoint.test/v1",
         api_key="key",
         model="model-x",
@@ -72,16 +76,17 @@ def make_context(
         max_tokens=max_tokens,
         params={},
     )
-    return z.Context(
+    return Context(
         config=config,
-        settings=z.build_settings(),
+        settings=build_settings(),
         use_cache=use_cache,
         cache_directory=cache_directory,
         verbose=False,
         ensure_paragraphs=ensure_paragraphs,
         console=console,
         open_http=open_http,
-        log=log if log is not None else z.RunLog(""),
+        log=log if log is not None else RunLog(""),
+        clock=time.time,
     )
 
 
