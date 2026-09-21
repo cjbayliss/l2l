@@ -113,14 +113,16 @@ ensure_paragraphs = true
 
 ```sh
 pip install -e ".[dev]"
+ruff format .
 ruff check .
 mypy
 pytest
 ```
 
 `pytest` reports branch coverage per module by default
-(`pytest-cov`). Lint groups include `C4`, `PERF`, and `FURB`, which
-nudge toward functional idioms.
+(`pytest-cov`) and enforces a 90% floor. Lint groups include `C4`,
+`PERF`, `FURB`, `SIM`, `RET`, and `UP`, which nudge toward functional
+idioms (PEP 695 generics, comprehensions over accumulation).
 
 ## Design notes
 

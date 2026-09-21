@@ -58,10 +58,9 @@ def test_result_map2_combines_two_oks() -> None:
 
 
 def test_result_map2_left_error_wins() -> None:
-    assert (
-        result_map2(Err("left"), Err("right"), lambda left, right: left + right)
-        == Err("left")
-    )
+    assert result_map2(
+        Err("left"), Err("right"), lambda left, right: left + right
+    ) == Err("left")
 
 
 def test_result_map2_right_error_propagates() -> None:
@@ -122,9 +121,7 @@ def test_io_traverse_collects_successes() -> None:
     def unit(number: int) -> IO[Result[tuple[int, str], str]]:
         return io_result(Ok((number, str(number))))
 
-    program: IO[Result[tuple[tuple[int, str], ...], str]] = io_traverse(
-        (1, 2), unit
-    )
+    program: IO[Result[tuple[tuple[int, str], ...], str]] = io_traverse((1, 2), unit)
     assert program.run() == Ok(((1, "1"), (2, "2")))
 
 

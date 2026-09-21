@@ -3,7 +3,7 @@ from __future__ import annotations
 
 def fmt_duration(seconds: float) -> str:
     if seconds < 60:
-        return "%.1fs" % seconds
+        return f"{seconds:.1f}s"
 
     return "%dm%ds" % (int(seconds // 60), int(seconds % 60))
 
@@ -51,9 +51,13 @@ def unit_failed_validation_final(
 def unit_failed_validation_attempt(
     pass_name: str, index: int, total: int, problem: str, attempt: int, attempts: int
 ) -> str:
-    return (
-        "zh2en: [%s] unit %d/%d failed validation (%s); repair "
-        "attempt %d/%d" % (pass_name, index, total, problem, attempt, attempts)
+    return "zh2en: [%s] unit %d/%d failed validation (%s); repair attempt %d/%d" % (
+        pass_name,
+        index,
+        total,
+        problem,
+        attempt,
+        attempts,
     )
 
 
@@ -73,7 +77,7 @@ def unit_cache_hit_message(pass_name: str, index: int, total: int) -> str:
 
 
 def pass_cache_hit_message(pass_name: str) -> str:
-    return "zh2en: [%s] cache hit" % pass_name
+    return f"zh2en: [{pass_name}] cache hit"
 
 
 def pass_started_message(number: int, total: int, pass_name: str) -> str:
@@ -91,12 +95,11 @@ def paragraph_mismatch_message(
     )
 
 
-def paragraph_still_differs_message(
-    pass_name: str, count: int, source: int
-) -> str:
-    return (
-        "zh2en: [%s] paragraph count still differs (%d vs %d); continuing"
-        % (pass_name, count, source)
+def paragraph_still_differs_message(pass_name: str, count: int, source: int) -> str:
+    return "zh2en: [%s] paragraph count still differs (%d vs %d); continuing" % (
+        pass_name,
+        count,
+        source,
     )
 
 
@@ -105,9 +108,7 @@ def ascii_cache_hit_message() -> str:
 
 
 def ascii_retry_message(attempt: int, attempts: int) -> str:
-    return (
-        "zh2en: ascii: attempt %d/%d still non-ASCII; retrying" % (attempt, attempts)
-    )
+    return "zh2en: ascii: attempt %d/%d still non-ASCII; retrying" % (attempt, attempts)
 
 
 def ascii_mechanical_message(index: int, total: int) -> str:
@@ -125,4 +126,4 @@ def ascii_llm_message(index: int, total: int) -> str:
 
 
 def done_in_message(elapsed: float) -> str:
-    return "zh2en: done in %.1fs" % elapsed
+    return f"zh2en: done in {elapsed:.1f}s"

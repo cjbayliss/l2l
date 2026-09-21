@@ -61,8 +61,7 @@ def unit_output_problem(
     found = count_paragraphs(output)
     if found != expected:
         return Just(
-            "the reply has %d paragraph(s) but the source has %d"
-            % (found, expected)
+            "the reply has %d paragraph(s) but the source has %d" % (found, expected)
         )
 
     source_estimate = estimate_tokens(source_text)
@@ -140,8 +139,8 @@ def resolve_work_groups(
         return grouped.value, NOTHING
 
     warning: Maybe[str] = Just(
-        "zh2en: [%s] paragraph count changed by a previous pass; "
-        "grouping working text independently" % pass_name
+        f"zh2en: [{pass_name}] paragraph count changed by a previous pass; "
+        "grouping working text independently"
     )
     if mode == "paragraph":
         return tuple((paragraph,) for paragraph in work_paragraphs), warning
@@ -151,10 +150,10 @@ def resolve_work_groups(
 
 def build_ascii_fix_user(source_paragraph: str, output_paragraph: str) -> str:
     return (
-        "Source paragraph (original language):\n%s\n\n"
-        "Translated paragraph (must become pure ASCII English):\n%s\n\n"
+        f"Source paragraph (original language):\n{source_paragraph}\n\n"
+        "Translated paragraph (must become pure ASCII English):\n"
+        f"{output_paragraph}\n\n"
         "Rewrite the translated paragraph as pure ASCII English."
-        % (source_paragraph, output_paragraph)
     )
 
 
@@ -162,13 +161,13 @@ def build_ascii_retry_user(
     source_paragraph: str, output_paragraph: str, result: str
 ) -> str:
     return (
-        "Source paragraph (original language):\n%s\n\n"
-        "Translated paragraph (must become pure ASCII English):\n%s\n\n"
+        f"Source paragraph (original language):\n{source_paragraph}\n\n"
+        "Translated paragraph (must become pure ASCII English):\n"
+        f"{output_paragraph}\n\n"
         "Your previous reply still contained these non-ASCII "
-        "characters: %s. Rewrite the translated paragraph again, "
-        "inferring English for every one of them from the source and "
-        "context. Reply with ASCII characters only."
-        % (source_paragraph, output_paragraph, non_ascii_sample(result))
+        f"characters: {non_ascii_sample(result)}. Rewrite the translated "
+        "paragraph again, inferring English for every one of them from the "
+        "source and context. Reply with ASCII characters only."
     )
 
 
@@ -181,9 +180,8 @@ def build_unit_retry_user(
     return "\n\n".join(
         part
         for part in (
-            "Your previous reply below does not satisfy the output rules: %s."
-            % problem,
-            "Previous reply:\n%s" % bad_output,
+            f"Your previous reply below does not satisfy the output rules: {problem}.",
+            f"Previous reply:\n{bad_output}",
             *context_parts(context),
             source_chunk,
             "Translate the source text again, fixing the problem; output only "
@@ -276,7 +274,7 @@ def plan_report(
             pass_definition.name,
         )
         if pass_definition.mode == "analysis":
-            return ("%s: mode=analysis, 1 call with the whole document" % header,)
+            return (f"{header}: mode=analysis, 1 call with the whole document",)
 
         plan = paragraph_plan if pass_definition.mode == "paragraph" else chunk_plan
         work_groups, warning = resolve_work_groups(
@@ -306,7 +304,7 @@ def plan_report(
                 )
                 for call in calls
             ),
-            *(("  warning: %s" % warning.value,) if isinstance(warning, Just) else ()),
+            *((f"  warning: {warning.value}",) if isinstance(warning, Just) else ()),
         )
 
     lines = (

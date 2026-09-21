@@ -68,9 +68,13 @@ def test_draw_render_writes_line_and_records_drawn() -> None:
 def test_draw_render_pads_over_longer_previous_line() -> None:
     long_view = StatusView(drawn="a much longer previous line")
     _, text = draw_render(long_view, 1.0)
-    assert text.endswith(" " * (len("a much longer previous line") - len(
-        "Working: time elapsed: 0.00s, tokens received: 0"
-    )))
+    assert text.endswith(
+        " "
+        * (
+            len("a much longer previous line")
+            - len("Working: time elapsed: 0.00s, tokens received: 0")
+        )
+    )
 
 
 def test_start_render_resets_tokens_and_label() -> None:

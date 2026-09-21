@@ -269,9 +269,7 @@ def enforce_pass_ascii(
         def report(ended_at: float) -> IO[Result[Translated, TranslationError]]:
             return io_map(
                 ctx.console.finish(
-                    stage_done_line(
-                        ended_at - started_at, prompt, completion, cost
-                    )
+                    stage_done_line(ended_at - started_at, prompt, completion, cost)
                 ),
                 lambda _: result,
             )

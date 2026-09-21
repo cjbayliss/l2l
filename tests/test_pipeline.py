@@ -85,9 +85,7 @@ def test_plan_unit_calls_builds_keys_and_context() -> None:
 def test_fold_io_short_circuits_on_error() -> None:
     calls: list[int] = []
 
-    def step(
-        pair: tuple[int, None], item: int
-    ) -> IO[Result[tuple[int, None], str]]:
+    def step(pair: tuple[int, None], item: int) -> IO[Result[tuple[int, None], str]]:
         calls.append(item)
         if item == 1:
             return io_result(Err("boom"))
@@ -221,9 +219,7 @@ def test_run_pipeline_translates() -> None:
     http = FakeHttp([FakeStreamResponse(chunks)])
     ctx = make_context(console, http.open)
     stdout = io.StringIO()
-    code = run_pipeline(
-        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
-    ).run()
+    code = run_pipeline(ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nWorld.\n"
     assert "TOTAL" in stderr.getvalue()
@@ -240,15 +236,11 @@ def test_ascii_drop_warning_mentions_paragraph_sample_and_attempts() -> None:
 def test_run_pipeline_reports_unit_failure() -> None:
     console, stderr = make_console()
 
-    def open_fail(
-        request: Any, timeout: float
-    ) -> Result[Any, TranslationError]:
+    def open_fail(request: Any, timeout: float) -> Result[Any, TranslationError]:
         return fail_http("unreachable", "down")
 
     ctx = make_context(console, open_fail)
-    code = run_pipeline(
-        ctx, (chunk_pass(),), "你好。", 0.0, io.StringIO()
-    ).run()
+    code = run_pipeline(ctx, (chunk_pass(),), "你好。", 0.0, io.StringIO()).run()
     assert code == 1
     logged = stderr.getvalue()
     assert "failed on unit 1" in logged
@@ -267,9 +259,7 @@ def test_run_pipeline_cache_hit(tmp_path: Path) -> None:
             console, http.open, cache_directory=str(cache_directory), use_cache=True
         )
         stdout = io.StringIO()
-        code = run_pipeline(
-            ctx, (chunk_pass(),), "你好。", 0.0, stdout
-        ).run()
+        code = run_pipeline(ctx, (chunk_pass(),), "你好。", 0.0, stdout).run()
         return code, stdout.getvalue(), len(http.requests)
 
     first_code, first_output, first_calls = run()
@@ -318,9 +308,7 @@ def test_ensure_paragraphs_retries_pass_in_paragraph_mode() -> None:
     )
     ctx = make_context(console, http.open, ensure_paragraphs=True)
     stdout = io.StringIO()
-    code = run_pipeline(
-        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
-    ).run()
+    code = run_pipeline(ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nWorld.\n"
     logged = stderr.getvalue()
@@ -347,9 +335,7 @@ def test_ensure_paragraphs_warns_when_retry_still_differs() -> None:
     )
     ctx = make_context(console, http.open, ensure_paragraphs=True)
     stdout = io.StringIO()
-    code = run_pipeline(
-        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
-    ).run()
+    code = run_pipeline(ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nSurprise.\n\nWorld.\n"
     logged = stderr.getvalue()
@@ -416,9 +402,7 @@ def test_unit_validation_gives_up_warns_and_skips_cache(tmp_path: Path) -> None:
         console, http.open, cache_directory=str(cache_directory), use_cache=True
     )
     stdout = io.StringIO()
-    code = run_pipeline(
-        ctx, (paragraph_pass(),), "你好。", 0.0, stdout
-    ).run()
+    code = run_pipeline(ctx, (paragraph_pass(),), "你好。", 0.0, stdout).run()
     assert code == 0
     assert stdout.getvalue() == "One.\n\nTwo.\n"
     logged = stderr.getvalue()
@@ -438,9 +422,7 @@ def test_unit_validation_repairs_dropped_chunk_paragraph() -> None:
     )
     ctx = make_context(console, http.open)
     stdout = io.StringIO()
-    code = run_pipeline(
-        ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
-    ).run()
+    code = run_pipeline(ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nWorld.\n"
     assert len(http.requests) == 2
@@ -458,9 +440,7 @@ def test_unit_validation_rejects_implausible_length() -> None:
     )
     ctx = make_context(console, http.open)
     stdout = io.StringIO()
-    code = run_pipeline(
-        ctx, (paragraph_pass(),), "嗯。", 0.0, stdout
-    ).run()
+    code = run_pipeline(ctx, (paragraph_pass(),), "嗯。", 0.0, stdout).run()
     assert code == 0
     assert stdout.getvalue() == "Okay.\n"
     assert len(http.requests) == 2

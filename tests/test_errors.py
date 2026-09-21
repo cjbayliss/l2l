@@ -97,9 +97,7 @@ def test_describe_ascii_error() -> None:
 
 
 def test_constructors_build_expected_variants() -> None:
-    assert fail_http("status", "nope", 500).error == HttpError(
-        "status", "nope", 500
-    )
+    assert fail_http("status", "nope", 500).error == HttpError("status", "nope", 500)
     assert fail_pass("p", fail_config("x").error).error == PassError(
         "p", ConfigError("x")
     )
