@@ -3,7 +3,8 @@
 Translate Chinese text from stdin to English on stdout using any
 OpenAI-compatible chat completions endpoint (including OpenRouter).
 
-Single-file, standard-library-only Python (3.14+).
+Standard-library-only Python (3.14+), organised as a small layered
+package: pure machinery in the middle, effects only at the edges.
 
 ## Install
 
@@ -12,7 +13,7 @@ pip install .
 ```
 
 This provides the `zh2en` console script. You can also run it directly with
-`python3 zh2en.py`.
+`python3 -m zh2en`.
 
 ## Usage
 
@@ -112,6 +113,10 @@ mypy
 pytest
 ```
 
+`pytest` reports branch coverage per module by default
+(`pytest-cov`). Lint groups include `C4`, `PERF`, and `FURB`, which
+nudge toward functional idioms.
+
 ## Design notes
 
 - `Result[T, E]` (`Ok`/`Err`) for error handling without exceptions in the
@@ -120,4 +125,24 @@ pytest
 - Pure text machinery (paragraph splitting, token-budget chunking, cache
   keys, SSE and `<think>` tag state machines) is fully separated from
   effects, which live in the console/status line and the injected HTTP
-  opener (`Context.open_http`).
+  opener (`Context.open_http`). Clocks are injected the same way:
+  log stamps, run-log paths, the status line, and `Context.clock` all take
+  their time source from the caller.
+- Module map (dependencies point downward only):
+
+  - `monads` — `Result`, `IO`, `fold_io`, lazy `fold_while`; no imports
+    from the rest of the package.
+  - `text` — pure string machinery, token estimates, ASCII folding,
+    cache keys, usage arithmetic.
+  - `effects` — the IO vocabulary: stdin/stdout, TOML and cache files,
+    the run log (with an injected clock).
+  - `console` — the status line and stderr reporting; the one mutable
+    component, by design.
+  - `config` — TOML/config/argument parsing and merging; `Context`, the
+    immutable bundle everything downstream receives.
+  - `http` — request payloads, reply parsing, the SSE stream fold, and
+    `chat`; effects are IO values, never executed inline.
+  - `pipeline` — pass planning and execution: pure planners
+    (`plan_unit_calls`) produce data, IO executors (`run_unit`) run it.
+  - `cli` — argument parsing, wiring, and the single entry point that
+    runs the composed program.
