@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "zh2en"
 description = "Translate Chinese text from stdin to English on stdout."
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = []
 dynamic = ["version"]
 
@@ -31,13 +31,13 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B"]
 
 [tool.mypy]
 strict = true
-python_version = "3.11"
+python_version = "3.14"
 mypy_path = [".", "tests"]
 files = ["zh2en.py", "tests"]
