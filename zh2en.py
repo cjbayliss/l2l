@@ -290,15 +290,19 @@ def estimate_tokens(text: str) -> int:
 
 
 def split_paragraphs(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    blank_pattern = re.compile(r"\n\s*\n")
-    blanks = blank_pattern.findall(text)
-    lone_newlines = text.count("\n") - sum(blank.count("\n") for blank in blanks)
-    separator_pattern = r"(\n+)" if lone_newlines >= 3 * len(blanks) else r"(\n\s*\n)"
+    blanks = re.compile(r"\n\s*\n").findall(text)
+    separator_pattern = (
+        r"(\n+)"
+        if text.count("\n") - sum(blank.count("\n") for blank in blanks)
+        >= 3 * len(blanks)
+        else r"(\n\s*\n)"
+    )
     parts = re.split(separator_pattern, text)
     is_separator = re.compile(separator_pattern).fullmatch
-    paragraphs = tuple(part for part in parts if part and not is_separator(part))
-    separators = tuple(part for part in parts if part and is_separator(part))
-    return paragraphs, separators
+    return (
+        tuple(part for part in parts if part and not is_separator(part)),
+        tuple(part for part in parts if part and is_separator(part)),
+    )
 
 
 def ensure_blank_line_separators(text: str) -> str:
@@ -404,8 +408,6 @@ def split_units_to_budget(
 def unit_separators(
     plan: tuple[tuple[str, ...], ...], separators: tuple[str, ...]
 ) -> tuple[str, ...]:
-    ends = accumulate(map(len, plan))
-
     def trailing(index: int, end: int) -> str:
         if index >= len(plan) - 1:
             return ""
@@ -413,20 +415,22 @@ def unit_separators(
         position = end - 1
         return separators[position] if position < len(separators) else ""
 
-    return tuple(trailing(index, end) for index, end in enumerate(ends))
+    return tuple(
+        trailing(index, end) for index, end in enumerate(accumulate(map(len, plan)))
+    )
 
 
 def regroup_by_plan(
     paragraphs: tuple[str, ...], plan: tuple[tuple[str, ...], ...]
 ) -> tuple[tuple[str, ...], ...] | None:
-    total = sum(map(len, plan))
-    if len(paragraphs) != total:
+    if len(paragraphs) != sum(map(len, plan)):
         return None
 
-    starts = accumulate(map(len, plan), initial=0)
     return tuple(
         tuple(paragraphs[start : start + len(chunk)])
-        for start, chunk in zip(starts, plan, strict=False)
+        for start, chunk in zip(
+            accumulate(map(len, plan), initial=0), plan, strict=False
+        )
     )
 
 
@@ -440,28 +444,26 @@ def fmt_duration(seconds: float) -> str:
 def usage_line(
     label: str, elapsed: float, prompt_tokens: int, completion_tokens: int, cost: float
 ) -> str:
-    rate = completion_tokens / elapsed if elapsed else 0.0
     return "%s: %s, prompt=%d, completion=%d, %.1f tok/s, cost=$%.6f" % (
         label,
         fmt_duration(elapsed),
         prompt_tokens,
         completion_tokens,
-        rate,
+        completion_tokens / elapsed if elapsed else 0.0,
         cost,
     )
 
 
 def add_usage(usage: Usage, reported: Mapping[str, Any]) -> Usage:
-    prompt = reported.get("prompt_tokens") or 0
-    completion = reported.get("completion_tokens") or 0
     try:
         cost = float(reported.get("cost") or 0.0)
     except (TypeError, ValueError):
         cost = 0.0
 
     return Usage(
-        prompt_tokens=usage.prompt_tokens + prompt,
-        completion_tokens=usage.completion_tokens + completion,
+        prompt_tokens=usage.prompt_tokens + (reported.get("prompt_tokens") or 0),
+        completion_tokens=usage.completion_tokens
+        + (reported.get("completion_tokens") or 0),
         cost=usage.cost + cost,
     )
 
@@ -475,19 +477,23 @@ def usage_delta(start_usage: Usage, end_usage: Usage) -> tuple[int, int, float]:
 
 
 def non_ascii_sample(text: str, limit: int = 12) -> str:
-    distinct = dict.fromkeys(char for char in text if not char.isascii())
-    return "".join(tuple(distinct)[:limit])
+    return "".join(
+        tuple(dict.fromkeys(char for char in text if not char.isascii()))[:limit]
+    )
 
 
 def to_ascii_mechanical(text: str, character_map: Mapping[str, str]) -> str:
-    replaced = reduce(
-        lambda text, pair: text.replace(pair[0], pair[1]),
-        character_map.items(),
-        text,
-    )
-    normalized = unicodedata.normalize("NFKD", replaced)
     return "".join(
-        character for character in normalized if not unicodedata.combining(character)
+        character
+        for character in unicodedata.normalize(
+            "NFKD",
+            reduce(
+                lambda text, pair: text.replace(pair[0], pair[1]),
+                character_map.items(),
+                text,
+            ),
+        )
+        if not unicodedata.combining(character)
     )
 
 
@@ -773,18 +779,16 @@ def api_settings_from_environment(
         )
 
     initial: Result[dict[str, Any], str] = Ok({})
-    strings = reduce(
-        string_step,
-        (
-            ("TRANSLATE_BASE_URL", "base_url"),
-            ("TRANSLATE_API_KEY", "api_key"),
-            ("TRANSLATE_MODEL", "model"),
-        ),
-        initial,
-    )
-
     return result_bind(
-        strings,
+        reduce(
+            string_step,
+            (
+                ("TRANSLATE_BASE_URL", "base_url"),
+                ("TRANSLATE_API_KEY", "api_key"),
+                ("TRANSLATE_MODEL", "model"),
+            ),
+            initial,
+        ),
         lambda settings: result_bind(
             parse_number_setting(
                 environment, settings, "TRANSLATE_TIMEOUT", "timeout", float, "a number"
@@ -802,19 +806,21 @@ def api_settings_from_environment(
 
 
 def api_settings_from_arguments(arguments: Arguments) -> dict[str, Any]:
-    bindings = (
-        (arguments.base_url, "base_url"),
-        (arguments.api_key, "api_key"),
-        (arguments.model, "model"),
-        (arguments.timeout, "timeout"),
-        (arguments.max_tokens, "max_tokens"),
-    )
-
     def step(settings: dict[str, Any], binding: tuple[Any, str]) -> dict[str, Any]:
         value, key = binding
         return {**settings, key: value} if value is not None else settings
 
-    return reduce(step, bindings, {})
+    return reduce(
+        step,
+        (
+            (arguments.base_url, "base_url"),
+            (arguments.api_key, "api_key"),
+            (arguments.model, "model"),
+            (arguments.timeout, "timeout"),
+            (arguments.max_tokens, "max_tokens"),
+        ),
+        {},
+    )
 
 
 def missing_api_settings(config: Config) -> tuple[str, ...]:
@@ -948,10 +954,9 @@ def pass_definition_from(
 def apply_default_ascii(
     pass_definitions: tuple[PassDefinition, ...], options: Mapping[str, bool]
 ) -> tuple[PassDefinition, ...]:
-    default_ascii = options.get("ascii", False)
     return tuple(
         (
-            replace(pass_definition, ascii=default_ascii)
+            replace(pass_definition, ascii=options.get("ascii", False))
             if pass_definition.ascii is None
             else pass_definition
         )
@@ -962,22 +967,23 @@ def apply_default_ascii(
 def resolve_call_settings(
     config: Config, pass_definition: PassDefinition
 ) -> tuple[str, dict[str, Any]]:
-    params = {**dict(config.params), **dict(pass_definition.params)}
-    return (pass_definition.model or config.model), params
+    return (pass_definition.model or config.model), {
+        **dict(config.params),
+        **dict(pass_definition.params),
+    }
 
 
 def build_chat_payload(
     model: str, system: str, user: str, params: Mapping[str, Any]
 ) -> dict[str, Any]:
-    core: dict[str, Any] = {
-        "model": model,
-        "messages": (
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ),
-    }
     return {
-        **core,
+        **{
+            "model": model,
+            "messages": (
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ),
+        },
         **{key: value for key, value in params.items() if value is not None},
     }
 
@@ -1001,8 +1007,11 @@ def build_pass_user(
     analysis: str | None,
     context: tuple[str, ...] = (),
 ) -> str:
-    brief = analysis.strip() if analysis else ""
-    parts = [brief, *context_parts(context), source_chunk]
+    parts = [
+        analysis.strip() if analysis else "",
+        *context_parts(context),
+        source_chunk,
+    ]
     if work_chunk is not None and work_chunk != source_chunk:
         parts.append(work_chunk)
     return "\n\n".join(part for part in parts if part)
@@ -1189,8 +1198,10 @@ def stream_step(
     text_progress = 1 if text else 0
     progress_request = None
     if thinking_progress or text_progress:
-        label = ("Thinking" if thinking else "Working") if text else "Thinking"
-        progress_request = (label, thinking_progress + text_progress)
+        progress_request = (
+            ("Thinking" if thinking else "Working") if text else "Thinking",
+            thinking_progress + text_progress,
+        )
 
     return Ok(
         StreamState(
@@ -1263,15 +1274,19 @@ def build_unit_retry_user(
     bad_output: str,
     problem: str,
 ) -> str:
-    parts = [
-        "Your previous reply below does not satisfy the output rules: %s." % problem,
-        "Previous reply:\n%s" % bad_output,
-        *context_parts(context),
-        source_chunk,
-        "Translate the source text again, fixing the problem; output only "
-        "the translation.",
-    ]
-    return "\n\n".join(part for part in parts if part)
+    return "\n\n".join(
+        part
+        for part in (
+            "Your previous reply below does not satisfy the output rules: %s."
+            % problem,
+            "Previous reply:\n%s" % bad_output,
+            *context_parts(context),
+            source_chunk,
+            "Translate the source text again, fixing the problem; output only "
+            "the translation.",
+        )
+        if part
+    )
 
 
 def drop_non_ascii(
@@ -1284,15 +1299,16 @@ def drop_non_ascii(
     if fallback.isascii():
         return fallback, None
 
-    stripped = re.sub(
-        r"  +", " ", "".join(character for character in text if character.isascii())
+    return (
+        re.sub(
+            r"  +", " ", "".join(character for character in text if character.isascii())
+        ),
+        (
+            "zh2en: ascii: warning: paragraph %d still contained "
+            "non-ASCII characters (%s) after %d LLM attempts; dropping "
+            "them" % (index + 1, non_ascii_sample(text), attempts)
+        ),
     )
-    warning = (
-        "zh2en: ascii: warning: paragraph %d still contained "
-        "non-ASCII characters (%s) after %d LLM attempts; dropping "
-        "them" % (index + 1, non_ascii_sample(text), attempts)
-    )
-    return stripped, warning
 
 
 def now(clock: Callable[[], float]) -> IO[float]:
@@ -1337,8 +1353,10 @@ def resolve_cache_dir(
         if override:
             directory = override
         else:
-            base = environment.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
-            directory = os.path.join(base, "zh2en")
+            directory = os.path.join(
+                environment.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+                "zh2en",
+            )
 
         os.makedirs(directory, exist_ok=True)
         return directory
@@ -1394,9 +1412,11 @@ class RunLog:
 
 
 def run_log_path(cache_directory: str) -> str:
-    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    name = "%s-%d.log" % (stamp, os.getpid())
-    return os.path.join(cache_directory, "logs", name)
+    return os.path.join(
+        cache_directory,
+        "logs",
+        "%s-%d.log" % (time.strftime("%Y%m%d-%H%M%S", time.gmtime()), os.getpid()),
+    )
 
 
 def open_run_log(cache_directory: str) -> IO[RunLog]:
@@ -1429,8 +1449,7 @@ def log_entry(log: RunLog, label: str, body: str) -> IO[None]:
 def log_request(
     log: RunLog, payload: Mapping[str, Any], label: str = "REQUEST"
 ) -> IO[None]:
-    body = json.dumps(payload, indent=2, ensure_ascii=False)
-    return log_entry(log, label, body)
+    return log_entry(log, label, json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def log_error(log: RunLog, detail: str) -> IO[None]:
@@ -1459,8 +1478,10 @@ def urllib_open(request: Any, timeout: float) -> Result[Any, str]:
     try:
         return Ok(urllib.request.urlopen(request, timeout=timeout))
     except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", "replace")[:500]
-        return Err("HTTP %s from endpoint: %s" % (error.code, detail))
+        return Err(
+            "HTTP %s from endpoint: %s"
+            % (error.code, error.read().decode("utf-8", "replace")[:500])
+        )
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         return Err("could not reach endpoint: %s" % error)
 
@@ -1508,10 +1529,10 @@ def http_open_stream(ctx: Context, payload: Mapping[str, Any]) -> IO[Result[Any,
         ):
             return opened
 
-        retried = {
-            key: value for key, value in payload.items() if key != "stream_options"
-        }
-        return open_stream(retried, "REQUEST (stream, retry)")
+        return open_stream(
+            {key: value for key, value in payload.items() if key != "stream_options"},
+            "REQUEST (stream, retry)",
+        )
 
     return IO(thunk)
 
@@ -1608,11 +1629,6 @@ def chat(
         )
 
     payload = build_chat_payload(model, system, user, params)
-    call = (
-        streamed_call(ctx, payload)
-        if payload.get("stream", True)
-        else plain_call(ctx, payload)
-    )
 
     def stopped(
         reply_result: Result[ChatReply, str],
@@ -1624,7 +1640,14 @@ def chat(
 
     return io_bind(
         ctx.console.start("Working"),
-        lambda _: io_bind(call, stopped),
+        lambda _: io_bind(
+            (
+                streamed_call(ctx, payload)
+                if payload.get("stream", True)
+                else plain_call(ctx, payload)
+            ),
+            stopped,
+        ),
     )
 
 
@@ -1639,9 +1662,13 @@ def streamed_call(
         ctx.console.progress(label, count).run()
 
     def to_reply(state: StreamState) -> ChatReply:
-        held = state.think.held if state.think.checking and not state.think.open else ""
         return ChatReply(
-            content="".join(state.contents) + held,
+            content="".join(state.contents)
+            + (
+                state.think.held
+                if state.think.checking and not state.think.open
+                else ""
+            ),
             reasoning=state.reasoning,
             reported=state.reported,
             counted=state.counted,
@@ -1671,23 +1698,34 @@ def conclude_chat(
     if not isinstance(content, str):
         return io_result(Err("unexpected content type: %s" % type(content).__name__))
 
-    reasoning = reply.reasoning + ((think_text,) if think_text else ())
     messages = (
-        tuple(text.rstrip() for text in reasoning if text.strip())
+        tuple(
+            text.rstrip()
+            for text in reply.reasoning + ((think_text,) if think_text else ())
+            if text.strip()
+        )
         if ctx.verbose
         else ()
     )
 
     def finish(_: Result[tuple[()], str]) -> Result[tuple[str, Usage], str]:
         reported = reply.reported
-        new_usage = (
-            add_usage(usage, reported)
-            if reported
-            else add_usage(
-                usage, {"prompt_tokens": estimated, "completion_tokens": reply.counted}
+        return Ok(
+            (
+                content,
+                (
+                    add_usage(usage, reported)
+                    if reported
+                    else add_usage(
+                        usage,
+                        {
+                            "prompt_tokens": estimated,
+                            "completion_tokens": reply.counted,
+                        },
+                    )
+                ),
             )
         )
-        return Ok((content, new_usage))
 
     if messages:
         return io_map(log_all(ctx.console, messages), finish)
@@ -1711,15 +1749,20 @@ def run_analysis(
 def analyze_document(
     ctx: Context, pass_definition: PassDefinition, full_text: str, usage: Usage
 ) -> IO[Result[tuple[str, Usage], str]]:
-    overhead = estimate_tokens(pass_definition.instruction)
     budget = max(
-        ctx.config.max_tokens - overhead - ctx.settings.analysis_reserve_tokens, 1
+        ctx.config.max_tokens
+        - estimate_tokens(pass_definition.instruction)
+        - ctx.settings.analysis_reserve_tokens,
+        1,
     )
-    paragraphs, _ = split_paragraphs(full_text)
-    units = split_units_to_budget(
-        paragraphs, budget, ctx.settings.sentence_boundary_characters
+    chunks = make_chunks(
+        split_units_to_budget(
+            split_paragraphs(full_text)[0],
+            budget,
+            ctx.settings.sentence_boundary_characters,
+        ),
+        budget,
     )
-    chunks = make_chunks(units, budget)
     if len(chunks) > 1:
         return io_result(
             Err(
@@ -1736,9 +1779,8 @@ def analyze_document(
 def run_analysis_once(
     ctx: Context, pass_definition: PassDefinition, full_text: str, usage: Usage
 ) -> IO[Result[tuple[str, Usage], str]]:
-    salt = pass_salt(pass_definition)
     model, params = resolve_call_settings(ctx.config, pass_definition)
-    key = cache_key(full_text, model, salt, overrides=params)
+    key = cache_key(full_text, model, pass_salt(pass_definition), overrides=params)
 
     def compute(current_usage: Usage) -> IO[Result[tuple[str, Usage], str]]:
         def store(
@@ -1748,12 +1790,14 @@ def run_analysis_once(
                 return io_result(result)
 
             analysis, new_usage = result.value
-            write = (
-                cache_write(ctx.cache_directory, key, analysis)
-                if ctx.use_cache
-                else io_pure(None)
+            return io_map(
+                (
+                    cache_write(ctx.cache_directory, key, analysis)
+                    if ctx.use_cache
+                    else io_pure(None)
+                ),
+                lambda _: Ok((analysis, new_usage)),
             )
-            return io_map(write, lambda _: Ok((analysis, new_usage)))
 
         return io_bind(
             analyze_document(ctx, pass_definition, full_text, current_usage), store
@@ -1783,10 +1827,15 @@ def translate_chunk(
     usage: Usage,
     context: tuple[str, ...] = (),
 ) -> IO[Result[tuple[str, Usage], str]]:
-    system = pass_definition.instruction
-    user = build_pass_user(source_chunk, work_chunk, analysis, context)
     model, params = resolve_call_settings(ctx.config, pass_definition)
-    return chat(ctx, system, user, model, params, usage)
+    return chat(
+        ctx,
+        pass_definition.instruction,
+        build_pass_user(source_chunk, work_chunk, analysis, context),
+        model,
+        params,
+        usage,
+    )
 
 
 def ascii_fix_llm(
@@ -1797,15 +1846,20 @@ def ascii_fix_llm(
     usage: Usage,
 ) -> IO[Result[tuple[str, Usage], str]]:
     model, params = resolve_call_settings(ctx.config, pass_definition)
-    salt = "\x00".join(
-        (
-            CACHE_SALT_VERSION,
-            "ascii-fix",
-            pass_definition.name,
-            ctx.settings.ascii_fix_instruction,
-        )
+    key = cache_key(
+        source_paragraph,
+        model,
+        "\x00".join(
+            (
+                CACHE_SALT_VERSION,
+                "ascii-fix",
+                pass_definition.name,
+                ctx.settings.ascii_fix_instruction,
+            )
+        ),
+        output_paragraph,
+        overrides=params,
     )
-    key = cache_key(source_paragraph, model, salt, output_paragraph, overrides=params)
 
     def attempt(
         index: int, user: str, last_result: str, current_usage: Usage
@@ -1831,22 +1885,27 @@ def ascii_fix_llm(
         index: int, result: str, current_usage: Usage
     ) -> IO[Result[tuple[str, Usage], str]]:
         if result.isascii():
-            write = (
-                cache_write(ctx.cache_directory, key, result)
-                if ctx.use_cache
-                else io_pure(None)
+            return io_map(
+                (
+                    cache_write(ctx.cache_directory, key, result)
+                    if ctx.use_cache
+                    else io_pure(None)
+                ),
+                lambda _: Ok((result, current_usage)),
             )
-            return io_map(write, lambda _: Ok((result, current_usage)))
 
-        retry_user = build_ascii_retry_user(source_paragraph, output_paragraph, result)
-        retry_log = verbose_log(
-            ctx,
-            "zh2en: ascii: attempt %d/%d still non-ASCII; retrying"
-            % (index, ctx.settings.ascii_fix_attempts),
-        )
         return io_bind(
-            retry_log,
-            lambda _: attempt(index + 1, retry_user, result, current_usage),
+            verbose_log(
+                ctx,
+                "zh2en: ascii: attempt %d/%d still non-ASCII; retrying"
+                % (index, ctx.settings.ascii_fix_attempts),
+            ),
+            lambda _: attempt(
+                index + 1,
+                build_ascii_retry_user(source_paragraph, output_paragraph, result),
+                result,
+                current_usage,
+            ),
         )
 
     def start(current_usage: Usage) -> IO[Result[tuple[str, Usage], str]]:
@@ -1893,10 +1952,6 @@ def repair_paragraph(
             lambda _: Ok((mechanical + separator, usage)),
         )
 
-    source = (
-        source_paragraphs[index] if index < len(source_paragraphs) else "(unavailable)"
-    )
-
     def repaired(
         result: Result[tuple[str, Usage], str],
     ) -> IO[Result[tuple[str, Usage], str]]:
@@ -1924,7 +1979,18 @@ def repair_paragraph(
             "LLM to repair it" % (index + 1, total),
         ),
         lambda _: io_bind(
-            ascii_fix_llm(ctx, pass_definition, source, paragraph, usage), repaired
+            ascii_fix_llm(
+                ctx,
+                pass_definition,
+                (
+                    source_paragraphs[index]
+                    if index < len(source_paragraphs)
+                    else "(unavailable)"
+                ),
+                paragraph,
+                usage,
+            ),
+            repaired,
         ),
     )
 
@@ -1937,7 +2003,6 @@ def ensure_ascii_output(
     usage: Usage,
 ) -> IO[Result[tuple[str, Usage], str]]:
     paragraphs, separators = split_paragraphs(text)
-    total = len(paragraphs)
     accumulator_type = tuple[tuple[str, ...], Usage]
 
     def step(
@@ -1956,7 +2021,7 @@ def ensure_ascii_output(
                 paragraph,
                 separator,
                 index,
-                total,
+                len(paragraphs),
                 source_paragraphs,
                 current_usage,
             ),
@@ -1981,13 +2046,6 @@ def enforce_pass_ascii(
     started_at: float,
     clock: Callable[[], float],
 ) -> IO[Result[tuple[str, Usage], str]]:
-    program = io_bind(
-        ctx.console.write_partial("Enforcing ASCII... "),
-        lambda _: ensure_ascii_output(
-            ctx, pass_definition, text, source_paragraphs, usage
-        ),
-    )
-
     def conclude(
         result: Result[tuple[str, Usage], str],
     ) -> IO[Result[tuple[str, Usage], str]]:
@@ -2004,16 +2062,26 @@ def enforce_pass_ascii(
         prompt, completion, cost = usage_delta(usage, new_usage)
 
         def report(ended_at: float) -> IO[Result[tuple[str, Usage], str]]:
-            message = (
-                usage_line("Done", ended_at - started_at, prompt, completion, cost)
-                if prompt or completion or cost
-                else "Done."
+            return io_map(
+                ctx.console.finish(
+                    usage_line("Done", ended_at - started_at, prompt, completion, cost)
+                    if prompt or completion or cost
+                    else "Done."
+                ),
+                lambda _: Ok((fixed, new_usage)),
             )
-            return io_map(ctx.console.finish(message), lambda _: Ok((fixed, new_usage)))
 
         return io_bind(now(clock), report)
 
-    return io_bind(program, conclude)
+    return io_bind(
+        io_bind(
+            ctx.console.write_partial("Enforcing ASCII... "),
+            lambda _: ensure_ascii_output(
+                ctx, pass_definition, text, source_paragraphs, usage
+            ),
+        ),
+        conclude,
+    )
 
 
 def log_stage(
@@ -2067,12 +2135,6 @@ def run_analysis_pass(
     source_paragraphs: tuple[str, ...],
     clock: Callable[[], float],
 ) -> IO[Result[State, str]]:
-    intro_log = verbose_log(
-        ctx,
-        "zh2en: [%s] whole-document analysis (%d characters, ~%d tokens)"
-        % (pass_definition.name, len(state.text), estimate_tokens(state.text)),
-    )
-
     def after_analysis(
         analysis_result: Result[tuple[str, Usage], str],
     ) -> IO[Result[State, str]]:
@@ -2085,7 +2147,6 @@ def run_analysis_pass(
             )
 
         analysis, analysis_usage = analysis_result.value
-        next_state = State(text=state.text, analysis=analysis, usage=analysis_usage)
 
         def after_stage(ended_at: float) -> IO[Result[State, str]]:
             return io_bind(
@@ -2098,14 +2159,22 @@ def run_analysis_pass(
                     analysis_usage,
                 ),
                 lambda _: conclude_state(
-                    ctx, pass_definition, next_state, source_paragraphs, clock
+                    ctx,
+                    pass_definition,
+                    State(text=state.text, analysis=analysis, usage=analysis_usage),
+                    source_paragraphs,
+                    clock,
                 ),
             )
 
         return io_bind(now(clock), after_stage)
 
     return io_bind(
-        intro_log,
+        verbose_log(
+            ctx,
+            "zh2en: [%s] whole-document analysis (%d characters, ~%d tokens)"
+            % (pass_definition.name, len(state.text), estimate_tokens(state.text)),
+        ),
         lambda _: io_bind(
             run_analysis_once(ctx, pass_definition, state.text, state.usage),
             after_analysis,
@@ -2123,7 +2192,6 @@ def run_units(
     usage: Usage,
 ) -> IO[Result[tuple[tuple[str, ...], Usage], str]]:
     model, params = resolve_call_settings(ctx.config, pass_definition)
-    salt = pass_salt(pass_definition)
     total = len(work_groups)
     accumulator_type = tuple[tuple[str, ...], Usage]
     outcome_type = tuple[str, bool, Usage]
@@ -2136,9 +2204,9 @@ def run_units(
 
         start = plan_starts[index]
         end = plan_starts[index + 1]
-        before = flat_plan[start - 1 : start] if start > 0 else ()
-        after = flat_plan[end : end + 1] if end < len(flat_plan) else ()
-        return before + after
+        return (flat_plan[start - 1 : start] if start > 0 else ()) + (
+            flat_plan[end : end + 1] if end < len(flat_plan) else ()
+        )
 
     def step(
         accumulator: accumulator_type, indexed: tuple[int, tuple[str, ...]]
@@ -2151,7 +2219,7 @@ def run_units(
         key = cache_key(
             source_chunk_text,
             model,
-            salt,
+            pass_salt(pass_definition),
             work_chunk_text,
             overrides=params,
             context="\n\n".join(context),
@@ -2191,45 +2259,42 @@ def run_units(
             problem: str,
         ) -> IO[Result[outcome_type, str]]:
             if attempt_index > ctx.settings.unit_fix_attempts:
-                warning = (
-                    "zh2en: [%s] unit %d/%d failed validation %d time(s); "
-                    "last problem: %s. Keeping the last reply, uncached"
+                return io_map(
+                    ctx.console.log(
+                        "zh2en: [%s] unit %d/%d failed validation %d time(s); "
+                        "last problem: %s. Keeping the last reply, uncached"
+                        % (
+                            pass_definition.name,
+                            index + 1,
+                            total,
+                            ctx.settings.unit_fix_attempts,
+                            problem,
+                        )
+                    ),
+                    lambda _: Ok((bad_output, False, unit_usage)),
+                )
+
+            return io_bind(
+                verbose_log(
+                    ctx,
+                    "zh2en: [%s] unit %d/%d failed validation (%s); repair "
+                    "attempt %d/%d"
                     % (
                         pass_definition.name,
                         index + 1,
                         total,
-                        ctx.settings.unit_fix_attempts,
                         problem,
-                    )
-                )
-                return io_map(
-                    ctx.console.log(warning),
-                    lambda _: Ok((bad_output, False, unit_usage)),
-                )
-
-            retry_log = verbose_log(
-                ctx,
-                "zh2en: [%s] unit %d/%d failed validation (%s); repair "
-                "attempt %d/%d"
-                % (
-                    pass_definition.name,
-                    index + 1,
-                    total,
-                    problem,
-                    attempt_index,
-                    ctx.settings.unit_fix_attempts,
+                        attempt_index,
+                        ctx.settings.unit_fix_attempts,
+                    ),
                 ),
-            )
-            retry_user = build_unit_retry_user(
-                source_chunk_text, context, bad_output, problem
-            )
-            return io_bind(
-                retry_log,
                 lambda _: io_bind(
                     chat(
                         ctx,
                         pass_definition.instruction,
-                        retry_user,
+                        build_unit_retry_user(
+                            source_chunk_text, context, bad_output, problem
+                        ),
                         model,
                         params,
                         unit_usage,
@@ -2282,14 +2347,13 @@ def run_units(
                     )
 
                 translated, valid, new_usage = result.value
-                write = (
-                    cache_write(ctx.cache_directory, key, translated)
-                    if valid and ctx.use_cache
-                    else io_pure(None)
-                )
                 return io_map(
                     io_bind(
-                        write,
+                        (
+                            cache_write(ctx.cache_directory, key, translated)
+                            if valid and ctx.use_cache
+                            else io_pure(None)
+                        ),
                         lambda _: note(
                             "zh2en: [%s] unit %d/%d done"
                             % (pass_definition.name, index + 1, total)
@@ -2364,17 +2428,16 @@ def run_text_pass_once(
     )
 
     def proceed(_: None) -> IO[Result[State, str]]:
-        trailing_separators = unit_separators(plan, separators)
-
         def after_units(
             units_result: Result[tuple[tuple[str, ...], Usage], str],
         ) -> IO[Result[State, str]]:
             if isinstance(units_result, Err):
                 return io_result(units_result)
 
-            text = ensure_blank_line_separators("".join(units_result.value[0]))
             next_state = State(
-                text=text, analysis=state.analysis, usage=units_result.value[1]
+                text=ensure_blank_line_separators("".join(units_result.value[0])),
+                analysis=state.analysis,
+                usage=units_result.value[1],
             )
 
             def after_stage(ended_at: float) -> IO[Result[State, str]]:
@@ -2404,7 +2467,7 @@ def run_text_pass_once(
                     pass_definition,
                     work_groups,
                     plan,
-                    trailing_separators,
+                    unit_separators(plan, separators),
                     state.analysis,
                     state.usage,
                 ),
@@ -2482,15 +2545,18 @@ def run_text_pass(
                 lambda _: result,
             )
 
-        warning = mismatch_message(
-            count, "re-running the pass with one call per paragraph"
-        )
-        retried_state = replace(state, usage=result.value.usage)
-        paragraph_pass = replace(pass_definition, mode="paragraph")
         return io_bind(
-            ctx.console.log(warning),
+            ctx.console.log(
+                mismatch_message(
+                    count, "re-running the pass with one call per paragraph"
+                )
+            ),
             lambda _: io_bind(
-                attempt(paragraph_pass, retried_state, clock()),
+                attempt(
+                    replace(pass_definition, mode="paragraph"),
+                    replace(state, usage=result.value.usage),
+                    clock(),
+                ),
                 after_retry,
             ),
         )
@@ -2537,8 +2603,6 @@ def run_passes(
     paragraph_plan: tuple[tuple[str, ...], ...],
     clock: Callable[[], float],
 ) -> IO[Result[State, str]]:
-    total = len(pass_definitions)
-
     def step(
         current_state: State, indexed: tuple[int, PassDefinition]
     ) -> IO[Result[State, str]]:
@@ -2548,7 +2612,7 @@ def run_passes(
             return io_bind(
                 ctx.console.log(
                     "Starting pass %d/%d [%s]..."
-                    % (number, total, pass_definition.name)
+                    % (number, len(pass_definitions), pass_definition.name)
                 ),
                 lambda _: run_pass(
                     ctx,
@@ -2565,16 +2629,14 @@ def run_passes(
 
         return io_bind(now(clock), launch)
 
-    initial: Result[State, str] = Ok(state)
-    return fold_io(enumerate(pass_definitions, 1), step, initial)
+    return fold_io(enumerate(pass_definitions, 1), step, Ok(state))
 
 
 def load_instruction_text(
     path: str, name: str, table: dict[str, Any], base_directory: str
 ) -> IO[Result[str, str]]:
-    has_file = "instruction_file" in table
     has_inline = "instruction" in table
-    if has_file == has_inline:
+    if ("instruction_file" in table) == has_inline:
         return io_result(
             Err(
                 "%s: [[pass]] %s: exactly one of instruction_file or instruction "
@@ -2597,11 +2659,11 @@ def load_instruction_text(
             Err("%s: [[pass]] %s: instruction_file must be a path" % (path, name))
         )
 
-    instruction_path = os.path.join(base_directory, instruction_file)
-
     def thunk() -> Result[str, str]:
         try:
-            with open(instruction_path, encoding="utf-8") as handle:
+            with open(
+                os.path.join(base_directory, instruction_file), encoding="utf-8"
+            ) as handle:
                 instruction = handle.read().strip()
         except OSError as error:
             return Err(
@@ -2660,9 +2722,11 @@ def document_passes(
     ):
         return io_result(Err("%s: [[pass]] must define one or more pass tables" % path))
 
-    base_directory = os.path.dirname(os.path.abspath(path))
     return io_map(
-        io_sequence(parse_pass_table(path, entry, base_directory) for entry in entries),
+        io_sequence(
+            parse_pass_table(path, entry, os.path.dirname(os.path.abspath(path)))
+            for entry in entries
+        ),
         results_sequence,
     )
 
@@ -2792,29 +2856,32 @@ def load_setup(
                             tuple[dict[str, bool], tuple[PassDefinition, ...]], str
                         ],
                     ) -> IO[Result[Setup, str]]:
-                        setup_result = result_bind(
-                            merged_api_settings(
-                                arguments,
-                                environment,
-                                user_path,
-                                user_document_result,
-                                selected_path,
-                                selected_document_result,
-                            ),
-                            lambda config: result_bind(
-                                passes_result,
-                                lambda pair: Ok(
-                                    Setup(
-                                        config=config,
-                                        passes=apply_default_ascii(pair[1], pair[0]),
-                                        ensure_paragraphs=pair[0].get(
-                                            "ensure_paragraphs", False
-                                        ),
-                                    )
+                        return io_result(
+                            result_bind(
+                                merged_api_settings(
+                                    arguments,
+                                    environment,
+                                    user_path,
+                                    user_document_result,
+                                    selected_path,
+                                    selected_document_result,
                                 ),
-                            ),
+                                lambda config: result_bind(
+                                    passes_result,
+                                    lambda pair: Ok(
+                                        Setup(
+                                            config=config,
+                                            passes=apply_default_ascii(
+                                                pair[1], pair[0]
+                                            ),
+                                            ensure_paragraphs=pair[0].get(
+                                                "ensure_paragraphs", False
+                                            ),
+                                        )
+                                    ),
+                                ),
+                            )
                         )
-                        return io_result(setup_result)
 
                     return io_bind(
                         resolve_passes(
@@ -2927,8 +2994,7 @@ class StatusLine:
         def thunk() -> None:
             self._halt()
             with self._lock:
-                rewrote = self._erase()
-                if rewrote and self._view.prefix:
+                if self._erase() and self._view.prefix:
                     self._stream.write(self._view.prefix)
                     self._view = replace(self._view, drawn=self._view.prefix)
 
@@ -2959,9 +3025,9 @@ class StatusLine:
         def thunk() -> None:
             self._halt()
             with self._lock:
-                rewrote = self._erase()
-                prefix = self._view.prefix if rewrote else ""
-                self._stream.write(prefix + text + "\n")
+                self._stream.write(
+                    (self._view.prefix if self._erase() else "") + text + "\n"
+                )
                 self._view = replace(self._view, prefix="", drawn="")
                 self._stream.flush()
 
@@ -2981,8 +3047,9 @@ class StatusLine:
 
     def _draw(self, now_value: float) -> None:
         full = status_line_text(self._view, now_value)
-        padding = max(len(self._view.drawn) - len(full), 0)
-        self._stream.write("\r" + full + " " * padding)
+        self._stream.write(
+            "\r" + full + " " * max(len(self._view.drawn) - len(full), 0)
+        )
         self._stream.flush()
         self._view = replace(self._view, drawn=full)
 
@@ -3119,9 +3186,6 @@ def run_pipeline(
     clock: Callable[[], float],
 ) -> IO[int]:
     source_paragraphs, separators = split_paragraphs(text)
-    chunk_plan = make_chunks(source_paragraphs, ctx.settings.chunk_budget_tokens)
-    paragraph_plan = tuple((paragraph,) for paragraph in source_paragraphs)
-    initial_state = State(text=text, analysis=None, usage=Usage())
 
     def conclude(result: Result[State, str]) -> IO[int]:
         if isinstance(result, Err):
@@ -3133,11 +3197,11 @@ def run_pipeline(
         run_passes(
             ctx,
             pass_definitions,
-            initial_state,
+            State(text=text, analysis=None, usage=Usage()),
             source_paragraphs,
             separators,
-            chunk_plan,
-            paragraph_plan,
+            make_chunks(source_paragraphs, ctx.settings.chunk_budget_tokens),
+            tuple((paragraph,) for paragraph in source_paragraphs),
             clock,
         ),
         conclude,
@@ -3153,11 +3217,6 @@ def finish_output(
 ) -> IO[int]:
     def after_write(_: None) -> IO[int]:
         total_elapsed = clock() - started
-        done_log = (
-            ctx.console.log("zh2en: done in %.1fs" % total_elapsed)
-            if ctx.verbose
-            else io_pure(None)
-        )
 
         def after_done(_: None) -> IO[int]:
             return io_map(
@@ -3173,7 +3232,14 @@ def finish_output(
                 lambda _: 0,
             )
 
-        return io_bind(done_log, after_done)
+        return io_bind(
+            (
+                ctx.console.log("zh2en: done in %.1fs" % total_elapsed)
+                if ctx.verbose
+                else io_pure(None)
+            ),
+            after_done,
+        )
 
     return io_bind(write_stdout(stdout, state.text), after_write)
 
@@ -3215,27 +3281,30 @@ def run_main_program(
 
         def with_cache_dir(cache_directory: str) -> IO[int]:
             def with_log(log: RunLog) -> IO[int]:
-                ctx = Context(
-                    config=setup.config,
-                    settings=build_settings(),
-                    use_cache=not parsed.no_cache,
-                    cache_directory=cache_directory,
-                    verbose=parsed.verbose,
-                    ensure_paragraphs=parsed.ensure_paragraphs
-                    or setup.ensure_paragraphs,
-                    console=console,
-                    open_http=urllib_open,
-                    log=log,
-                )
-                announce = (
-                    console.log("zh2en: log: %s" % log.path)
-                    if parsed.show_log_path
-                    else io_pure(None)
-                )
                 return io_bind(
-                    announce,
+                    (
+                        console.log("zh2en: log: %s" % log.path)
+                        if parsed.show_log_path
+                        else io_pure(None)
+                    ),
                     lambda _: run_pipeline(
-                        ctx, setup.passes, text, started, stdout, clock
+                        Context(
+                            config=setup.config,
+                            settings=build_settings(),
+                            use_cache=not parsed.no_cache,
+                            cache_directory=cache_directory,
+                            verbose=parsed.verbose,
+                            ensure_paragraphs=parsed.ensure_paragraphs
+                            or setup.ensure_paragraphs,
+                            console=console,
+                            open_http=urllib_open,
+                            log=log,
+                        ),
+                        setup.passes,
+                        text,
+                        started,
+                        stdout,
+                        clock,
                     ),
                 )
 
