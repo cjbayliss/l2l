@@ -83,6 +83,7 @@ def make_context(
     max_tokens: int = 100000,
     log: RunLog | None = None,
     ensure_paragraphs: bool = False,
+    stream: bool | None = None,
 ) -> Context:
     config = Config(
         base_url="http://endpoint.test/v1",
@@ -104,6 +105,7 @@ def make_context(
         log=log if log is not None else RunLog("", time.time),
         clock=time.time,
         sleep=recording_sleep,
+        stream=stream,
     )
 
 

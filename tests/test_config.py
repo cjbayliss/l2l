@@ -6,12 +6,14 @@ from zh2en.config import (
     Config,
     PartialApiSettings,
     PassDefinition,
+    Setup,
     api_settings_from_arguments,
     api_settings_from_environment,
     apply_default_ascii,
     build_config,
     document_api_settings,
     load_instruction_text,
+    mask_api_key,
     max_tokens_api_setting,
     merge_api_settings,
     merged_api_settings,
@@ -22,6 +24,7 @@ from zh2en.config import (
     resolve_call_settings,
     resolve_config_path,
     resolve_passes,
+    setup_report,
     string_api_setting,
     timeout_api_setting,
     validate_document,
@@ -266,3 +269,38 @@ def test_resolve_config_path_requested_and_environment() -> None:
     assert resolve_config_path("a.toml", {}).run() == "a.toml"
     result = resolve_config_path(None, {"TRANSLATE_CONFIG": " b.toml "}).run()
     assert result == "b.toml"
+
+
+def test_mask_api_key() -> None:
+    assert mask_api_key("secret-key") == "secr...ey"
+    assert mask_api_key("short") == "***"
+    assert mask_api_key("") == "***"
+
+
+def test_setup_report_lists_api_and_passes() -> None:
+    setup = Setup(
+        config=Config(
+            base_url="http://endpoint.test/v1",
+            api_key="secret-key",
+            model="m",
+            timeout=30.0,
+            max_tokens=1000,
+            params={"temperature": 1},
+        ),
+        passes=(
+            PassDefinition(
+                "translate", "T.", "chunk", {"reasoning": "high"}, None, True
+            ),
+        ),
+        ensure_paragraphs=False,
+    )
+    report = setup_report(setup, True)
+    assert "api.base_url: http://endpoint.test/v1" in report
+    assert "api.model: m" in report
+    assert "api.api_key: secr...ey" in report
+    assert '"temperature": 1' in report
+    assert (
+        "pass 1/1 [translate]: mode=chunk ascii=True model=<default>"
+        " instruction=2 chars" in report
+    )
+    assert "options.ensure_paragraphs: True" in report

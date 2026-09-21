@@ -182,3 +182,40 @@ def log_request(
 
 def log_error(log: RunLog, detail: str) -> IO[None]:
     return log_entry(log, "ERROR", detail)
+
+
+def cache_entry_paths(cache_directory: str) -> IO[tuple[str, ...]]:
+    def thunk() -> tuple[str, ...]:
+        try:
+            entries = tuple(os.scandir(cache_directory))
+        except OSError:
+            return ()
+
+        return tuple(
+            entry.path
+            for entry in entries
+            if entry.is_file() and entry.name.endswith(".txt")
+        )
+
+    return IO(thunk)
+
+
+def file_age(path: str, now_value: float) -> IO[float]:
+    def thunk() -> float:
+        try:
+            return max(now_value - os.path.getmtime(path), 0.0)
+        except OSError:
+            return 0.0
+
+    return IO(thunk)
+
+
+def remove_file(path: str) -> IO[bool]:
+    def thunk() -> bool:
+        try:
+            os.remove(path)
+            return True
+        except OSError:
+            return False
+
+    return IO(thunk)

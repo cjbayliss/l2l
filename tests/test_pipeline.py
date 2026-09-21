@@ -24,7 +24,7 @@ from zh2en.errors import TranslationError, describe, fail_http
 from zh2en.http import chat
 from zh2en.monads import IO, Err, Ok, Result, fold_io, fold_while, io_pure, io_result
 from zh2en.pipeline import analyze_document, run_pipeline
-from zh2en.plans import ascii_drop_warning, plan_unit_calls
+from zh2en.plans import ascii_drop_warning, plan_report, plan_unit_calls
 from zh2en.text import AsciiDrop, Usage, unit_separators
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
@@ -553,6 +553,176 @@ def test_parse_arguments_reraises_version_exit() -> None:
         cli.parse_arguments(["--version"]).run()
 
 
+def test_main_check_config_prints_report_without_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "zh2en.toml"
+    config_path.write_text(
+        "[api]\n"
+        'base_url = "http://endpoint.test/v1"\n'
+        'api_key = "secret-key"\n'
+        'model = "m"\n'
+        "\n[[pass]]\n"
+        'name = "translate"\n'
+        'mode = "chunk"\n'
+        'instruction = "Translate."'
+    )
+    http = FakeHttp([])
+    monkeypatch.setattr(cli, "urllib_open", http.open)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [str(config_path), "--check-config"],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+    ).run()
+    assert code == 0
+    report = stdout.getvalue()
+    assert "api.base_url: http://endpoint.test/v1" in report
+    assert "api.model: m" in report
+    assert "api.api_key: secr...ey" in report
+    assert "pass 1/1 [translate]: mode=chunk" in report
+    assert http.requests == []
+
+
+def test_main_check_config_reports_config_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "urllib_open", FakeHttp([]).open)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [str(tmp_path / "missing.toml"), "--check-config"],
+        {},
+        io.StringIO(""),
+        stdout,
+        stderr,
+        time.time,
+    ).run()
+    assert code == 2
+    assert "zh2en: config file not found" in stderr.getvalue()
+
+
+def test_main_dry_run_prints_plan_without_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "zh2en.toml"
+    config_path.write_text(
+        "[api]\n"
+        'base_url = "http://endpoint.test/v1"\n'
+        'api_key = "key"\n'
+        'model = "m"\n'
+        "\n[[pass]]\n"
+        'name = "translate"\n'
+        'mode = "chunk"\n'
+        'instruction = "Translate."'
+    )
+    http = FakeHttp([])
+    monkeypatch.setattr(cli, "urllib_open", http.open)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [str(config_path), "--dry-run"],
+        {},
+        io.StringIO("你好。\n\n世界。"),
+        stdout,
+        stderr,
+        time.time,
+    ).run()
+    assert code == 0
+    plan = stdout.getvalue()
+    assert "source: 8 character(s), 2 paragraph(s), ~7 tokens" in plan
+    assert "pass 1/1 [translate]: mode=chunk, 1 unit(s)" in plan
+    assert "cache key " in plan
+    assert http.requests == []
+
+
+def test_main_no_stream_flag_forces_plain_responses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "zh2en.toml"
+    config_path.write_text(
+        "[api]\n"
+        'base_url = "http://endpoint.test/v1"\n'
+        'api_key = "key"\n'
+        'model = "m"\n'
+        "max_tokens = 1000\n"
+        "\n[[pass]]\n"
+        'name = "translate"\n'
+        'mode = "chunk"\n'
+        'instruction = "Translate."'
+    )
+    body = {
+        "choices": [{"message": {"content": "Plain."}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
+    }
+    http = FakeHttp([FakePlainResponse(body)])
+    monkeypatch.setattr(cli, "urllib_open", http.open)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [str(config_path), "--no-stream", "--no-cache"],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Plain.\n"
+    assert json.loads(http.requests[0].data)["stream"] is False
+
+
+def test_main_cache_prune_removes_old_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+    old = cache_directory / "old.txt"
+    old.write_text("stale", encoding="utf-8")
+    fresh = cache_directory / "fresh.txt"
+    fresh.write_text("keep", encoding="utf-8")
+    month_ago = time.time() - 40 * 86400
+    os.utime(old, (month_ago, month_ago))
+
+    monkeypatch.setattr(cli, "urllib_open", FakeHttp([]).open)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(tmp_path / "unused.toml"),
+            "--cache-prune",
+            "30",
+            "--cache-dir",
+            str(cache_directory),
+        ],
+        {},
+        io.StringIO(""),
+        stdout,
+        stderr,
+        time.time,
+    ).run()
+    assert code == 0
+    assert not old.exists()
+    assert fresh.exists()
+    assert "pruned 1 cache entry" in stderr.getvalue()
+
+
+def test_main_cache_prune_rejects_non_positive_days(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "urllib_open", FakeHttp([]).open)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        ["--cache-prune", "0", "--cache-dir", str(tmp_path)],
+        {},
+        io.StringIO(""),
+        stdout,
+        stderr,
+        time.time,
+    ).run()
+    assert code == 2
+    assert "positive number of days" in stderr.getvalue()
+
+
 def test_cli_exits_with_program_code(monkeypatch: pytest.MonkeyPatch) -> None:
     exits: list[int] = []
     monkeypatch.setattr(cli, "main", lambda *args: io_pure(3))
@@ -595,3 +765,24 @@ def test_parse_args_defaults() -> None:
 
     arguments = cli.parse_args(["cfg.toml", "--ensure-paragraphs"])
     assert arguments.ensure_paragraphs
+
+
+def test_plan_report_lists_units_and_keys() -> None:
+    console, _ = make_console()
+    ctx = make_context(console, FakeHttp([]).open)
+    text = "你好。\n\n世界。"
+    report = plan_report(ctx, (chunk_pass(), paragraph_pass()), text)
+    lines = report.splitlines()
+    assert lines[0] == "source: 8 character(s), 2 paragraph(s), ~7 tokens"
+    assert lines[1] == "pass 1/2 [translate]: mode=chunk, 1 unit(s)"
+    assert "unit 1/1: ~7 source tokens, cache key " in lines[2]
+    assert lines[3] == "pass 2/2 [translate]: mode=paragraph, 2 unit(s)"
+    assert "unit 1/2:" in lines[4] and "unit 2/2:" in lines[5]
+
+
+def test_plan_report_reports_analysis_pass() -> None:
+    console, _ = make_console()
+    ctx = make_context(console, FakeHttp([]).open)
+    analysis = PassDefinition("prep", "Brief.", "analysis", {}, None, False)
+    report = plan_report(ctx, (analysis,), "你好。")
+    assert "pass 1/1 [prep]: mode=analysis, 1 call with the whole document" in report

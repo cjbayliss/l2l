@@ -1,4 +1,5 @@
 import io
+import json
 import urllib.error
 from email.message import Message
 from typing import Any
@@ -139,3 +140,40 @@ def test_chat_gives_up_after_retry_budget() -> None:
     assert "could not reach endpoint: down" in describe(result.error)
     assert len(calls) == 3
     assert SLEEPS == [1.0, 2.0]
+
+
+def test_chat_context_stream_false_forces_plain() -> None:
+    console, _ = make_console()
+    body = {
+        "choices": [{"message": {"content": "Plain"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
+    }
+    http = FakeHttp([FakePlainResponse(body)])
+    ctx = make_context(console, http.open, stream=False)
+    result = chat(ctx, "s", "u", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == "Plain"
+    assert json.loads(http.requests[0].data)["stream"] is False
+
+
+def test_chat_context_stream_true_overrides_params() -> None:
+    console, _ = make_console()
+    chunks = with_usage(stream_chunks("Hi"), USAGE)
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    ctx = make_context(console, http.open, stream=True)
+    result = chat(ctx, "s", "u", "m", {"stream": False}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert json.loads(http.requests[0].data)["stream"] is True
+
+
+def test_chat_without_override_keeps_params_stream_false() -> None:
+    console, _ = make_console()
+    body = {
+        "choices": [{"message": {"content": "Plain"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
+    }
+    http = FakeHttp([FakePlainResponse(body)])
+    ctx = make_context(console, http.open)
+    result = chat(ctx, "s", "u", "m", {"stream": False}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert json.loads(http.requests[0].data)["stream"] is False
