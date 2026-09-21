@@ -2,6 +2,7 @@ import pytest
 
 from zh2en.config import build_settings
 from zh2en.http import build_chat_payload
+from zh2en.messages import usage_line
 from zh2en.monads import NOTHING, Just
 from zh2en.plans import (
     build_pass_user,
@@ -12,6 +13,7 @@ from zh2en.plans import (
 from zh2en.text import (
     AsciiDrop,
     Usage,
+    add_usage,
     cache_key,
     drop_non_ascii,
     ensure_blank_line_separators,
@@ -19,6 +21,7 @@ from zh2en.text import (
     is_cjk_char,
     make_chunks,
     non_ascii_sample,
+    parse_cost,
     regroup_by_plan,
     split_paragraphs,
     split_sentences,
@@ -27,7 +30,6 @@ from zh2en.text import (
     to_ascii_mechanical,
     unit_separators,
     usage_delta,
-    usage_line,
 )
 
 
@@ -130,6 +132,20 @@ def test_usage_line_and_delta() -> None:
     assert usage_delta(start, end) == pytest.approx((4, 4, 0.4))
     line = usage_line("Done", 30.0, 4, 4, 0.4)
     assert line.startswith("Done: 30.0s")
+
+
+def test_parse_cost_falls_back_to_zero() -> None:
+    assert parse_cost(0.25) == 0.25
+    assert parse_cost(None) == 0.0
+    assert parse_cost("nope") == 0.0
+    assert parse_cost([]) == 0.0
+
+
+def test_add_usage_accumulates() -> None:
+    total = add_usage(Usage(10, 5, 0.5), {"prompt_tokens": 4, "cost": 0.25})
+    assert total == Usage(14, 5, 0.75)
+    tolerated = add_usage(Usage(), {"cost": "bad"})
+    assert tolerated == Usage(0, 0, 0.0)
 
 
 def test_build_chat_payload() -> None:

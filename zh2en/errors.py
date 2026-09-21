@@ -111,19 +111,24 @@ def fail_ascii(pass_name: str, inner: TranslationError) -> Err[TranslationError]
 
 
 def describe_http(error: HttpError) -> str:
-    if error.kind == "status":
-        return "HTTP %s from endpoint: %s" % (error.status, error.detail)
+    match error.kind:
+        case "status":
+            return "HTTP %s from endpoint: %s" % (error.status, error.detail)
 
-    if error.kind == "unreachable":
-        return "could not reach endpoint: %s" % error.detail
+        case "unreachable":
+            return "could not reach endpoint: %s" % error.detail
 
-    if error.kind == "stream":
-        return "endpoint stream error: %s" % error.detail
+        case "stream":
+            return "endpoint stream error: %s" % error.detail
 
-    if error.kind == "interrupted":
-        return "stream interrupted: %s" % error.detail
+        case "interrupted":
+            return "stream interrupted: %s" % error.detail
 
-    return error.detail
+        case "protocol":
+            return error.detail
+
+        case other:
+            assert_never(other)
 
 
 def describe_budget(error: BudgetError) -> str:
@@ -140,32 +145,37 @@ def describe_budget(error: BudgetError) -> str:
 
 
 def describe(error: TranslationError) -> str:
-    if isinstance(error, ConfigError):
-        return "zh2en: " + error.message
+    match error:
+        case ConfigError():
+            return "zh2en: " + error.message
 
-    if isinstance(error, MissingSettings):
-        return "zh2en: missing required API settings: " + ", ".join(error.fields)
+        case MissingSettings():
+            return "zh2en: missing required API settings: " + ", ".join(error.fields)
 
-    if isinstance(error, HttpError):
-        return describe_http(error)
+        case HttpError():
+            return describe_http(error)
 
-    if isinstance(error, BudgetError):
-        return describe_budget(error)
+        case BudgetError():
+            return describe_budget(error)
 
-    if isinstance(error, PassError):
-        return "zh2en: pass [%s] failed: %s" % (error.pass_name, describe(error.inner))
+        case PassError():
+            return "zh2en: pass [%s] failed: %s" % (
+                error.pass_name,
+                describe(error.inner),
+            )
 
-    if isinstance(error, UnitError):
-        return "zh2en: [%s] failed on unit %d: %s" % (
-            error.pass_name,
-            error.unit_index,
-            describe(error.inner),
-        )
+        case UnitError():
+            return "zh2en: [%s] failed on unit %d: %s" % (
+                error.pass_name,
+                error.unit_index,
+                describe(error.inner),
+            )
 
-    if isinstance(error, AsciiError):
-        return "zh2en: pass [%s] ascii enforcement failed: %s" % (
-            error.pass_name,
-            describe(error.inner),
-        )
+        case AsciiError():
+            return "zh2en: pass [%s] ascii enforcement failed: %s" % (
+                error.pass_name,
+                describe(error.inner),
+            )
 
-    assert_never(error)
+        case other:
+            assert_never(other)

@@ -162,37 +162,19 @@ def regroup_by_plan(
     )
 
 
-def fmt_duration(seconds: float) -> str:
-    if seconds < 60:
-        return "%.1fs" % seconds
-
-    return "%dm%ds" % (int(seconds // 60), int(seconds % 60))
-
-
-def usage_line(
-    label: str, elapsed: float, prompt_tokens: int, completion_tokens: int, cost: float
-) -> str:
-    return "%s: %s, prompt=%d, completion=%d, %.1f tok/s, cost=$%.6f" % (
-        label,
-        fmt_duration(elapsed),
-        prompt_tokens,
-        completion_tokens,
-        completion_tokens / elapsed if elapsed else 0.0,
-        cost,
-    )
+def parse_cost(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def add_usage(usage: Usage, reported: Mapping[str, Any]) -> Usage:
-    try:
-        cost = float(reported.get("cost") or 0.0)
-    except (TypeError, ValueError):
-        cost = 0.0
-
     return Usage(
         prompt_tokens=usage.prompt_tokens + (reported.get("prompt_tokens") or 0),
         completion_tokens=usage.completion_tokens
         + (reported.get("completion_tokens") or 0),
-        cost=usage.cost + cost,
+        cost=usage.cost + parse_cost(reported.get("cost")),
     )
 
 

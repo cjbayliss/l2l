@@ -267,19 +267,16 @@ def plan_report(
     source_paragraphs, separators = split_paragraphs(text)
     chunk_plan = make_chunks(source_paragraphs, ctx.settings.chunk_budget_tokens)
     paragraph_plan = tuple((paragraph,) for paragraph in source_paragraphs)
-    lines = [
-        "source: %d character(s), %d paragraph(s), ~%d tokens"
-        % (len(text), len(source_paragraphs), estimate_tokens(text))
-    ]
 
-    def report_pass(indexed: tuple[int, PassDefinition]) -> None:
+    def report_pass(indexed: tuple[int, PassDefinition]) -> tuple[str, ...]:
         number, pass_definition = indexed
+        header = "pass %d/%d [%s]" % (
+            number,
+            len(pass_definitions),
+            pass_definition.name,
+        )
         if pass_definition.mode == "analysis":
-            lines.append(
-                "pass %d/%d [%s]: mode=analysis, 1 call with the whole document"
-                % (number, len(pass_definitions), pass_definition.name)
-            )
-            return
+            return ("%s: mode=analysis, 1 call with the whole document" % header,)
 
         plan = paragraph_plan if pass_definition.mode == "paragraph" else chunk_plan
         work_groups, warning = resolve_work_groups(
@@ -289,16 +286,6 @@ def plan_report(
             pass_definition.name,
             ctx.settings.chunk_budget_tokens,
         )
-        lines.append(
-            "pass %d/%d [%s]: mode=%s, %d unit(s)"
-            % (
-                number,
-                len(pass_definitions),
-                pass_definition.name,
-                pass_definition.mode,
-                len(work_groups),
-            )
-        )
         calls = plan_unit_calls(
             ctx,
             pass_definition,
@@ -306,20 +293,29 @@ def plan_report(
             work_groups,
             unit_separators(plan, separators),
         )
-        lines.extend(
-            "  unit %d/%d: ~%d source tokens, cache key %s..."
-            % (
-                call.index + 1,
-                call.total,
-                estimate_tokens(call.source_chunk),
-                call.key[:12],
-            )
-            for call in calls
+        return (
+            "%s: mode=%s, %d unit(s)"
+            % (header, pass_definition.mode, len(work_groups)),
+            *(
+                "  unit %d/%d: ~%d source tokens, cache key %s..."
+                % (
+                    call.index + 1,
+                    call.total,
+                    estimate_tokens(call.source_chunk),
+                    call.key[:12],
+                )
+                for call in calls
+            ),
+            *(("  warning: %s" % warning.value,) if isinstance(warning, Just) else ()),
         )
-        if isinstance(warning, Just):
-            lines.append("  warning: %s" % warning.value)
 
-    for indexed in enumerate(pass_definitions, 1):
-        report_pass(indexed)
-
+    lines = (
+        "source: %d character(s), %d paragraph(s), ~%d tokens"
+        % (len(text), len(source_paragraphs), estimate_tokens(text)),
+        *(
+            line
+            for indexed in enumerate(pass_definitions, 1)
+            for line in report_pass(indexed)
+        ),
+    )
     return "\n".join(lines)
