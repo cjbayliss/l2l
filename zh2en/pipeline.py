@@ -21,6 +21,25 @@ from zh2en.errors import (
     fail_unit,
 )
 from zh2en.http import chat
+from zh2en.messages import (
+    analysis_info_message,
+    ascii_cache_hit_message,
+    ascii_llm_message,
+    ascii_mechanical_message,
+    ascii_retry_message,
+    done_in_message,
+    paragraph_mismatch_message,
+    paragraph_still_differs_message,
+    pass_cache_hit_message,
+    pass_started_message,
+    stage_done_line,
+    unit_cache_hit_message,
+    unit_done_message,
+    unit_failed_validation_attempt,
+    unit_failed_validation_final,
+    unit_no_source_message,
+    usage_line,
+)
 from zh2en.monads import (
     IO,
     NOTHING,
@@ -68,7 +87,6 @@ from zh2en.text import (
     to_ascii_mechanical,
     unit_separators,
     usage_delta,
-    usage_line,
 )
 
 
@@ -175,7 +193,7 @@ def run_analysis_once(
             return compute(usage)
 
         return io_map(
-            verbose_log(ctx, "zh2en: [%s] cache hit" % pass_definition.name),
+            verbose_log(ctx, pass_cache_hit_message(pass_definition.name)),
             lambda _: Ok(Translated(cached.value, usage)),
         )
 
@@ -260,8 +278,7 @@ def ascii_fix_llm(
         return io_bind(
             verbose_log(
                 ctx,
-                "zh2en: ascii: attempt %d/%d still non-ASCII; retrying"
-                % (index, ctx.settings.ascii_fix_attempts),
+                ascii_retry_message(index, ctx.settings.ascii_fix_attempts),
             ),
             lambda _: attempt(
                 index + 1,
@@ -287,7 +304,7 @@ def ascii_fix_llm(
             return start(usage)
 
         return io_map(
-            verbose_log(ctx, "zh2en: ascii: cache hit"),
+            verbose_log(ctx, ascii_cache_hit_message()),
             lambda _: Ok(Translated(cached.value, usage)),
         )
 
@@ -307,11 +324,7 @@ def repair_paragraph(
     mechanical = to_ascii_mechanical(paragraph, ctx.settings.ascii_character_map)
     if mechanical.isascii():
         return io_map(
-            verbose_log(
-                ctx,
-                "zh2en: ascii: paragraph %d/%d converted mechanically"
-                % (index + 1, total),
-            ),
+            verbose_log(ctx, ascii_mechanical_message(index, total)),
             lambda _: Ok(Translated(mechanical + separator, usage)),
         )
 
@@ -338,11 +351,7 @@ def repair_paragraph(
         )
 
     return io_and_then(
-        verbose_log(
-            ctx,
-            "zh2en: ascii: paragraph %d/%d still non-ASCII; asking the "
-            "LLM to repair it" % (index + 1, total),
-        ),
+        verbose_log(ctx, ascii_llm_message(index, total)),
         io_bind(
             ascii_fix_llm(
                 ctx,
@@ -436,9 +445,9 @@ def enforce_pass_ascii(
         def report(ended_at: float) -> IO[Result[Translated, TranslationError]]:
             return io_map(
                 ctx.console.finish(
-                    usage_line("Done", ended_at - started_at, prompt, completion, cost)
-                    if prompt or completion or cost
-                    else "Done."
+                    stage_done_line(
+                        ended_at - started_at, prompt, completion, cost
+                    )
                 ),
                 lambda _: result,
             )
@@ -536,8 +545,9 @@ def run_analysis_pass(
     return io_bind(
         verbose_log(
             ctx,
-            "zh2en: [%s] whole-document analysis (%d characters, ~%d tokens)"
-            % (pass_definition.name, len(state.text), estimate_tokens(state.text)),
+            analysis_info_message(
+                pass_definition.name, len(state.text), estimate_tokens(state.text)
+            ),
         ),
         lambda _: io_bind(
             run_analysis_once(ctx, pass_definition, state.text, state.usage),
@@ -573,9 +583,7 @@ def run_unit(
         if attempt_index > ctx.settings.unit_fix_attempts:
             return io_map(
                 ctx.console.log(
-                    "zh2en: [%s] unit %d/%d failed validation %d time(s); "
-                    "last problem: %s. Keeping the last reply, uncached"
-                    % (
+                    unit_failed_validation_final(
                         pass_definition.name,
                         call.index + 1,
                         call.total,
@@ -589,9 +597,7 @@ def run_unit(
         return io_bind(
             verbose_log(
                 ctx,
-                "zh2en: [%s] unit %d/%d failed validation (%s); repair "
-                "attempt %d/%d"
-                % (
+                unit_failed_validation_attempt(
                     pass_definition.name,
                     call.index + 1,
                     call.total,
@@ -683,9 +689,9 @@ def run_units(
             return io_map(
                 verbose_log(
                     ctx,
-                    "zh2en: [%s] unit %d/%d has no matching source; "
-                    "passing it through unchanged"
-                    % (pass_definition.name, call.index + 1, call.total),
+                    unit_no_source_message(
+                        pass_definition.name, call.index + 1, call.total
+                    ),
                 ),
                 lambda _: Ok(
                     UnitsSoFar(
@@ -712,8 +718,9 @@ def run_units(
                 ),
                 lambda _: verbose_log(
                     ctx,
-                    "zh2en: [%s] unit %d/%d done"
-                    % (pass_definition.name, call.index + 1, call.total),
+                    unit_done_message(
+                        pass_definition.name, call.index + 1, call.total
+                    ),
                 ),
             )
             return io_map(
@@ -732,8 +739,9 @@ def run_units(
                 return io_map(
                     verbose_log(
                         ctx,
-                        "zh2en: [%s] unit %d/%d cache hit"
-                        % (pass_definition.name, call.index + 1, call.total),
+                        unit_cache_hit_message(
+                            pass_definition.name, call.index + 1, call.total
+                        ),
                     ),
                     lambda _: Ok(
                         UnitsSoFar(
@@ -863,11 +871,8 @@ def run_text_pass(
         return attempt(pass_definition, state, started_at)
 
     def mismatch_message(count: int, action: str) -> str:
-        return "zh2en: [%s] output has %d paragraph(s), source has %d; %s" % (
-            pass_definition.name,
-            count,
-            len(source_paragraphs),
-            action,
+        return paragraph_mismatch_message(
+            pass_definition.name, count, len(source_paragraphs), action
         )
 
     def after_retry(result: StateResult) -> IO[StateResult]:
@@ -880,8 +885,9 @@ def run_text_pass(
 
         return io_map(
             ctx.console.log(
-                "zh2en: [%s] paragraph count still differs (%d vs %d); continuing"
-                % (pass_definition.name, count, len(source_paragraphs))
+                paragraph_still_differs_message(
+                    pass_definition.name, count, len(source_paragraphs)
+                )
             ),
             lambda _: result,
         )
@@ -964,8 +970,9 @@ def run_passes(
         def launch(stage_started: float) -> IO[StateResult]:
             return io_and_then(
                 ctx.console.log(
-                    "Starting pass %d/%d [%s]..."
-                    % (number, len(pass_definitions), pass_definition.name)
+                    pass_started_message(
+                        number, len(pass_definitions), pass_definition.name
+                    )
                 ),
                 run_pass(
                     ctx,
@@ -1037,7 +1044,7 @@ def finish_output(
             )
 
         return io_bind(
-            verbose_log(ctx, "zh2en: done in %.1fs" % total_elapsed),
+            verbose_log(ctx, done_in_message(total_elapsed)),
             after_done,
         )
 

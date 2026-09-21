@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Any, Literal, assert_never
 
 from zh2en.console import Console
 from zh2en.effects import (
@@ -264,25 +264,32 @@ def validate_document(
     return Ok(None)
 
 
-STRING_API_KEYS = ("base_url", "api_key", "model")
+StringApiKey = Literal["base_url", "api_key", "model"]
+
+STRING_API_KEYS: tuple[StringApiKey, ...] = ("base_url", "api_key", "model")
 
 
 def string_api_setting(
     path: str, partial: PartialApiSettings, table: Mapping[str, Any]
 ) -> Result[PartialApiSettings, TranslationError]:
     def set_field(
-        partial: PartialApiSettings, key: str, value: str
+        partial: PartialApiSettings, key: StringApiKey, value: str
     ) -> PartialApiSettings:
-        if key == "base_url":
-            return replace(partial, base_url=value)
+        match key:
+            case "base_url":
+                return replace(partial, base_url=value)
 
-        if key == "api_key":
-            return replace(partial, api_key=value)
+            case "api_key":
+                return replace(partial, api_key=value)
 
-        return replace(partial, model=value)
+            case "model":
+                return replace(partial, model=value)
+
+            case other:
+                assert_never(other)
 
     def set_field_checked(
-        partial: PartialApiSettings, key: str
+        partial: PartialApiSettings, key: StringApiKey
     ) -> Result[PartialApiSettings, TranslationError]:
         if key not in table:
             return Ok(partial)
@@ -294,7 +301,7 @@ def string_api_setting(
         return Ok(set_field(partial, key, value.strip()))
 
     def step(
-        partial_result: Result[PartialApiSettings, TranslationError], key: str
+        partial_result: Result[PartialApiSettings, TranslationError], key: StringApiKey
     ) -> Result[PartialApiSettings, TranslationError]:
         return result_bind(
             partial_result, lambda partial: set_field_checked(partial, key)
@@ -933,31 +940,39 @@ def params_text(params: Mapping[str, Any]) -> str:
 
 def setup_report(setup: Setup, effective_ensure_paragraphs: bool) -> str:
     config = setup.config
-    lines = [
+    api_lines: tuple[str, ...] = (
         "api.base_url: %s" % config.base_url,
         "api.model: %s" % config.model,
         "api.timeout: %g" % config.timeout,
         "api.max_tokens: %d" % config.max_tokens,
         "api.api_key: %s" % mask_api_key(config.api_key),
-    ]
-    if config.params:
-        lines.append("api.params: %s" % params_text(config.params))
-
-    for number, pass_definition in enumerate(setup.passes, 1):
-        lines.append(
-            "pass %d/%d [%s]: mode=%s ascii=%s model=%s instruction=%d chars"
-            % (
-                number,
-                len(setup.passes),
-                pass_definition.name,
-                pass_definition.mode,
-                pass_definition.ascii,
-                pass_definition.model or "<default>",
-                len(pass_definition.instruction),
+        *(("api.params: %s" % params_text(config.params),) if config.params else ()),
+    )
+    pass_lines = tuple(
+        line
+        for number, pass_definition in enumerate(setup.passes, 1)
+        for line in (
+            (
+                "pass %d/%d [%s]: mode=%s ascii=%s model=%s instruction=%d chars"
+                % (
+                    number,
+                    len(setup.passes),
+                    pass_definition.name,
+                    pass_definition.mode,
+                    pass_definition.ascii,
+                    pass_definition.model or "<default>",
+                    len(pass_definition.instruction),
+                ),
+                *(
+                    ("  params: %s" % params_text(pass_definition.params),)
+                    if pass_definition.params
+                    else ()
+                ),
             )
         )
-        if pass_definition.params:
-            lines.append("  params: %s" % params_text(pass_definition.params))
-
-    lines.append("options.ensure_paragraphs: %s" % effective_ensure_paragraphs)
-    return "\n".join(lines)
+    )
+    return "\n".join(
+        api_lines
+        + pass_lines
+        + ("options.ensure_paragraphs: %s" % effective_ensure_paragraphs,)
+    )
