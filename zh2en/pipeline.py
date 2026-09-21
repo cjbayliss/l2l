@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import reduce
 from typing import TextIO
 
+from zh2en.cache import cache_lookup, cache_store, cached_translation
 from zh2en.config import (
     Context,
     PassDefinition,
@@ -11,7 +13,7 @@ from zh2en.config import (
     resolve_call_settings,
 )
 from zh2en.console import Console
-from zh2en.effects import cache_read, cache_write, now, write_stdout
+from zh2en.effects import now, write_stdout
 from zh2en.errors import (
     TranslationError,
     describe,
@@ -42,11 +44,9 @@ from zh2en.messages import (
 )
 from zh2en.monads import (
     IO,
-    NOTHING,
     Err,
     Just,
     Maybe,
-    Nothing,
     Ok,
     Result,
     fold_io,
@@ -55,6 +55,7 @@ from zh2en.monads import (
     io_map,
     io_pure,
     io_result,
+    io_traverse,
     io_when,
     maybe_either,
     result_bind_io,
@@ -86,6 +87,7 @@ from zh2en.text import (
     split_units_to_budget,
     to_ascii_mechanical,
     unit_separators,
+    usage_add,
     usage_delta,
 )
 
@@ -165,39 +167,13 @@ def run_analysis_once(
 ) -> IO[Result[Translated, TranslationError]]:
     model, params = resolve_call_settings(ctx.config, pass_definition)
     key = cache_key(full_text, model, pass_salt(pass_definition), overrides=params)
-
-    def compute(current_usage: Usage) -> IO[Result[Translated, TranslationError]]:
-        def store(
-            result: Result[Translated, TranslationError],
-        ) -> IO[Result[Translated, TranslationError]]:
-            if isinstance(result, Err):
-                return io_result(result)
-
-            return io_map(
-                io_when(
-                    ctx.use_cache,
-                    cache_write(ctx.cache_directory, key, result.value.text),
-                ),
-                lambda _: result,
-            )
-
-        return io_bind(
-            analyze_document(ctx, pass_definition, full_text, current_usage), store
-        )
-
-    if not ctx.use_cache:
-        return compute(usage)
-
-    def use_cached(cached: Maybe[str]) -> IO[Result[Translated, TranslationError]]:
-        if isinstance(cached, Nothing):
-            return compute(usage)
-
-        return io_map(
-            verbose_log(ctx, pass_cache_hit_message(pass_definition.name)),
-            lambda _: Ok(Translated(cached.value, usage)),
-        )
-
-    return io_bind(cache_read(ctx.cache_directory, key), use_cached)
+    return cached_translation(
+        ctx,
+        key,
+        usage,
+        compute=lambda: analyze_document(ctx, pass_definition, full_text, usage),
+        hit_log=verbose_log(ctx, pass_cache_hit_message(pass_definition.name)),
+    )
 
 
 def translate_chunk(
@@ -270,10 +246,7 @@ def ascii_fix_llm(
         index: int, result: str, current_usage: Usage
     ) -> IO[Result[Translated, TranslationError]]:
         if result.isascii():
-            return io_map(
-                io_when(ctx.use_cache, cache_write(ctx.cache_directory, key, result)),
-                lambda _: Ok(Translated(result, current_usage)),
-            )
+            return io_result(Ok(Translated(result, current_usage)))
 
         return io_bind(
             verbose_log(
@@ -288,27 +261,22 @@ def ascii_fix_llm(
             ),
         )
 
-    def start(current_usage: Usage) -> IO[Result[Translated, TranslationError]]:
+    def start() -> IO[Result[Translated, TranslationError]]:
         return attempt(
             1,
             build_ascii_fix_user(source_paragraph, output_paragraph),
             "",
-            current_usage,
+            usage,
         )
 
-    if not ctx.use_cache:
-        return start(usage)
-
-    def use_cached(cached: Maybe[str]) -> IO[Result[Translated, TranslationError]]:
-        if isinstance(cached, Nothing) or not cached.value.isascii():
-            return start(usage)
-
-        return io_map(
-            verbose_log(ctx, ascii_cache_hit_message()),
-            lambda _: Ok(Translated(cached.value, usage)),
-        )
-
-    return io_bind(cache_read(ctx.cache_directory, key), use_cached)
+    return cached_translation(
+        ctx,
+        key,
+        usage,
+        compute=start,
+        hit_log=verbose_log(ctx, ascii_cache_hit_message()),
+        acceptable=str.isascii,
+    )
 
 
 def repair_paragraph(
@@ -378,20 +346,13 @@ def ensure_ascii_output(
 ) -> IO[Result[Translated, TranslationError]]:
     paragraphs, separators = split_paragraphs(text)
 
-    def step(
-        accumulated: UnitsSoFar, indexed: tuple[int, str]
-    ) -> IO[Result[UnitsSoFar, TranslationError]]:
+    def paragraph_part(
+        indexed: tuple[int, str],
+    ) -> IO[Result[tuple[str, Usage], TranslationError]]:
         index, paragraph = indexed
         separator = separators[index] if index < len(separators) else ""
         if paragraph.isascii():
-            return io_result(
-                Ok(
-                    UnitsSoFar(
-                        accumulated.outputs + (paragraph + separator,),
-                        accumulated.usage,
-                    )
-                )
-            )
+            return io_result(Ok((paragraph + separator, Usage())))
 
         return io_map(
             repair_paragraph(
@@ -402,24 +363,26 @@ def ensure_ascii_output(
                 index,
                 len(paragraphs),
                 source_paragraphs,
-                accumulated.usage,
+                usage,
             ),
             lambda result: result_map(
                 result,
-                lambda translated: UnitsSoFar(
-                    accumulated.outputs + (translated.text,), translated.usage
+                lambda translated: (
+                    translated.text,
+                    Usage(*usage_delta(usage, translated.usage)),
                 ),
             ),
         )
 
+    def collect(parts: tuple[tuple[str, Usage], ...]) -> Translated:
+        return Translated(
+            "".join(text for text, _ in parts),
+            reduce(usage_add, (delta for _, delta in parts), usage),
+        )
+
     return io_map(
-        fold_io(enumerate(paragraphs), step, Ok(UnitsSoFar((), usage))),
-        lambda result: result_map(
-            result,
-            lambda collected: Translated(
-                "".join(collected.outputs), collected.usage
-            ),
-        ),
+        io_traverse(enumerate(paragraphs), paragraph_part),
+        lambda result: result_map(result, collect),
     )
 
 
@@ -682,9 +645,9 @@ def run_units(
         ctx, pass_definition, plan, work_groups, trailing_separators
     )
 
-    def step(
-        accumulator: UnitsSoFar, call: UnitCall
-    ) -> IO[Result[UnitsSoFar, TranslationError]]:
+    def unit_part(
+        call: UnitCall,
+    ) -> IO[Result[tuple[str, Usage], TranslationError]]:
         if not call.source_chunk:
             return io_map(
                 verbose_log(
@@ -693,18 +656,12 @@ def run_units(
                         pass_definition.name, call.index + 1, call.total
                     ),
                 ),
-                lambda _: Ok(
-                    UnitsSoFar(
-                        accumulator.outputs
-                        + (call.work_chunk + call.trailing_separator,),
-                        accumulator.usage,
-                    )
-                ),
+                lambda _: Ok((call.work_chunk + call.trailing_separator, Usage())),
             )
 
         def store(
             result: Result[UnitResult, TranslationError],
-        ) -> IO[Result[UnitsSoFar, TranslationError]]:
+        ) -> IO[Result[tuple[str, Usage], TranslationError]]:
             if isinstance(result, Err):
                 return io_result(
                     fail_unit(pass_definition.name, call.index + 1, result.error)
@@ -712,10 +669,7 @@ def run_units(
 
             outcome = result.value
             stored = io_map(
-                io_when(
-                    outcome.validated and ctx.use_cache,
-                    cache_write(ctx.cache_directory, call.key, outcome.text),
-                ),
+                cache_store(ctx, call.key, outcome.text, outcome.validated),
                 lambda _: verbose_log(
                     ctx,
                     unit_done_message(
@@ -726,15 +680,16 @@ def run_units(
             return io_map(
                 stored,
                 lambda _: Ok(
-                    UnitsSoFar(
-                        accumulator.outputs
-                        + (outcome.text + call.trailing_separator,),
-                        outcome.usage,
+                    (
+                        outcome.text + call.trailing_separator,
+                        Usage(*usage_delta(usage, outcome.usage)),
                     )
                 ),
             )
 
-        def proceed(cached: Maybe[str]) -> IO[Result[UnitsSoFar, TranslationError]]:
+        def proceed(
+            cached: Maybe[str],
+        ) -> IO[Result[tuple[str, Usage], TranslationError]]:
             if isinstance(cached, Just):
                 return io_map(
                     verbose_log(
@@ -743,28 +698,26 @@ def run_units(
                             pass_definition.name, call.index + 1, call.total
                         ),
                     ),
-                    lambda _: Ok(
-                        UnitsSoFar(
-                            accumulator.outputs
-                            + (cached.value + call.trailing_separator,),
-                            accumulator.usage,
-                        )
-                    ),
+                    lambda _: Ok((cached.value + call.trailing_separator, Usage())),
                 )
 
             return io_bind(
-                run_unit(ctx, pass_definition, call, analysis, accumulator.usage),
+                run_unit(ctx, pass_definition, call, analysis, usage),
                 store,
             )
 
-        looked_up: IO[Maybe[str]] = (
-            cache_read(ctx.cache_directory, call.key)
-            if ctx.use_cache
-            else io_pure(NOTHING)
-        )
-        return io_bind(looked_up, proceed)
+        return io_bind(cache_lookup(ctx, call.key), proceed)
 
-    return fold_io(calls, step, Ok(UnitsSoFar((), usage)))
+    def collect(parts: tuple[tuple[str, Usage], ...]) -> UnitsSoFar:
+        return UnitsSoFar(
+            tuple(text for text, _ in parts),
+            reduce(usage_add, (delta for _, delta in parts), usage),
+        )
+
+    return io_map(
+        io_traverse(calls, unit_part),
+        lambda result: result_map(result, collect),
+    )
 
 
 def run_text_pass_once(

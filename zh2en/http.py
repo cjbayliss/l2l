@@ -24,6 +24,7 @@ from zh2en.monads import (
     Ok,
     Result,
     fold_io,
+    fold_io_lazy,
     io_and_then,
     io_bind,
     io_map,
@@ -437,20 +438,7 @@ def drive_stream(
         logged = io_pure(None) if on_raw_line is None else on_raw_line(raw_line)
         return io_bind(logged, after_log)
 
-    def thunk() -> Result[StreamState, TranslationError]:
-        outcome: Result[StreamState, TranslationError] = Ok(StreamState())
-        lines = iter(response)
-        while not isinstance(outcome, Err):
-            try:
-                raw_line = next(lines)
-            except StopIteration:
-                return outcome
-
-            outcome = advance(outcome.value, raw_line).run()
-
-        return outcome
-
-    return IO(thunk)
+    return fold_io_lazy(response, advance, Ok(StreamState()))
 
 
 def collect_stream(

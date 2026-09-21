@@ -186,6 +186,14 @@ def usage_delta(start_usage: Usage, end_usage: Usage) -> tuple[int, int, float]:
     )
 
 
+def usage_add(first: Usage, second: Usage) -> Usage:
+    return Usage(
+        prompt_tokens=first.prompt_tokens + second.prompt_tokens,
+        completion_tokens=first.completion_tokens + second.completion_tokens,
+        cost=first.cost + second.cost,
+    )
+
+
 def non_ascii_sample(text: str, limit: int = 12) -> str:
     return "".join(
         tuple(dict.fromkeys(char for char in text if not char.isascii()))[:limit]
