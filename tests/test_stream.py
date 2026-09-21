@@ -12,7 +12,7 @@ from zh2en.http import (
     step_stream,
     stream_step,
 )
-from zh2en.monads import Err, Ok
+from zh2en.monads import IO, Err, Ok, io_pure
 from zh2en.text import THINK_CLOSE, ThinkState, strip_think_tag, think_step
 
 
@@ -190,10 +190,11 @@ def test_drive_stream_progress_labels() -> None:
     chunks.append({"choices": [{"delta": {}}], "usage": {"prompt_tokens": 1}})
     body = FakeStreamResponse(chunks)
 
-    def on_progress(label: str, count: int) -> None:
+    def on_progress(label: str, count: int) -> IO[None]:
         events.append((label, count))
+        return io_pure(None)
 
-    result = drive_stream(body, on_progress)
+    result = drive_stream(body, on_progress).run()
     assert isinstance(result, Ok)
     assert events == [("Thinking", 1), ("Thinking", 1)]
 
@@ -208,7 +209,7 @@ def test_drive_stream_stops_on_error_without_reading_next() -> None:
         pulled.append(b"data: next\n")
         yield b"data: next\n"
 
-    result = drive_stream(lines(), lambda label, count: None)
+    result = drive_stream(lines(), lambda label, count: io_pure(None)).run()
     assert isinstance(result, Err)
     assert "boom" in result.error
     assert len(pulled) == 1

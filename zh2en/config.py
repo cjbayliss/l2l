@@ -89,7 +89,6 @@ class Setup:
 
 
 OpenHTTP = Callable[[Any, float], Result[Any, str]]
-ProgressCallback = Callable[[str, int], None]
 
 
 @dataclass(frozen=True)
