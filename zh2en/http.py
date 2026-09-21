@@ -20,6 +20,7 @@ from zh2en.monads import (
     fold_io,
     io_bind,
     io_map,
+    io_pure,
     io_result,
     result_bind,
     result_map,
@@ -34,7 +35,8 @@ from zh2en.text import (
     think_step,
 )
 
-ProgressCallback = Callable[[str, int], None]
+ProgressCallback = Callable[[str, int], IO[None]]
+RawLineLogger = Callable[[bytes], IO[None]]
 
 
 def build_chat_payload(
@@ -337,30 +339,47 @@ def http_open_stream(ctx: Context, payload: Mapping[str, Any]) -> IO[Result[Any,
 def drive_stream(
     response: Any,
     on_progress: ProgressCallback,
-    on_raw_line: Callable[[bytes], None] | None = None,
-) -> Result[StreamState, str]:
-    state = StreamState()
-    for raw_line in response:
-        if on_raw_line is not None:
-            on_raw_line(raw_line)
+    on_raw_line: RawLineLogger | None = None,
+) -> IO[Result[StreamState, str]]:
+    def advance(state: StreamState, raw_line: bytes) -> IO[Result[StreamState, str]]:
+        def notify(outcome: Result[StreamState, str]) -> IO[Result[StreamState, str]]:
+            if isinstance(outcome, Err):
+                return io_result(outcome)
 
-        outcome = step_stream(state, raw_line)
-        if isinstance(outcome, Err):
-            return outcome
+            request = outcome.value.progress_request
+            if request is None:
+                return io_result(outcome)
 
-        state = outcome.value
-        if state.progress_request is not None:
-            label, count = state.progress_request
-            on_progress(label, count)
+            label, count = request
+            return io_map(on_progress(label, count), lambda _: outcome)
 
-    return Ok(state)
+        def after_log(_: None) -> IO[Result[StreamState, str]]:
+            return io_bind(io_result(step_stream(state, raw_line)), notify)
+
+        logged = io_pure(None) if on_raw_line is None else on_raw_line(raw_line)
+        return io_bind(logged, after_log)
+
+    def thunk() -> Result[StreamState, str]:
+        outcome: Result[StreamState, str] = Ok(StreamState())
+        lines = iter(response)
+        while not isinstance(outcome, Err):
+            try:
+                raw_line = next(lines)
+            except StopIteration:
+                return outcome
+
+            outcome = advance(outcome.value, raw_line).run()
+
+        return outcome
+
+    return IO(thunk)
 
 
 def collect_stream(
     ctx: Context, payload: Mapping[str, Any], on_progress: ProgressCallback
 ) -> IO[Result[StreamState, str]]:
-    def on_raw_line(raw_line: bytes) -> None:
-        run_log_write(ctx.log, raw_line.decode("utf-8", "replace")).run()
+    def on_raw_line(raw_line: bytes) -> IO[None]:
+        return run_log_write(ctx.log, raw_line.decode("utf-8", "replace"))
 
     def respond(opened: Result[Any, str]) -> IO[Result[StreamState, str]]:
         if isinstance(opened, Err):
@@ -369,7 +388,7 @@ def collect_stream(
         def thunk() -> Result[StreamState, str]:
             try:
                 with opened.value as response:
-                    outcome = drive_stream(response, on_progress, on_raw_line)
+                    outcome = drive_stream(response, on_progress, on_raw_line).run()
                     if isinstance(outcome, Err):
                         log_error(ctx.log, outcome.error).run()
                     else:
@@ -440,8 +459,8 @@ def streamed_call(
     if "stream_options" not in full_payload:
         full_payload = {**full_payload, "stream_options": {"include_usage": True}}
 
-    def on_progress(label: str, count: int) -> None:
-        ctx.console.progress(label, count).run()
+    def on_progress(label: str, count: int) -> IO[None]:
+        return ctx.console.progress(label, count)
 
     def to_reply(state: StreamState) -> ChatReply:
         return ChatReply(
