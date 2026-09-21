@@ -787,75 +787,85 @@ def resolve_config_path(
     )
 
 
+DocumentResult = Result[dict[str, Any], str]
+ResolvedPasses = tuple[dict[str, bool], tuple[PassDefinition, ...]]
+SetupResult = Result[Setup, str]
+
+
+def build_setup(
+    config: Config, pair: Result[ResolvedPasses, str]
+) -> Result[Setup, str]:
+    return result_bind(
+        pair,
+        lambda resolved: Ok(
+            Setup(
+                config=config,
+                passes=apply_default_ascii(resolved[1], resolved[0]),
+                ensure_paragraphs=resolved[0].get("ensure_paragraphs", False),
+            )
+        ),
+    )
+
+
 def load_setup(
     arguments: Arguments, environment: Mapping[str, str]
-) -> IO[Result[Setup, str]]:
-    def from_paths(user_path: str, selected_path: str | None) -> IO[Result[Setup, str]]:
-        def after_user(user_exists: bool) -> IO[Result[Setup, str]]:
-            def after_user_document(
-                user_document_result: Result[dict[str, Any], str],
-            ) -> IO[Result[Setup, str]]:
-                def after_selected_document(
-                    selected_document_result: Result[dict[str, Any], str],
-                ) -> IO[Result[Setup, str]]:
-                    def after_passes(
-                        passes_result: Result[
-                            tuple[dict[str, bool], tuple[PassDefinition, ...]], str
-                        ],
-                    ) -> IO[Result[Setup, str]]:
-                        return io_result(
-                            result_bind(
-                                merged_api_settings(
-                                    arguments,
-                                    environment,
-                                    user_path,
-                                    user_document_result,
-                                    selected_path,
-                                    selected_document_result,
-                                ),
-                                lambda config: result_bind(
-                                    passes_result,
-                                    lambda pair: Ok(
-                                        Setup(
-                                            config=config,
-                                            passes=apply_default_ascii(
-                                                pair[1], pair[0]
-                                            ),
-                                            ensure_paragraphs=pair[0].get(
-                                                "ensure_paragraphs", False
-                                            ),
-                                        )
-                                    ),
-                                ),
-                            )
-                        )
-
-                    return io_bind(
-                        resolve_passes(
-                            user_path,
-                            user_document_result,
-                            selected_path,
-                            selected_document_result,
-                        ),
-                        after_passes,
-                    )
-
-                return io_bind(
-                    read_document(selected_path, "config file", bool(selected_path)),
-                    after_selected_document,
-                )
-
+) -> IO[SetupResult]:
+    def after_user(
+        user_path: str, selected_path: str | None
+    ) -> Callable[[bool], IO[tuple[DocumentResult, DocumentResult]]]:
+        def read_both(user_exists: bool) -> IO[tuple[DocumentResult, DocumentResult]]:
             return io_bind(
                 read_document(user_path, "user config", user_exists),
-                after_user_document,
+                lambda user_document: io_map(
+                    read_document(selected_path, "config file", bool(selected_path)),
+                    lambda selected_document: (user_document, selected_document),
+                ),
             )
 
-        return io_bind(path_exists(user_path), after_user)
+        return read_both
+
+    def with_paths(user_path: str, selected_path: str | None) -> IO[SetupResult]:
+        def after_documents(
+            documents: tuple[DocumentResult, DocumentResult],
+        ) -> IO[tuple[DocumentResult, DocumentResult, Result[ResolvedPasses, str]]]:
+            return io_map(
+                resolve_passes(
+                    user_path, documents[0], selected_path, documents[1]
+                ),
+                lambda passes_result: (documents[0], documents[1], passes_result),
+            )
+
+        def assemble(
+            resolved: tuple[
+                DocumentResult,
+                DocumentResult,
+                Result[ResolvedPasses, str],
+            ],
+        ) -> SetupResult:
+            return result_bind(
+                merged_api_settings(
+                    arguments,
+                    environment,
+                    user_path,
+                    resolved[0],
+                    selected_path,
+                    resolved[1],
+                ),
+                lambda config: build_setup(config, resolved[2]),
+            )
+
+        return io_map(
+            io_bind(
+                io_bind(path_exists(user_path), after_user(user_path, selected_path)),
+                after_documents,
+            ),
+            assemble,
+        )
 
     return io_bind(
         user_config_path(environment),
         lambda user_path: io_bind(
             resolve_config_path(arguments.config, environment),
-            lambda selected_path: from_paths(user_path, selected_path),
+            lambda selected_path: with_paths(user_path, selected_path),
         ),
     )

@@ -651,19 +651,25 @@ def run_analysis_pass(
     )
 
 
-def run_units(
+@dataclass(frozen=True)
+class UnitCall:
+    index: int
+    total: int
+    source_chunk: str
+    work_chunk: str
+    context: tuple[str, ...]
+    key: str
+    trailing_separator: str
+
+
+def plan_unit_calls(
     ctx: Context,
     pass_definition: PassDefinition,
-    work_groups: tuple[tuple[str, ...], ...],
     plan: tuple[tuple[str, ...], ...],
+    work_groups: tuple[tuple[str, ...], ...],
     trailing_separators: tuple[str, ...],
-    analysis: str | None,
-    usage: Usage,
-) -> IO[Result[UnitAccumulator, str]]:
+) -> tuple[UnitCall, ...]:
     model, params = resolve_call_settings(ctx.config, pass_definition)
-    total = len(work_groups)
-    accumulator_type = tuple[tuple[str, ...], Usage]
-    outcome_type = tuple[str, bool, Usage]
     flat_plan = tuple(chain.from_iterable(plan))
     plan_starts = tuple(accumulate(map(len, plan), initial=0))
 
@@ -677,202 +683,231 @@ def run_units(
             flat_plan[end : end + 1] if end < len(flat_plan) else ()
         )
 
-    def step(
-        accumulator: accumulator_type, indexed: tuple[int, tuple[str, ...]]
-    ) -> IO[Result[accumulator_type, str]]:
-        outputs, current_usage = accumulator
-        index, work_group = indexed
-        source_chunk_text = "\n\n".join(plan[index]) if index < len(plan) else ""
-        work_chunk_text = "\n\n".join(work_group)
+    def call(index: int, work_group: tuple[str, ...]) -> UnitCall:
+        source_chunk = "\n\n".join(plan[index]) if index < len(plan) else ""
+        work_chunk = "\n\n".join(work_group)
         context = neighbour_context(index)
-        key = cache_key(
-            source_chunk_text,
-            model,
-            pass_salt(pass_definition),
-            work_chunk_text,
-            overrides=params,
-            context="\n\n".join(context),
-        )
-        trailing_separator = (
-            trailing_separators[index] if index < len(trailing_separators) else ""
+        return UnitCall(
+            index=index,
+            total=len(work_groups),
+            source_chunk=source_chunk,
+            work_chunk=work_chunk,
+            context=context,
+            key=cache_key(
+                source_chunk,
+                model,
+                pass_salt(pass_definition),
+                work_chunk,
+                overrides=params,
+                context="\n\n".join(context),
+            ),
+            trailing_separator=trailing_separators[index]
+            if index < len(trailing_separators)
+            else "",
         )
 
-        def note(message: str) -> IO[None]:
-            return verbose_log(ctx, message)
+    return tuple(call(index, group) for index, group in enumerate(work_groups))
 
-        if not source_chunk_text:
+
+def run_unit(
+    ctx: Context,
+    pass_definition: PassDefinition,
+    call: UnitCall,
+    analysis: str | None,
+    usage: Usage,
+) -> IO[Result[UnitOutcome, str]]:
+    model, params = resolve_call_settings(ctx.config, pass_definition)
+
+    def assess_initial(
+        translated: str, unit_usage: Usage
+    ) -> IO[Result[UnitOutcome, str]]:
+        problem = unit_output_problem(call.source_chunk, translated, ctx.settings)
+        if problem is None:
+            return io_result(Ok((translated, True, unit_usage)))
+
+        return repair(1, translated, unit_usage, problem)
+
+    def repair(
+        attempt_index: int,
+        bad_output: str,
+        unit_usage: Usage,
+        problem: str,
+    ) -> IO[Result[UnitOutcome, str]]:
+        if attempt_index > ctx.settings.unit_fix_attempts:
             return io_map(
-                note(
-                    "zh2en: [%s] unit %d/%d has no matching source; "
-                    "passing it through unchanged"
-                    % (pass_definition.name, index + 1, total)
-                ),
-                lambda _: Ok(
-                    (outputs + (work_chunk_text + trailing_separator,), current_usage)
-                ),
-            )
-
-        def assess_initial(
-            translated: str, unit_usage: Usage
-        ) -> IO[Result[outcome_type, str]]:
-            problem = unit_output_problem(source_chunk_text, translated, ctx.settings)
-            if problem is None:
-                return io_result(Ok((translated, True, unit_usage)))
-
-            return repair(1, translated, unit_usage, problem)
-
-        def repair(
-            attempt_index: int,
-            bad_output: str,
-            unit_usage: Usage,
-            problem: str,
-        ) -> IO[Result[outcome_type, str]]:
-            if attempt_index > ctx.settings.unit_fix_attempts:
-                return io_map(
-                    ctx.console.log(
-                        "zh2en: [%s] unit %d/%d failed validation %d time(s); "
-                        "last problem: %s. Keeping the last reply, uncached"
-                        % (
-                            pass_definition.name,
-                            index + 1,
-                            total,
-                            ctx.settings.unit_fix_attempts,
-                            problem,
-                        )
-                    ),
-                    lambda _: Ok((bad_output, False, unit_usage)),
-                )
-
-            return io_bind(
-                verbose_log(
-                    ctx,
-                    "zh2en: [%s] unit %d/%d failed validation (%s); repair "
-                    "attempt %d/%d"
+                ctx.console.log(
+                    "zh2en: [%s] unit %d/%d failed validation %d time(s); "
+                    "last problem: %s. Keeping the last reply, uncached"
                     % (
                         pass_definition.name,
-                        index + 1,
-                        total,
-                        problem,
-                        attempt_index,
+                        call.index + 1,
+                        call.total,
                         ctx.settings.unit_fix_attempts,
-                    ),
+                        problem,
+                    )
                 ),
-                lambda _: io_bind(
-                    chat(
-                        ctx,
-                        pass_definition.instruction,
-                        build_unit_retry_user(
-                            source_chunk_text, context, bad_output, problem
-                        ),
-                        model,
-                        params,
-                        unit_usage,
-                    ),
-                    settled(attempt_index),
-                ),
+                lambda _: Ok((bad_output, False, unit_usage)),
             )
 
-        def settled(
-            attempt_index: int,
-        ) -> Callable[[Result[ChatOutcome, str]], IO[Result[outcome_type, str]]]:
-            def continue_after(
-                reply_result: Result[ChatOutcome, str],
-            ) -> IO[Result[outcome_type, str]]:
-                if isinstance(reply_result, Err):
-                    return io_result(reply_result)
+        return io_bind(
+            verbose_log(
+                ctx,
+                "zh2en: [%s] unit %d/%d failed validation (%s); repair "
+                "attempt %d/%d"
+                % (
+                    pass_definition.name,
+                    call.index + 1,
+                    call.total,
+                    problem,
+                    attempt_index,
+                    ctx.settings.unit_fix_attempts,
+                ),
+            ),
+            lambda _: io_bind(
+                chat(
+                    ctx,
+                    pass_definition.instruction,
+                    build_unit_retry_user(
+                        call.source_chunk, call.context, bad_output, problem
+                    ),
+                    model,
+                    params,
+                    unit_usage,
+                ),
+                settled(attempt_index),
+            ),
+        )
 
-                translated, new_usage = reply_result.value
-                problem = unit_output_problem(
-                    source_chunk_text, translated, ctx.settings
-                )
-                if problem is None:
-                    return io_result(Ok((translated, True, new_usage)))
-
-                return repair(attempt_index + 1, translated, new_usage, problem)
-
-            return continue_after
-
-        def assessed(
+    def settled(
+        attempt_index: int,
+    ) -> Callable[[Result[ChatOutcome, str]], IO[Result[UnitOutcome, str]]]:
+        def continue_after(
             reply_result: Result[ChatOutcome, str],
-        ) -> IO[Result[outcome_type, str]]:
+        ) -> IO[Result[UnitOutcome, str]]:
             if isinstance(reply_result, Err):
                 return io_result(reply_result)
 
             translated, new_usage = reply_result.value
-            return assess_initial(translated, new_usage)
+            problem = unit_output_problem(call.source_chunk, translated, ctx.settings)
+            if problem is None:
+                return io_result(Ok((translated, True, new_usage)))
 
-        def translate(
-            unit_usage: Usage,
-        ) -> IO[Result[accumulator_type, str]]:
-            def store(
-                result: Result[outcome_type, str],
-            ) -> IO[Result[accumulator_type, str]]:
-                if isinstance(result, Err):
-                    return io_result(
-                        Err(
-                            "zh2en: [%s] failed on unit %d: %s"
-                            % (pass_definition.name, index + 1, result.error)
-                        )
+            return repair(attempt_index + 1, translated, new_usage, problem)
+
+        return continue_after
+
+    def assessed(
+        reply_result: Result[ChatOutcome, str],
+    ) -> IO[Result[UnitOutcome, str]]:
+        if isinstance(reply_result, Err):
+            return io_result(reply_result)
+
+        translated, new_usage = reply_result.value
+        return assess_initial(translated, new_usage)
+
+    return io_bind(
+        translate_chunk(
+            ctx,
+            pass_definition,
+            call.source_chunk,
+            call.work_chunk,
+            analysis,
+            usage,
+            call.context,
+        ),
+        assessed,
+    )
+
+
+def run_units(
+    ctx: Context,
+    pass_definition: PassDefinition,
+    work_groups: tuple[tuple[str, ...], ...],
+    plan: tuple[tuple[str, ...], ...],
+    trailing_separators: tuple[str, ...],
+    analysis: str | None,
+    usage: Usage,
+) -> IO[Result[UnitAccumulator, str]]:
+    calls = plan_unit_calls(
+        ctx, pass_definition, plan, work_groups, trailing_separators
+    )
+
+    def step(
+        accumulator: UnitAccumulator, call: UnitCall
+    ) -> IO[Result[UnitAccumulator, str]]:
+        outputs, current_usage = accumulator
+
+        if not call.source_chunk:
+            return io_map(
+                verbose_log(
+                    ctx,
+                    "zh2en: [%s] unit %d/%d has no matching source; "
+                    "passing it through unchanged"
+                    % (pass_definition.name, call.index + 1, call.total),
+                ),
+                lambda _: Ok(
+                    (
+                        outputs + (call.work_chunk + call.trailing_separator,),
+                        current_usage,
                     )
+                ),
+            )
 
-                translated, valid, new_usage = result.value
+        def store(
+            result: Result[UnitOutcome, str],
+        ) -> IO[Result[UnitAccumulator, str]]:
+            if isinstance(result, Err):
+                return io_result(
+                    Err(
+                        "zh2en: [%s] failed on unit %d: %s"
+                        % (pass_definition.name, call.index + 1, result.error)
+                    )
+                )
+
+            translated, valid, new_usage = result.value
+            return io_map(
+                io_bind(
+                    (
+                        cache_write(ctx.cache_directory, call.key, translated)
+                        if valid and ctx.use_cache
+                        else io_pure(None)
+                    ),
+                    lambda _: verbose_log(
+                        ctx,
+                        "zh2en: [%s] unit %d/%d done"
+                        % (pass_definition.name, call.index + 1, call.total),
+                    ),
+                ),
+                lambda _: Ok(
+                    (outputs + (translated + call.trailing_separator,), new_usage)
+                ),
+            )
+
+        if not ctx.use_cache:
+            return io_bind(
+                run_unit(ctx, pass_definition, call, analysis, current_usage), store
+            )
+
+        def with_cached(cached: str | None) -> IO[Result[UnitAccumulator, str]]:
+            if cached is not None:
                 return io_map(
-                    io_bind(
-                        (
-                            cache_write(ctx.cache_directory, key, translated)
-                            if valid and ctx.use_cache
-                            else io_pure(None)
-                        ),
-                        lambda _: note(
-                            "zh2en: [%s] unit %d/%d done"
-                            % (pass_definition.name, index + 1, total)
-                        ),
+                    verbose_log(
+                        ctx,
+                        "zh2en: [%s] unit %d/%d cache hit"
+                        % (pass_definition.name, call.index + 1, call.total),
                     ),
                     lambda _: Ok(
-                        (
-                            outputs + (translated + trailing_separator,),
-                            new_usage,
-                        )
+                        (outputs + (cached + call.trailing_separator,), current_usage)
                     ),
                 )
 
             return io_bind(
-                io_bind(
-                    translate_chunk(
-                        ctx,
-                        pass_definition,
-                        source_chunk_text,
-                        work_chunk_text,
-                        analysis,
-                        unit_usage,
-                        context,
-                    ),
-                    assessed,
-                ),
-                store,
+                run_unit(ctx, pass_definition, call, analysis, current_usage), store
             )
 
-        if not ctx.use_cache:
-            return translate(current_usage)
+        return io_bind(cache_read(ctx.cache_directory, call.key), with_cached)
 
-        def with_cached(cached: str | None) -> IO[Result[accumulator_type, str]]:
-            if cached is not None:
-                return io_map(
-                    note(
-                        "zh2en: [%s] unit %d/%d cache hit"
-                        % (pass_definition.name, index + 1, total)
-                    ),
-                    lambda _: Ok(
-                        (outputs + (cached + trailing_separator,), current_usage)
-                    ),
-                )
-
-            return translate(current_usage)
-
-        return io_bind(cache_read(ctx.cache_directory, key), with_cached)
-
-    initial: Result[accumulator_type, str] = Ok(((), usage))
-    return fold_io(enumerate(work_groups), step, initial)
+    return fold_io(calls, step, Ok(((), usage)))
 
 
 def run_text_pass_once(

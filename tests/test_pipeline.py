@@ -1,6 +1,7 @@
 import io
 import json
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +19,9 @@ from fakes import (
 from zh2en import cli
 from zh2en.config import PassDefinition
 from zh2en.http import chat
-from zh2en.monads import IO, Err, Ok, Result, fold_io, io_pure, io_result
-from zh2en.pipeline import analyze_document, run_pipeline
-from zh2en.text import Usage
+from zh2en.monads import IO, Err, Ok, Result, fold_io, fold_while, io_pure, io_result
+from zh2en.pipeline import analyze_document, plan_unit_calls, run_pipeline
+from zh2en.text import Usage, unit_separators
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -40,6 +41,41 @@ def test_fold_io_handles_thousands_of_items() -> None:
     outcome = fold_io(range(5000), step, Ok((0, None))).run()
     assert isinstance(outcome, Ok)
     assert outcome.value[0] == 5000
+
+
+def test_fold_while_stops_before_consuming_next_item() -> None:
+    pulled: list[int] = []
+
+    def items() -> Iterator[int]:
+        for value in (1, 2, 3):
+            pulled.append(value)
+            yield value
+
+    def step(count: int, value: int) -> Result[int, str]:
+        return Err("stop") if value == 2 else Ok(count + value)
+
+    outcome = fold_while(items(), step, Ok(0))
+    assert isinstance(outcome, Err)
+    assert outcome.error == "stop"
+    assert pulled == [1, 2]
+
+
+def test_plan_unit_calls_builds_keys_and_context() -> None:
+    console, _ = make_console()
+    ctx = make_context(console, FakeHttp([]).open)
+    plan = (("一。",), ("二。",), ("三。",))
+    separators = unit_separators(plan, ("s1", "s2", "s3"))
+    calls = plan_unit_calls(
+        ctx,
+        paragraph_pass(),
+        plan,
+        (("一。",), ("二。",), ("三。",)),
+        separators,
+    )
+    assert [call.source_chunk for call in calls] == ["一。", "二。", "三。"]
+    assert [call.context for call in calls] == [("二。",), ("一。", "三。"), ("二。",)]
+    assert [call.trailing_separator for call in calls] == ["s1", "s2", ""]
+    assert len({call.key for call in calls}) == 3
 
 
 def test_fold_io_short_circuits_on_error() -> None:
