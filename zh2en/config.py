@@ -279,12 +279,14 @@ def build_config(partial: PartialApiSettings) -> Result[Config, TranslationError
             api_key=str(partial.api_key),
             model=str(partial.model),
             timeout=partial.timeout if partial.timeout is not None else DEFAULT_TIMEOUT,
-            max_tokens=partial.max_tokens
-            if partial.max_tokens is not None
-            else DEFAULT_MAX_TOKENS,
-            params=partial.params
-            if partial.params is not None
-            else MappingProxyType({}),
+            max_tokens=(
+                partial.max_tokens
+                if partial.max_tokens is not None
+                else DEFAULT_MAX_TOKENS
+            ),
+            params=(
+                partial.params if partial.params is not None else MappingProxyType({})
+            ),
         )
     )
 

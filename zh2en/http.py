@@ -635,14 +635,16 @@ def conclude_chat(
         return Ok(
             Translated(
                 content,
-                add_usage(usage, reported)
-                if reported
-                else add_usage(
-                    usage,
-                    {
-                        "prompt_tokens": estimated,
-                        "completion_tokens": reply.counted,
-                    },
+                (
+                    add_usage(usage, reported)
+                    if reported
+                    else add_usage(
+                        usage,
+                        {
+                            "prompt_tokens": estimated,
+                            "completion_tokens": reply.counted,
+                        },
+                    )
                 ),
             )
         )
