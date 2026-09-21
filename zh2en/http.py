@@ -21,6 +21,7 @@ from zh2en.monads import (
     Maybe,
     Nothing,
     Ok,
+    Ref,
     Result,
     fold_io,
     fold_io_lazy,
@@ -32,6 +33,7 @@ from zh2en.monads import (
     io_when,
     maybe_either,
     maybe_or,
+    modify_ref_with,
     result_bind,
     result_map,
 )
@@ -53,6 +55,7 @@ T = TypeVar("T")
 
 ProgressCallback = Callable[[str, int], IO[None]]
 RawLineLogger = Callable[[bytes], IO[None]]
+ReasoningLogger = Callable[[str], IO[None]]
 
 
 def build_chat_payload(
@@ -163,6 +166,7 @@ def delta_text(delta: Mapping[str, Any]) -> str:
 class ProgressRequest:
     label: str
     count: int
+    reasoning: str = ""
 
 
 @dataclass(frozen=True)
@@ -203,7 +207,11 @@ def stream_step(
     progress_request: ProgressRequest | None = None
     if thinking_progress or text_progress:
         label = ("Thinking" if thinking else "Working") if text else "Thinking"
-        progress_request = ProgressRequest(label, thinking_progress + text_progress)
+        progress_request = ProgressRequest(
+            label,
+            thinking_progress + text_progress,
+            "".join(reasoning_texts),
+        )
 
     return Ok(
         StreamState(
@@ -232,12 +240,43 @@ def step_stream(
     return stream_step(state, chunk)
 
 
+def split_reasoning_lines(buffer: str, text: str) -> tuple[str, tuple[str, ...]]:
+    joined = buffer + text
+    if "\n" not in joined:
+        return joined, ()
+
+    pieces = joined.split("\n")
+    return pieces[-1], tuple(piece.rstrip() for piece in pieces[:-1])
+
+
+def emit_reasoning(console: Console, buffer: Ref[str], text: str) -> IO[None]:
+    def thunk() -> None:
+        lines = modify_ref_with(
+            buffer,
+            lambda held: split_reasoning_lines(held, text),
+        ).run()
+        for line in lines:
+            console.log(line).run()
+
+    return IO(thunk)
+
+
+def flush_reasoning(console: Console, buffer: Ref[str]) -> IO[None]:
+    def thunk() -> None:
+        remainder = modify_ref_with(buffer, lambda held: ("", held)).run()
+        if remainder.strip():
+            console.log(remainder.rstrip()).run()
+
+    return IO(thunk)
+
+
 @dataclass(frozen=True)
 class ChatReply:
     content: Any
     reasoning: tuple[str, ...] = ()
     reported: Mapping[str, Any] | None = None
     counted: int = 0
+    reasoning_shown: bool = False
 
 
 def plain_reply(body: Any) -> Result[ChatReply, TranslationError]:
@@ -414,6 +453,7 @@ def drive_stream(
     response: Any,
     on_progress: ProgressCallback,
     on_raw_line: RawLineLogger | None = None,
+    on_reasoning: ReasoningLogger | None = None,
 ) -> IO[Result[StreamState, TranslationError]]:
     def advance(
         state: StreamState, raw_line: bytes
@@ -428,7 +468,17 @@ def drive_stream(
             if request is None:
                 return io_result(outcome)
 
-            return io_map(on_progress(request.label, request.count), lambda _: outcome)
+            def after_reasoning(
+                _: None,
+            ) -> IO[Result[StreamState, TranslationError]]:
+                return io_map(
+                    on_progress(request.label, request.count), lambda _: outcome
+                )
+
+            if on_reasoning is None or not request.reasoning:
+                return after_reasoning(None)
+
+            return io_bind(on_reasoning(request.reasoning), after_reasoning)
 
         def after_log(_: None) -> IO[Result[StreamState, TranslationError]]:
             return io_bind(io_result(step_stream(state, raw_line)), notify)
@@ -442,6 +492,14 @@ def drive_stream(
 def collect_stream(
     ctx: Context, payload: Mapping[str, Any], on_progress: ProgressCallback
 ) -> IO[Result[StreamState, TranslationError]]:
+    buffer: Ref[str] = Ref("")
+
+    def on_reasoning(text: str) -> IO[None]:
+        return io_when(ctx.verbose, emit_reasoning(ctx.console, buffer, text))
+
+    def flush() -> IO[None]:
+        return io_when(ctx.verbose, flush_reasoning(ctx.console, buffer))
+
     def on_raw_line(raw_line: bytes) -> IO[None]:
         return run_log_write(ctx.log, raw_line.decode("utf-8", "replace"))
 
@@ -454,7 +512,10 @@ def collect_stream(
         def thunk() -> Result[StreamState, TranslationError]:
             try:
                 with opened.value as response:
-                    outcome = drive_stream(response, on_progress, on_raw_line).run()
+                    outcome = drive_stream(
+                        response, on_progress, on_raw_line, on_reasoning
+                    ).run()
+                    flush().run()
                     if isinstance(outcome, Err):
                         log_error(ctx.log, describe(outcome.error)).run()
                     else:
@@ -462,6 +523,7 @@ def collect_stream(
 
                     return outcome
             except (urllib.error.URLError, TimeoutError, OSError) as error:
+                flush().run()
                 failure = fail_http("interrupted", str(error))
                 log_error(ctx.log, describe(failure.error)).run()
                 return failure
@@ -544,6 +606,7 @@ def streamed_call(
             reasoning=state.reasoning,
             reported=state.reported,
             counted=state.counted,
+            reasoning_shown=ctx.verbose,
         )
 
     return io_map(
@@ -582,7 +645,7 @@ def conclude_chat(
     )
     messages = (
         tuple(text.rstrip() for text in reply.reasoning + think_texts if text.strip())
-        if ctx.verbose
+        if ctx.verbose and not reply.reasoning_shown
         else ()
     )
 
