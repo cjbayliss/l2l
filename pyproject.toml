@@ -30,7 +30,7 @@ version = { attr = "zh2en.__version__" }
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "--cov=zh2en --cov-report=term-missing"
+addopts = "--cov=zh2en --cov-report=term-missing --cov-fail-under=90"
 
 [tool.coverage.run]
 branch = true
@@ -40,7 +40,13 @@ line-length = 88
 target-version = "py314"
 
 [tool.ruff.lint]
-select = ["C4", "E", "F", "PERF", "FURB", "W", "I", "B"]
+select = ["C4", "E", "F", "PERF", "FURB", "W", "I", "B", "SIM", "RET", "UP"]
+ignore = [
+    # The package standardises on printf-style formatting.
+    "UP031",
+    # `IO[None]` thunks keep an explicit `return None` on early exits.
+    "RET501",
+]
 
 [tool.mypy]
 strict = true

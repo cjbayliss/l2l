@@ -89,7 +89,7 @@ def make_chunks(
 
 
 def split_sentences(text: str, boundary_characters: str) -> tuple[str, ...]:
-    pieces = re.split("(?<=[%s])" % re.escape(boundary_characters), text)
+    pieces = re.split(f"(?<=[{re.escape(boundary_characters)}])", text)
     if pieces and pieces[-1] == "":
         pieces = pieces[:-1]
 
@@ -165,7 +165,7 @@ def regroup_by_plan(
 def parse_cost(value: Any) -> float:
     try:
         return float(value or 0.0)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0.0
 
 

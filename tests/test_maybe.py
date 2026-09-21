@@ -21,8 +21,8 @@ from zh2en.monads import (
 )
 
 integers = st.integers()
-maybe_integers: st.SearchStrategy[Maybe[int]] = (
-    st.integers().map(Just) | st.just(NOTHING)
+maybe_integers: st.SearchStrategy[Maybe[int]] = st.integers().map(Just) | st.just(
+    NOTHING
 )
 
 
@@ -118,20 +118,14 @@ def test_maybe_bind_associativity(value: int) -> None:
         return Just(str(parsed)) if parsed % 3 else NOTHING
 
     left = maybe_bind(maybe_bind(Just(value), halve), stringify)
-    right = maybe_bind(
-        Just(value), lambda parsed: maybe_bind(halve(parsed), stringify)
-    )
+    right = maybe_bind(Just(value), lambda parsed: maybe_bind(halve(parsed), stringify))
     assert left == right
 
 
 @given(st.lists(maybe_integers))
 def test_maybes_sequence_matches_manual_fold(values: list[Maybe[int]]) -> None:
-    justs: list[Just[int]] = [
-        maybe for maybe in values if isinstance(maybe, Just)
-    ]
+    justs: list[Just[int]] = [maybe for maybe in values if isinstance(maybe, Just)]
     if len(justs) != len(values):
         assert maybes_sequence(values) == NOTHING
     else:
-        assert maybes_sequence(values) == Just(
-            tuple(maybe.value for maybe in justs)
-        )
+        assert maybes_sequence(values) == Just(tuple(maybe.value for maybe in justs))

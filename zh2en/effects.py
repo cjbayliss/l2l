@@ -49,7 +49,7 @@ def io_isatty(stream: TextIO) -> IO[bool]:
     def thunk() -> bool:
         try:
             return bool(stream.isatty())
-        except (AttributeError, OSError, ValueError):
+        except AttributeError, OSError, ValueError:
             return False
 
     return IO(thunk)
@@ -91,11 +91,11 @@ def load_toml(
             with open(path, "rb") as handle:
                 return Ok(tomllib.load(handle))
         except FileNotFoundError:
-            return fail_config("%s not found: %s" % (description, path))
+            return fail_config(f"{description} not found: {path}")
         except OSError as error:
-            return fail_config("cannot read %s: %s" % (description, error))
+            return fail_config(f"cannot read {description}: {error}")
         except tomllib.TOMLDecodeError as error:
-            return fail_config("cannot parse %s %s: %s" % (description, path, error))
+            return fail_config(f"cannot parse {description} {path}: {error}")
 
     return IO(thunk)
 
@@ -168,7 +168,7 @@ def run_log_write(log: RunLog, content: str) -> IO[None]:
 def log_entry(log: RunLog, label: str, body: str) -> IO[None]:
     def thunk() -> None:
         return run_log_write(
-            log, "== %s %s\n%s\n\n" % (log_stamp(log.clock()), label, body)
+            log, f"== {log_stamp(log.clock())} {label}\n{body}\n\n"
         ).run()
 
     return IO(thunk)

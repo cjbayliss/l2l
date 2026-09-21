@@ -181,11 +181,10 @@ def main(
         parsed_result: Result[Arguments, TranslationError],
     ) -> IO[int]:
         if isinstance(parsed_result, Err):
+
             def report_parse_failure(live: bool) -> IO[int]:
                 console = Console(stderr, StatusLine(stderr, live))
-                return io_map(
-                    console.log(describe(parsed_result.error)), lambda _: 2
-                )
+                return io_map(console.log(describe(parsed_result.error)), lambda _: 2)
 
             return io_bind(io_isatty(stderr), report_parse_failure)
 
@@ -242,9 +241,7 @@ def prune_program(
         days = parsed.cache_prune or 0
         if days <= 0:
             return io_map(
-                console.log(
-                    "zh2en: --cache-prune requires a positive number of days"
-                ),
+                console.log("zh2en: --cache-prune requires a positive number of days"),
                 lambda _: 2,
             )
 
@@ -299,9 +296,7 @@ def run_main_program(
 
         def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
             if isinstance(setup_result, Err):
-                return io_map(
-                    console.log(describe(setup_result.error)), lambda _: 2
-                )
+                return io_map(console.log(describe(setup_result.error)), lambda _: 2)
 
             setup = setup_result.value
 
@@ -335,7 +330,7 @@ def run_main_program(
                         log.path,
                         lambda path: io_when(
                             parsed.show_log_path,
-                            console.log("zh2en: log: %s" % path),
+                            console.log(f"zh2en: log: {path}"),
                         ),
                         lambda: io_pure(None),
                     )

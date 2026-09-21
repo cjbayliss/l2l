@@ -76,8 +76,8 @@ def extract_message(
     try:
         message = body["choices"][0]["message"]
         return Ok((message, message["content"]))
-    except (KeyError, IndexError, TypeError):
-        return fail_http("protocol", "unexpected response shape: %s" % str(body)[:500])
+    except KeyError, IndexError, TypeError:
+        return fail_http("protocol", f"unexpected response shape: {str(body)[:500]}")
 
 
 def collect_thinking_texts(part: Mapping[str, Any]) -> tuple[str, ...]:
@@ -136,7 +136,7 @@ def parse_chunk_delta(chunk: Mapping[str, Any]) -> dict[str, Any]:
             return {}
 
         return choices[0].get("delta") or {}
-    except (AttributeError, IndexError, TypeError):
+    except AttributeError, IndexError, TypeError:
         return {}
 
 
@@ -301,7 +301,7 @@ def retry_after_seconds(headers: Any) -> float | None:
 
     try:
         return max(float(raw), 0.0)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -317,7 +317,7 @@ def verbose_retry_log(
     )
 
 
-def with_retries(
+def with_retries[T](
     ctx: Context, attempt: Callable[[], IO[Result[T, TranslationError]]]
 ) -> IO[Result[T, TranslationError]]:
     delays = plan_backoff(
@@ -367,7 +367,7 @@ def http_post_json(
                 log_entry(ctx.log, "RESPONSE", body).run()
                 return Ok(json.loads(body))
             except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                failure = fail_http("protocol", "invalid JSON response: %s" % error)
+                failure = fail_http("protocol", f"invalid JSON response: {error}")
                 log_error(ctx.log, describe(failure.error)).run()
                 return failure
 
@@ -428,9 +428,7 @@ def drive_stream(
             if request is None:
                 return io_result(outcome)
 
-            return io_map(
-                on_progress(request.label, request.count), lambda _: outcome
-            )
+            return io_map(on_progress(request.label, request.count), lambda _: outcome)
 
         def after_log(_: None) -> IO[Result[StreamState, TranslationError]]:
             return io_bind(io_result(step_stream(state, raw_line)), notify)
@@ -507,9 +505,11 @@ def chat(
     )
     call = with_retries(
         ctx,
-        lambda: streamed_call(ctx, payload)
-        if payload.get("stream", True)
-        else plain_call(ctx, payload),
+        lambda: (
+            streamed_call(ctx, payload)
+            if payload.get("stream", True)
+            else plain_call(ctx, payload)
+        ),
     )
 
     def stopped(
@@ -574,20 +574,14 @@ def conclude_chat(
     content, think_text = strip_think_tag(reply.content)
     if not isinstance(content, str):
         return io_result(
-            fail_http(
-                "protocol", "unexpected content type: %s" % type(content).__name__
-            )
+            fail_http("protocol", f"unexpected content type: {type(content).__name__}")
         )
 
     think_texts: tuple[str, ...] = maybe_either(
         think_text, lambda text: (text,), lambda: ()
     )
     messages = (
-        tuple(
-            text.rstrip()
-            for text in reply.reasoning + think_texts
-            if text.strip()
-        )
+        tuple(text.rstrip() for text in reply.reasoning + think_texts if text.strip())
         if ctx.verbose
         else ()
     )

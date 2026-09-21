@@ -118,9 +118,7 @@ def run_analysis(
         chat(ctx, pass_definition.instruction, text, model, params, usage),
         lambda result: result_map(
             result,
-            lambda translated: Translated(
-                translated.text.strip(), translated.usage
-            ),
+            lambda translated: Translated(translated.text.strip(), translated.usage),
         ),
     )
 
@@ -182,8 +180,6 @@ def translate_chunk(
         params,
         usage,
     )
-
-
 
 
 def log_stage(
@@ -364,9 +360,7 @@ def run_unit(
                     attempt_index + 1, translated.text, translated.usage, problem.value
                 )
 
-            return io_result(
-                Ok(UnitResult(translated.text, True, translated.usage))
-            )
+            return io_result(Ok(UnitResult(translated.text, True, translated.usage)))
 
         return continue_after
 
@@ -432,9 +426,7 @@ def run_units(
                 cache_store(ctx, call.key, outcome.text, outcome.validated),
                 lambda _: verbose_log(
                     ctx,
-                    unit_done_message(
-                        pass_definition.name, call.index + 1, call.total
-                    ),
+                    unit_done_message(pass_definition.name, call.index + 1, call.total),
                 ),
             )
             return io_map(
@@ -508,9 +500,7 @@ def run_text_pass_once(
                 return io_result(units_result)
 
             next_state = State(
-                text=ensure_blank_line_separators(
-                    "".join(units_result.value.outputs)
-                ),
+                text=ensure_blank_line_separators("".join(units_result.value.outputs)),
                 analysis=state.analysis,
                 usage=units_result.value.usage,
             )
