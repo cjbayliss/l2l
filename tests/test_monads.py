@@ -18,8 +18,10 @@ from zh2en.monads import (
     result_bind,
     result_either,
     result_map,
+    result_map2,
     result_map_error,
     result_or_else,
+    result_zip,
 )
 
 
@@ -46,6 +48,29 @@ def test_result_either_folds_both_channels() -> None:
 def test_result_or_else_unwraps_or_falls_back() -> None:
     assert result_or_else(Ok(2), lambda: 0) == 2
     assert result_or_else(Err("boom"), lambda: 0) == 0
+
+
+def test_result_map2_combines_two_oks() -> None:
+    assert result_map2(Ok(2), Ok(3), lambda left, right: left + right) == Ok(5)
+
+
+def test_result_map2_left_error_wins() -> None:
+    assert (
+        result_map2(Err("left"), Err("right"), lambda left, right: left + right)
+        == Err("left")
+    )
+
+
+def test_result_map2_right_error_propagates() -> None:
+    assert result_map2(Ok(2), Err("boom"), lambda left, right: left + right) == Err(
+        "boom"
+    )
+
+
+def test_result_zip_pairs_values() -> None:
+    assert result_zip(Ok(1), Ok("a")) == Ok((1, "a"))
+    assert result_zip(Err("boom"), Ok("a")) == Err("boom")
+    assert result_zip(Ok(1), Err("boom")) == Err("boom")
 
 
 def test_io_pure_map_bind_compose() -> None:
