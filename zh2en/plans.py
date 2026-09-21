@@ -249,9 +249,9 @@ def plan_unit_calls(
                 overrides=params,
                 context="\n\n".join(context),
             ),
-            trailing_separator=trailing_separators[index]
-            if index < len(trailing_separators)
-            else "",
+            trailing_separator=(
+                trailing_separators[index] if index < len(trailing_separators) else ""
+            ),
         )
 
     return tuple(call(index, group) for index, group in enumerate(work_groups))

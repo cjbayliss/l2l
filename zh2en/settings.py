@@ -212,9 +212,9 @@ class PartialApiSettings:
             api_key=extra.api_key if extra.api_key is not None else self.api_key,
             model=extra.model if extra.model is not None else self.model,
             timeout=extra.timeout if extra.timeout is not None else self.timeout,
-            max_tokens=extra.max_tokens
-            if extra.max_tokens is not None
-            else self.max_tokens,
+            max_tokens=(
+                extra.max_tokens if extra.max_tokens is not None else self.max_tokens
+            ),
             params=params,
         )
 
