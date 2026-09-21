@@ -33,7 +33,12 @@ zh2en [CONFIG] [options] < input.txt > output.txt
   `--ensure-paragraphs` turns on the paragraph-count check described below.
   `--verbose` prints chunking, cache, timing, and reasoning diagnostics.
   `--show-log-path` prints the run log's path to stderr at startup.
-  `--version` prints the version.
+  `--stream` / `--no-stream` force streamed or plain responses (default
+  follows `api.params.stream`). `--check-config` prints the resolved
+  configuration and exits without translating. `--dry-run` prints the
+  per-pass call plan (units, token estimates, cache keys) and exits without
+  calling the endpoint. `--cache-prune DAYS` deletes cache entries older
+  than DAYS days and exits. `--version` prints the version.
 
 Precedence: defaults < user config < selected config < environment <
 command line.

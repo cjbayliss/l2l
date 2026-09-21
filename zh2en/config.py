@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
@@ -87,6 +88,10 @@ class Arguments:
     verbose: bool
     show_log_path: bool
     cache_dir: str | None
+    check_config: bool = False
+    dry_run: bool = False
+    stream: bool | None = None
+    cache_prune: int | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +117,7 @@ class Context:
     log: RunLog
     clock: Clock
     sleep: Sleep
+    stream: bool | None = None
 
 
 def build_settings() -> Settings:
@@ -912,3 +918,46 @@ def load_setup(
             lambda selected_path: with_paths(user_path, selected_path),
         ),
     )
+
+
+def mask_api_key(api_key: str) -> str:
+    if len(api_key) <= 8:
+        return "***"
+
+    return api_key[:4] + "..." + api_key[-2:]
+
+
+def params_text(params: Mapping[str, Any]) -> str:
+    return json.dumps(params, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def setup_report(setup: Setup, effective_ensure_paragraphs: bool) -> str:
+    config = setup.config
+    lines = [
+        "api.base_url: %s" % config.base_url,
+        "api.model: %s" % config.model,
+        "api.timeout: %g" % config.timeout,
+        "api.max_tokens: %d" % config.max_tokens,
+        "api.api_key: %s" % mask_api_key(config.api_key),
+    ]
+    if config.params:
+        lines.append("api.params: %s" % params_text(config.params))
+
+    for number, pass_definition in enumerate(setup.passes, 1):
+        lines.append(
+            "pass %d/%d [%s]: mode=%s ascii=%s model=%s instruction=%d chars"
+            % (
+                number,
+                len(setup.passes),
+                pass_definition.name,
+                pass_definition.mode,
+                pass_definition.ascii,
+                pass_definition.model or "<default>",
+                len(pass_definition.instruction),
+            )
+        )
+        if pass_definition.params:
+            lines.append("  params: %s" % params_text(pass_definition.params))
+
+    lines.append("options.ensure_paragraphs: %s" % effective_ensure_paragraphs)
+    return "\n".join(lines)

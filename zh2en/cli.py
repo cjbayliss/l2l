@@ -8,15 +8,26 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import TextIO
 
 from zh2en import __version__
-from zh2en.config import Arguments, Context, Setup, build_settings, load_setup
+from zh2en.config import (
+    Arguments,
+    Context,
+    Setup,
+    build_settings,
+    load_setup,
+    setup_report,
+)
 from zh2en.console import Console, StatusLine
 from zh2en.effects import (
     RunLog,
+    cache_entry_paths,
+    file_age,
     io_isatty,
     open_run_log,
     read_stdin,
+    remove_file,
     resolve_cache_dir,
     time_sleep,
+    write_stdout,
 )
 from zh2en.errors import TranslationError, describe, fail_config
 from zh2en.http import urllib_open
@@ -25,13 +36,17 @@ from zh2en.monads import (
     Err,
     Ok,
     Result,
+    fold_io,
     io_and_then,
     io_bind,
     io_map,
     io_pure,
+    io_result,
     io_when,
+    result_or_else,
 )
 from zh2en.pipeline import run_pipeline
+from zh2en.plans import plan_report
 
 
 def parse_args(arguments: Sequence[str]) -> Arguments:
@@ -102,6 +117,29 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         action="store_true",
         help="print the run log's path to stderr at startup",
     )
+    parser.add_argument(
+        "--check-config",
+        action="store_true",
+        help="print the resolved configuration and exit without translating",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the per-pass call plan and exit without calling the endpoint",
+    )
+    parser.add_argument(
+        "--stream",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="force streamed (--stream) or plain (--no-stream) responses; "
+        "default follows api.params.stream",
+    )
+    parser.add_argument(
+        "--cache-prune",
+        metavar="DAYS",
+        type=int,
+        help="delete cache entries older than DAYS days and exit",
+    )
     parsed = parser.parse_args(arguments)
     return Arguments(
         config=parsed.config,
@@ -115,6 +153,10 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         verbose=parsed.verbose,
         show_log_path=parsed.show_log_path,
         cache_dir=parsed.cache_dir,
+        check_config=parsed.check_config,
+        dry_run=parsed.dry_run,
+        stream=parsed.stream,
+        cache_prune=parsed.cache_prune,
     )
 
 
@@ -152,14 +194,97 @@ def main(
 
             return io_bind(io_isatty(stderr), report_parse_failure)
 
+        parsed = parsed_result.value
+        if parsed.check_config:
+            return check_config_program(parsed, environment, stdout, stderr, clock)
+
+        if parsed.cache_prune is not None:
+            return prune_program(parsed, environment, stderr, clock)
+
         return io_bind(
             read_stdin(stdin),
             lambda text: run_main_program(
-                parsed_result.value, environment, text, stdout, stderr, clock
+                parsed, environment, text, stdout, stderr, clock
             ),
         )
 
     return io_bind(parse_arguments(arguments), after_parse)
+
+
+def check_config_program(
+    parsed: Arguments,
+    environment: Mapping[str, str],
+    stdout: TextIO,
+    stderr: TextIO,
+    clock: Callable[[], float],
+) -> IO[int]:
+    def with_console(live: bool) -> IO[int]:
+        console = Console(stderr, StatusLine(stderr, live))
+
+        def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
+            if isinstance(setup_result, Err):
+                return io_map(console.log(describe(setup_result.error)), lambda _: 2)
+
+            setup = setup_result.value
+            report = setup_report(
+                setup, parsed.ensure_paragraphs or setup.ensure_paragraphs
+            )
+            return io_map(write_stdout(stdout, report + "\n"), lambda _: 0)
+
+        return io_bind(load_setup(parsed, environment), use_setup)
+
+    return io_bind(io_isatty(stderr), with_console)
+
+
+def prune_program(
+    parsed: Arguments,
+    environment: Mapping[str, str],
+    stderr: TextIO,
+    clock: Callable[[], float],
+) -> IO[int]:
+    def with_console(live: bool) -> IO[int]:
+        console = Console(stderr, StatusLine(stderr, live))
+        days = parsed.cache_prune or 0
+        if days <= 0:
+            return io_map(
+                console.log(
+                    "zh2en: --cache-prune requires a positive number of days"
+                ),
+                lambda _: 2,
+            )
+
+        def with_cache_dir(cache_directory: str) -> IO[int]:
+            def removed(count: int, path: str) -> IO[Result[int, TranslationError]]:
+                def maybe_remove(age: float) -> IO[Result[int, TranslationError]]:
+                    if age <= days * 86400.0:
+                        return io_result(Ok(count))
+
+                    return io_map(
+                        remove_file(path),
+                        lambda was_removed: Ok(count + (1 if was_removed else 0)),
+                    )
+
+                return io_bind(file_age(path, clock()), maybe_remove)
+
+            def report(pruned: Result[int, TranslationError]) -> IO[int]:
+                count = result_or_else(pruned, lambda: 0)
+                noun = "entry" if count == 1 else "entries"
+                return io_map(
+                    console.log("zh2en: pruned %d cache %s" % (count, noun)),
+                    lambda _: 0,
+                )
+
+            return io_bind(
+                io_bind(
+                    cache_entry_paths(cache_directory),
+                    lambda paths: fold_io(paths, removed, Ok(0)),
+                ),
+                report,
+            )
+
+        return io_bind(resolve_cache_dir(environment, parsed.cache_dir), with_cache_dir)
+
+    return io_bind(io_isatty(stderr), with_console)
 
 
 def run_main_program(
@@ -185,6 +310,30 @@ def run_main_program(
 
             setup = setup_result.value
 
+            if parsed.dry_run:
+                planning_ctx = Context(
+                    config=setup.config,
+                    settings=build_settings(),
+                    use_cache=False,
+                    cache_directory="",
+                    verbose=parsed.verbose,
+                    ensure_paragraphs=parsed.ensure_paragraphs
+                    or setup.ensure_paragraphs,
+                    console=console,
+                    open_http=urllib_open,
+                    log=RunLog("", clock),
+                    clock=clock,
+                    sleep=time_sleep,
+                    stream=parsed.stream,
+                )
+                return io_map(
+                    write_stdout(
+                        stdout,
+                        plan_report(planning_ctx, setup.passes, text) + "\n",
+                    ),
+                    lambda _: 0,
+                )
+
             def with_cache_dir(cache_directory: str) -> IO[int]:
                 def with_log(log: RunLog) -> IO[int]:
                     return io_and_then(
@@ -206,6 +355,7 @@ def run_main_program(
                                 log=log,
                                 clock=clock,
                                 sleep=time_sleep,
+                                stream=parsed.stream,
                             ),
                             setup.passes,
                             text,

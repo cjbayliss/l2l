@@ -9,6 +9,7 @@ from functools import reduce
 from types import MappingProxyType
 from typing import Any, TypeVar
 
+from zh2en import __version__
 from zh2en.config import Config, Context
 from zh2en.console import Console
 from zh2en.effects import log_entry, log_error, log_request, run_log_write
@@ -262,6 +263,7 @@ def http_request(
     headers = {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + config.api_key,
+        "User-Agent": "zh2en/" + __version__,
     }
     if accept:
         headers = {**headers, "Accept": accept}
@@ -489,6 +491,13 @@ def log_all(
     return fold_io(messages, step, Ok(()))
 
 
+def apply_stream_override(ctx: Context, payload: dict[str, Any]) -> dict[str, Any]:
+    if ctx.stream is None:
+        return payload
+
+    return {**payload, "stream": ctx.stream}
+
+
 def chat(
     ctx: Context,
     system: str,
@@ -501,7 +510,10 @@ def chat(
     if estimated > ctx.config.max_tokens:
         return io_result(fail_budget(estimated, ctx.config.max_tokens))
 
-    payload = build_chat_payload(model, system, user, params)
+    payload = apply_stream_override(
+        ctx,
+        build_chat_payload(model, system, user, params),
+    )
     call = with_retries(
         ctx,
         lambda: streamed_call(ctx, payload)
