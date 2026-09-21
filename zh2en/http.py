@@ -21,7 +21,6 @@ from zh2en.monads import (
     Maybe,
     Nothing,
     Ok,
-    Ref,
     Result,
     fold_io,
     fold_io_lazy,
@@ -33,7 +32,6 @@ from zh2en.monads import (
     io_when,
     maybe_either,
     maybe_or,
-    modify_ref_with,
     result_bind,
     result_map,
 )
@@ -238,36 +236,6 @@ def step_stream(
         return fail_http("stream", str(chunk["error"])[:500])
 
     return stream_step(state, chunk)
-
-
-def split_reasoning_lines(buffer: str, text: str) -> tuple[str, tuple[str, ...]]:
-    joined = buffer + text
-    if "\n" not in joined:
-        return joined, ()
-
-    pieces = joined.split("\n")
-    return pieces[-1], tuple(piece.rstrip() for piece in pieces[:-1])
-
-
-def emit_reasoning(console: Console, buffer: Ref[str], text: str) -> IO[None]:
-    def thunk() -> None:
-        lines = modify_ref_with(
-            buffer,
-            lambda held: split_reasoning_lines(held, text),
-        ).run()
-        for line in lines:
-            console.log(line).run()
-
-    return IO(thunk)
-
-
-def flush_reasoning(console: Console, buffer: Ref[str]) -> IO[None]:
-    def thunk() -> None:
-        remainder = modify_ref_with(buffer, lambda held: ("", held)).run()
-        if remainder.strip():
-            console.log(remainder.rstrip()).run()
-
-    return IO(thunk)
 
 
 @dataclass(frozen=True)
@@ -492,13 +460,24 @@ def drive_stream(
 def collect_stream(
     ctx: Context, payload: Mapping[str, Any], on_progress: ProgressCallback
 ) -> IO[Result[StreamState, TranslationError]]:
-    buffer: Ref[str] = Ref("")
-
     def on_reasoning(text: str) -> IO[None]:
-        return io_when(ctx.verbose, emit_reasoning(ctx.console, buffer, text))
+        def thunk() -> None:
+            if ctx.verbose:
+                io_and_then(
+                    ctx.console.begin_raw(),
+                    ctx.console.write_raw(text),
+                ).run()
 
-    def flush() -> IO[None]:
-        return io_when(ctx.verbose, flush_reasoning(ctx.console, buffer))
+        return IO(thunk)
+
+    def note_progress(label: str, count: int) -> IO[None]:
+        def thunk() -> None:
+            if label == "Working":
+                ctx.console.end_raw().run()
+
+            ctx.console.progress(label, count).run()
+
+        return IO(thunk)
 
     def on_raw_line(raw_line: bytes) -> IO[None]:
         return run_log_write(ctx.log, raw_line.decode("utf-8", "replace"))
@@ -513,9 +492,9 @@ def collect_stream(
             try:
                 with opened.value as response:
                     outcome = drive_stream(
-                        response, on_progress, on_raw_line, on_reasoning
+                        response, note_progress, on_raw_line, on_reasoning
                     ).run()
-                    flush().run()
+                    ctx.console.end_raw().run()
                     if isinstance(outcome, Err):
                         log_error(ctx.log, describe(outcome.error)).run()
                     else:
@@ -523,7 +502,7 @@ def collect_stream(
 
                     return outcome
             except (urllib.error.URLError, TimeoutError, OSError) as error:
-                flush().run()
+                ctx.console.end_raw().run()
                 failure = fail_http("interrupted", str(error))
                 log_error(ctx.log, describe(failure.error)).run()
                 return failure
