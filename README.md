@@ -3,7 +3,7 @@
 Translate Chinese text from stdin to English on stdout using any
 OpenAI-compatible chat completions endpoint (including OpenRouter).
 
-Single-file, standard-library-only Python (3.11+).
+Single-file, standard-library-only Python (3.14+).
 
 ## Install
 
