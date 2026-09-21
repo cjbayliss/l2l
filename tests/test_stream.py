@@ -1,27 +1,41 @@
 from collections.abc import Iterator
 
-from fakes import FakeStreamResponse, stream_chunks
+from fakes import (
+    FakeHttp,
+    FakeStreamResponse,
+    make_console,
+    make_context,
+    stream_chunks,
+    with_usage,
+)
 
 from zh2en.errors import describe
 from zh2en.http import (
     ProgressRequest,
     StreamState,
+    chat,
     drive_stream,
+    emit_reasoning,
     flatten_content_parts,
+    flush_reasoning,
     plain_reply,
+    split_reasoning_lines,
     step_stream,
     stream_step,
 )
-from zh2en.monads import IO, NOTHING, Err, Just, Ok, io_pure
+from zh2en.monads import IO, NOTHING, Err, Just, Ok, Ref, io_pure
 from zh2en.text import (
     THINK_CLOSE,
     THINK_OPEN,
     SseState,
     ThinkState,
+    Usage,
     sse_step,
     strip_think_tag,
     think_step,
 )
+
+USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
 
 def feed(state: StreamState, *texts: str) -> StreamState:
@@ -92,7 +106,7 @@ def test_stream_step_accumulates_reasoning_and_usage() -> None:
     assert isinstance(result, Ok)
     state = result.value
     assert state.reasoning == ("ponder",)
-    assert state.progress_request == ProgressRequest("Thinking", 1)
+    assert state.progress_request == ProgressRequest("Thinking", 1, "ponder")
 
     result = stream_step(
         state,
@@ -106,7 +120,7 @@ def test_stream_step_accumulates_reasoning_and_usage() -> None:
     assert state.contents == ("Hi",)
     assert state.reported == {"prompt_tokens": 3, "completion_tokens": 4, "cost": 0.5}
     assert state.counted == 2
-    assert state.progress_request == ProgressRequest("Working", 1)
+    assert state.progress_request == ProgressRequest("Working", 1, "")
 
 
 def test_stream_step_content_part_list() -> None:
@@ -251,6 +265,79 @@ def test_drive_stream_progress_labels() -> None:
     result = drive_stream(body, on_progress).run()
     assert isinstance(result, Ok)
     assert events == [("Thinking", 1), ("Thinking", 1)]
+
+
+def test_drive_stream_emits_reasoning_text() -> None:
+    events: list[tuple[str, int]] = []
+    thoughts: list[str] = []
+    chunks = [
+        {"choices": [{"delta": {"reasoning_content": "Check"}}]},
+        {"choices": [{"delta": {"reasoning_content": " details.\n"}}]},
+        {"choices": [{"delta": {"content": "Hi"}}]},
+    ]
+    body = FakeStreamResponse(chunks)
+
+    def on_progress(label: str, count: int) -> IO[None]:
+        events.append((label, count))
+        return io_pure(None)
+
+    def on_reasoning(text: str) -> IO[None]:
+        thoughts.append(text)
+        return io_pure(None)
+
+    result = drive_stream(body, on_progress, None, on_reasoning).run()
+    assert isinstance(result, Ok)
+    assert thoughts == ["Check", " details.\n"]
+    assert events == [("Thinking", 1), ("Thinking", 1), ("Working", 1)]
+
+
+def test_split_reasoning_lines_buffers_partial_lines() -> None:
+    assert split_reasoning_lines("", "Check") == ("Check", ())
+    assert split_reasoning_lines("Check", " details.\nNext") == (
+        "Next",
+        ("Check details.",),
+    )
+    assert split_reasoning_lines("Next", " line.\n") == ("", ("Next line.",))
+    assert split_reasoning_lines("", "two\nlines\n") == ("", ("two", "lines"))
+
+
+def test_emit_and_flush_reasoning_log_complete_lines() -> None:
+    console, stderr = make_console()
+    ref = Ref("")
+    emit_reasoning(console, ref, "Check").run()
+    emit_reasoning(console, ref, " details.\n").run()
+    emit_reasoning(console, ref, "partial line").run()
+    flush_reasoning(console, ref).run()
+    flush_reasoning(console, ref).run()
+    assert stderr.getvalue() == "Check details.\npartial line\n"
+
+
+def test_chat_streams_reasoning_lines_when_verbose() -> None:
+    console, stderr = make_console()
+    chunks = [
+        {"choices": [{"delta": {"reasoning_content": "Check details.\n"}}]},
+        {"choices": [{"delta": {"reasoning_content": "final thought"}}]},
+        {"choices": [{"delta": {"content": "Hi"}}]},
+    ]
+    http = FakeHttp([FakeStreamResponse(with_usage(chunks, USAGE))])
+    ctx = make_context(console, http.open, verbose=True)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == "Hi"
+    assert stderr.getvalue() == "Check details.\nfinal thought\n"
+
+
+def test_chat_hides_streamed_reasoning_without_verbose() -> None:
+    console, stderr = make_console()
+    chunks = [
+        {"choices": [{"delta": {"reasoning_content": "secret thoughts\n"}}]},
+        {"choices": [{"delta": {"content": "Hi"}}]},
+    ]
+    http = FakeHttp([FakeStreamResponse(with_usage(chunks, USAGE))])
+    ctx = make_context(console, http.open)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert "secret" not in stderr.getvalue()
 
 
 def test_drive_stream_stops_on_error_without_reading_next() -> None:
