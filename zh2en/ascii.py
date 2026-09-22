@@ -9,7 +9,6 @@ from __future__ import annotations
 from functools import reduce
 
 from zh2en.cache import cached_translation
-from zh2en.console import log_when
 from zh2en.effects import now
 from zh2en.errors import TranslationError, fail_ascii
 from zh2en.http import chat
@@ -54,7 +53,7 @@ from zh2en.text import (
 
 
 def verbose_log(ctx: Context, message: str) -> IO[None]:
-    return log_when(ctx.verbose, ctx.console, message)
+    return ctx.console.log_verbose(message)
 
 
 def ascii_fix_llm(

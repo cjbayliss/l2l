@@ -9,7 +9,7 @@ from typing import Any, Literal
 from zh2en.console import Console, StatusLine
 from zh2en.effects import RunLog
 from zh2en.errors import TranslationError
-from zh2en.monads import NOTHING, Ok, Result
+from zh2en.monads import NOTHING, Ok, Result, write_ref
 from zh2en.settings import Config, Context, build_settings
 
 SLEEPS: list[float] = []
@@ -69,9 +69,13 @@ class FakeHttp:
         return Ok(self.responses[index])
 
 
-def make_console() -> tuple[Console, io.StringIO]:
+def make_console(
+    live: bool = False,
+    term_size: Callable[[], tuple[int, int]] | None = None,
+) -> tuple[Console, io.StringIO]:
     stream = io.StringIO()
-    console = Console(stream, StatusLine(stream, live=False))
+    size = term_size if term_size is not None else lambda: (80, 24)
+    console = Console(stream, StatusLine(stream, live=live), term_size=size)
     return console, stream
 
 
@@ -94,12 +98,12 @@ def make_context(
         max_tokens=max_tokens,
         params={},
     )
+    write_ref(console.verbose, verbose).run()
     return Context(
         config=config,
         settings=build_settings(),
         use_cache=use_cache,
         cache_directory=cache_directory,
-        verbose=verbose,
         ensure_paragraphs=ensure_paragraphs,
         console=console,
         open_http=open_http,

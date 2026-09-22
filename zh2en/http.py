@@ -29,7 +29,6 @@ from zh2en.monads import (
     io_map,
     io_pure,
     io_result,
-    io_when,
     maybe_either,
     maybe_or,
     result_bind,
@@ -315,12 +314,8 @@ def retry_after_seconds(headers: Any) -> float | None:
 def verbose_retry_log(
     ctx: Context, retry_number: int, retries: int, wait: float
 ) -> IO[None]:
-    return io_when(
-        ctx.verbose,
-        ctx.console.log(
-            "zh2en: transient failure; retry %d/%d in %.1fs"
-            % (retry_number, retries, wait)
-        ),
+    return ctx.console.log_verbose(
+        "zh2en: transient failure; retry %d/%d in %.1fs" % (retry_number, retries, wait)
     )
 
 
@@ -461,14 +456,7 @@ def collect_stream(
     ctx: Context, payload: Mapping[str, Any], on_progress: ProgressCallback
 ) -> IO[Result[StreamState, TranslationError]]:
     def on_reasoning(text: str) -> IO[None]:
-        def thunk() -> None:
-            if ctx.verbose:
-                io_and_then(
-                    ctx.console.begin_raw(),
-                    ctx.console.write_raw(text),
-                ).run()
-
-        return IO(thunk)
+        return ctx.console.stream_reasoning(text)
 
     def note_progress(label: str, count: int) -> IO[None]:
         def thunk() -> None:
@@ -516,7 +504,7 @@ def log_all(
     console: Console, messages: tuple[str, ...]
 ) -> IO[Result[tuple[()], TranslationError]]:
     def step(_: tuple[()], message: str) -> IO[Result[tuple[()], TranslationError]]:
-        return io_map(console.log(message), lambda _: Ok(()))
+        return io_map(console.log_verbose(message), lambda _: Ok(()))
 
     return fold_io(messages, step, Ok(()))
 
@@ -585,7 +573,7 @@ def streamed_call(
             reasoning=state.reasoning,
             reported=state.reported,
             counted=state.counted,
-            reasoning_shown=ctx.verbose,
+            reasoning_shown=ctx.console.verbose.value,
         )
 
     return io_map(
@@ -624,7 +612,7 @@ def conclude_chat(
     )
     messages = (
         tuple(text.rstrip() for text in reply.reasoning + think_texts if text.strip())
-        if ctx.verbose and not reply.reasoning_shown
+        if ctx.console.verbose.value and not reply.reasoning_shown
         else ()
     )
 

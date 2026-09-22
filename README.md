@@ -45,6 +45,19 @@ command line.
 
 See `example.toml` for a starting point.
 
+## Interactive verbose toggle
+
+When stderr is a terminal, zh2en listens for key presses on the
+controlling TTY while the pipeline runs (stdin stays reserved for the
+input text). Pressing **Tab** toggles verbose mode: the session's output
+on stderr is erased (only the rows this run printed — your scrollback is
+untouched) and re-rendered for the new mode, so `--verbose` diagnostics
+and LLM reasoning traces can be switched on or off mid-run. History is
+kept in memory, including reasoning captured while hidden; a toggle
+reveals it retroactively. Taller-than-screen history scrolls into
+scrollback and cannot be erased by the re-render. The listener is off
+when stderr is not a TTY (pipes, CI).
+
 ## Logging
 
 Every run writes a log to `<cache-dir>/logs/<timestamp>-<pid>.log`
@@ -153,7 +166,10 @@ idioms (PEP 695 generics, comprehensions over accumulation).
   - `effects` — the IO vocabulary: stdin/stdout, TOML and cache files
     (including pruning), the run log (with an injected clock).
   - `console` — the status line as a `Ref[StatusView]` plus pure render
-    transitions, and stderr reporting.
+    transitions, the session event log with verbose replay, and stderr
+    reporting.
+  - `keys` — the Tab-key listener on the controlling TTY (cbreak mode,
+    restored on exit) that toggles verbose mode.
   - `settings` — the frozen data vocabulary (`Config`, `Settings`,
     `PassDefinition`, `Arguments`, `Context`) with defaults and small
     pure accessors.

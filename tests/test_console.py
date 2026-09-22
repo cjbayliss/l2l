@@ -1,21 +1,34 @@
 import io
 import time
 
+from fakes import make_console
+
 from zh2en.console import (
+    Console,
+    LogEvent,
     StatusLine,
     StatusView,
     draw_render,
+    erase_rows_render,
+    event_line,
+    event_visible,
     finish_render,
     interrupt_render,
     progress_render,
     raw_begin_render,
     raw_end_render,
     raw_write_render,
+    replay_rows,
+    replay_text,
+    row_count,
     start_render,
     status_erase_text,
     status_line_text,
     stop_render,
+    terminal_size,
+    toggle_verbose,
 )
+from zh2en.monads import write_ref
 
 
 def test_status_line_text_renders_prefix_and_values() -> None:
@@ -225,3 +238,215 @@ def test_status_line_raw_without_live_still_writes() -> None:
     status.write_raw("thought\n").run()
     status.end_raw().run()
     assert stream.getvalue() == "thought\n"
+
+
+def make_live_console() -> tuple[Console, io.StringIO]:
+    stream = io.StringIO()
+    console = Console(stream, StatusLine(stream, live=True), term_size=lambda: (80, 24))
+    return console, stream
+
+
+def test_row_count_accounts_for_wrapping_and_blank_lines() -> None:
+    assert row_count("one", 80) == 1
+    assert row_count("a\nb", 80) == 2
+    assert row_count("a\n\n", 80) == 2
+    assert row_count("", 80) == 0
+    assert row_count("x" * 100, 80) == 2
+    assert row_count("x" * 10, 4) == 3
+    assert row_count("word", 0) == 4
+
+
+def test_event_line_appends_newlines() -> None:
+    assert event_line(LogEvent("done", False, False, 1)) == "done\n"
+    assert event_line(LogEvent("thought", True, True, 1)) == "thought\n"
+    assert event_line(LogEvent("thought\n", True, True, 1)) == "thought\n"
+
+
+def test_event_visible_follows_verbose_mode() -> None:
+    assert event_visible(LogEvent("a", False, False, 1), False)
+    assert not event_visible(LogEvent("a", True, False, 1), False)
+    assert event_visible(LogEvent("a", True, False, 1), True)
+
+
+def test_replay_text_filters_events_and_keeps_pending_open() -> None:
+    events = (
+        LogEvent("one", False, False, 1),
+        LogEvent("two", True, False, 1),
+    )
+    assert replay_text(events, "", False) == "one\n"
+    assert replay_text(events, "", True) == "one\ntwo\n"
+    assert replay_text(events, "think", True) == "one\ntwo\nthink"
+    assert replay_text(events, "think", False) == "one\n"
+
+
+def test_replay_rows_counts_visible_rows_only() -> None:
+    events = (
+        LogEvent("one", False, False, 1),
+        LogEvent("two", True, False, 2),
+    )
+    assert replay_rows(events, "think", False, 80) == 1
+    assert replay_rows(events, "think", True, 80) == 4
+    assert replay_rows((), "", False, 80) == 0
+
+
+def test_erase_rows_render_clamps_to_screen_height() -> None:
+    assert erase_rows_render(0, 24) == "\x1b[J"
+    assert erase_rows_render(3, 24) == "\x1b[3A\x1b[J"
+    assert erase_rows_render(50, 24) == "\x1b[23A\x1b[J"
+    assert erase_rows_render(3, 1) == "\x1b[J"
+    assert erase_rows_render(-1, 24) == ""
+
+
+def test_console_records_log_and_verbose_events() -> None:
+    console, _ = make_live_console()
+    console.log("one").run()
+    console.log_verbose("two").run()
+    events = console.events.value
+    assert [event.text for event in events] == ["one", "two"]
+    assert [event.verbose_only for event in events] == [False, True]
+    assert [event.rows for event in events] == [1, 1]
+    assert console.displayed_rows.value == 1
+
+
+def test_log_verbose_hides_until_verbose_is_enabled() -> None:
+    console, stream = make_live_console()
+    console.log_verbose("hidden").run()
+    assert stream.getvalue() == ""
+    write_ref(console.verbose, True).run()
+    console.log_verbose("shown").run()
+    assert stream.getvalue() == "shown\n"
+    assert console.displayed_rows.value == 1
+
+
+def test_toggle_verbose_replays_visible_history() -> None:
+    console, stream = make_live_console()
+    console.log("one").run()
+    console.log_verbose("two").run()
+    assert stream.getvalue() == "one\n"
+
+    assert toggle_verbose(console).run() is True
+    assert stream.getvalue() == "one\n" + "\x1b[1A\x1b[J" + "one\ntwo\n"
+    assert console.verbose.value is True
+
+    assert toggle_verbose(console).run() is False
+    assert stream.getvalue() == (
+        "one\n" + "\x1b[1A\x1b[J" + "one\ntwo\n" + "\x1b[2A\x1b[J" + "one\n"
+    )
+    assert console.verbose.value is False
+
+
+def test_console_replay_without_live_is_a_noop() -> None:
+    console, stream = make_console()
+    console.log("one").run()
+    assert toggle_verbose(console).run() is True
+    assert stream.getvalue() == "one\n"
+
+
+def test_replay_clamps_erase_to_visible_rows() -> None:
+    console, stream = make_live_console()
+    console.log("first").run()
+    console.log("last").run()
+    write_ref(console.displayed_rows, 50).run()
+    toggle_verbose(console).run()
+    assert stream.getvalue() == ("first\nlast\n" + "\x1b[23A\x1b[J" + "first\nlast\n")
+
+
+def test_stream_reasoning_captures_while_hidden_then_replays() -> None:
+    console, stream = make_live_console()
+    console.stream_reasoning("secret ").run()
+    console.stream_reasoning("thought").run()
+    assert stream.getvalue() == ""
+    assert console.pending_raw.value == "secret thought"
+
+    toggle_verbose(console).run()
+    assert stream.getvalue() == "secret thought"
+    assert console.status.view.value.raw is True
+
+    console.stream_reasoning(" more").run()
+    assert stream.getvalue() == "secret thought more"
+
+    console.end_raw().run()
+    assert stream.getvalue() == "secret thought more\n"
+    assert console.pending_raw.value == ""
+    assert console.events.value[-1] == LogEvent("secret thought more", True, True, 1)
+
+
+def test_toggle_off_mid_raw_clears_only_the_open_row() -> None:
+    console, stream = make_live_console()
+    write_ref(console.verbose, True).run()
+    console.stream_reasoning("thinking").run()
+    assert stream.getvalue() == "thinking"
+
+    toggle_verbose(console).run()
+    assert stream.getvalue() == "thinking" + "\r" + "\x1b[J"
+    assert console.verbose.value is False
+    assert console.status.view.value.raw is False
+
+    toggle_verbose(console).run()
+    assert stream.getvalue() == "thinking" + "\r" + "\x1b[J" + "thinking"
+    assert console.status.view.value.raw is True
+    assert console.status.view.value.raw_open is True
+
+
+def test_toggle_off_erases_shown_reasoning_and_replays_from_events() -> None:
+    console, stream = make_live_console()
+    write_ref(console.verbose, True).run()
+    console.stream_reasoning("thoughts\n").run()
+    console.end_raw().run()
+    assert stream.getvalue() == "thoughts\n"
+
+    toggle_verbose(console).run()
+    assert stream.getvalue() == "thoughts\n" + "\x1b[1A\x1b[J"
+
+    toggle_verbose(console).run()
+    assert stream.getvalue() == ("thoughts\n" + "\x1b[1A\x1b[J" + "thoughts\n")
+
+
+def test_log_commits_open_reasoning_block_before_the_message() -> None:
+    console, stream = make_live_console()
+    write_ref(console.verbose, True).run()
+    console.stream_reasoning("thinking").run()
+    console.log("msg").run()
+    assert stream.getvalue() == "thinking" + "\n" + "msg\n"
+    events = console.events.value
+    assert [event.text for event in events] == ["thinking", "msg"]
+    assert [event.raw for event in events] == [True, False]
+    assert console.pending_raw.value == ""
+
+
+def test_finish_records_the_prefixed_line() -> None:
+    console, stream = make_live_console()
+    console.write_partial("Enforcing ASCII... ").run()
+    console.finish("0.50s, 1, 2, $0.01").run()
+    assert stream.getvalue() == "Enforcing ASCII... 0.50s, 1, 2, $0.01\n"
+    assert console.events.value[-1].text == "Enforcing ASCII... 0.50s, 1, 2, $0.01"
+    assert console.displayed_rows.value == 1
+
+
+def test_replay_erases_drawn_status_line() -> None:
+    console, stream = make_live_console()
+    console.status.start("Working").run()
+    console.log("update").run()
+    console.status.start("Working").run()
+    console.interrupt().run()
+    toggle_verbose(console).run()
+    output = stream.getvalue()
+    assert output.endswith("\x1b[1A\x1b[J" + "update\n")
+    assert "\r" in output
+
+
+def test_status_line_interrupt_erases_and_never_loops() -> None:
+    stream = io.StringIO()
+    status = StatusLine(stream, live=True, monotonic=lambda: 1.0)
+    status.start("Working").run()
+    time.sleep(0.25)
+    status.interrupt().run()
+    status.interrupt().run()
+    status.stop().run()
+    assert stream.getvalue().endswith("\r")
+
+
+def test_terminal_size_reports_positive_dimensions() -> None:
+    width, height = terminal_size()
+    assert width >= 1
+    assert height >= 1
