@@ -28,7 +28,7 @@ from zh2en.console import (
     terminal_size,
     toggle_verbose,
 )
-from zh2en.monads import write_ref
+from zh2en.monads import cons_to_tuple, write_ref
 
 
 def test_status_line_text_renders_prefix_and_values() -> None:
@@ -301,7 +301,7 @@ def test_console_records_log_and_verbose_events() -> None:
     console, _ = make_live_console()
     console.log("one").run()
     console.log_verbose("two").run()
-    events = console.events.value
+    events = cons_to_tuple(console.events.value)
     assert [event.text for event in events] == ["one", "two"]
     assert [event.verbose_only for event in events] == [False, True]
     assert [event.rows for event in events] == [1, 1]
@@ -368,7 +368,9 @@ def test_stream_reasoning_captures_while_hidden_then_replays() -> None:
     console.end_raw().run()
     assert stream.getvalue() == "secret thought more\n"
     assert console.pending_raw.value == ""
-    assert console.events.value[-1] == LogEvent("secret thought more", True, True, 1)
+    assert cons_to_tuple(console.events.value)[-1] == LogEvent(
+        "secret thought more", True, True, 1
+    )
 
 
 def test_toggle_off_mid_raw_clears_only_the_open_row() -> None:
@@ -408,7 +410,7 @@ def test_log_commits_open_reasoning_block_before_the_message() -> None:
     console.stream_reasoning("thinking").run()
     console.log("msg").run()
     assert stream.getvalue() == "thinking" + "\n" + "msg\n"
-    events = console.events.value
+    events = cons_to_tuple(console.events.value)
     assert [event.text for event in events] == ["thinking", "msg"]
     assert [event.raw for event in events] == [True, False]
     assert console.pending_raw.value == ""
@@ -419,7 +421,10 @@ def test_finish_records_the_prefixed_line() -> None:
     console.write_partial("Enforcing ASCII... ").run()
     console.finish("0.50s, 1, 2, $0.01").run()
     assert stream.getvalue() == "Enforcing ASCII... 0.50s, 1, 2, $0.01\n"
-    assert console.events.value[-1].text == "Enforcing ASCII... 0.50s, 1, 2, $0.01"
+    assert (
+        cons_to_tuple(console.events.value)[-1].text
+        == "Enforcing ASCII... 0.50s, 1, 2, $0.01"
+    )
     assert console.displayed_rows.value == 1
 
 

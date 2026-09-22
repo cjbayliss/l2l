@@ -11,6 +11,7 @@ from zh2en.effects import (
     cwd,
     load_toml,
     path_exists,
+    read_text_file,
     user_config_path,
 )
 from zh2en.errors import TranslationError, fail_config, fail_missing_settings
@@ -157,6 +158,9 @@ def params_api_setting(
     value = table["params"]
     if not isinstance(value, dict):
         return fail_config(f"{path}: [api] params must be a table")
+
+    if not is_json_value(value):
+        return fail_config(f"{path}: [api] params must contain only JSON values")
 
     return Ok(replace(partial, params=value))
 
@@ -315,6 +319,22 @@ def build_config(partial: PartialApiSettings) -> Result[Config, TranslationError
     )
 
 
+def is_json_value(value: Any) -> bool:
+    """True when `value` is a JSON scalar, or a list/table of JSON values."""
+    match value:
+        case bool() | int() | float() | str() | None:
+            return True
+
+        case list():
+            return all(is_json_value(item) for item in value)
+
+        case dict():
+            return all(is_json_value(item) for item in value.values())
+
+        case _:
+            return False
+
+
 def merged_api_settings(
     arguments: Arguments,
     environment: Mapping[str, str],
@@ -336,31 +356,37 @@ def merged_api_settings(
             ),
         )
 
-    layer: Result[PartialApiSettings, TranslationError] = Ok(DEFAULT_API_SETTINGS)
-    layer = result_bind(
-        layer,
+    def environment_layer(
+        partial: PartialApiSettings,
+    ) -> Result[PartialApiSettings, TranslationError]:
+        return result_map(
+            api_settings_from_environment(environment),
+            lambda extra: merge_api_settings(partial, extra),
+        )
+
+    def arguments_layer(
+        partial: PartialApiSettings,
+    ) -> Result[PartialApiSettings, TranslationError]:
+        return Ok(merge_api_settings(partial, api_settings_from_arguments(arguments)))
+
+    def step(
+        layer_result: Result[PartialApiSettings, TranslationError],
+        merge_layer: Callable[
+            [PartialApiSettings], Result[PartialApiSettings, TranslationError]
+        ],
+    ) -> Result[PartialApiSettings, TranslationError]:
+        return result_bind(layer_result, merge_layer)
+
+    layers = (
         lambda partial: merge_document(user_path, user_document_result, partial),
-    )
-    layer = result_bind(
-        layer,
         lambda partial: merge_document(
             selected_path, selected_document_result, partial
         ),
+        environment_layer,
+        arguments_layer,
     )
-    layer = result_bind(
-        layer,
-        lambda partial: result_map(
-            api_settings_from_environment(environment),
-            lambda extra: merge_api_settings(partial, extra),
-        ),
-    )
-    layer = result_map(
-        layer,
-        lambda partial: merge_api_settings(
-            partial, api_settings_from_arguments(arguments)
-        ),
-    )
-    return result_bind(layer, build_config)
+    initial: Result[PartialApiSettings, TranslationError] = Ok(DEFAULT_API_SETTINGS)
+    return result_bind(reduce(step, layers, initial), build_config)
 
 
 def parse_options_table(
@@ -406,6 +432,11 @@ def pass_definition_from(
     params = table.get("params", {})
     if not isinstance(params, dict):
         return fail_config(f"{path}: [[pass]] {name}: params must be a table")
+
+    if not is_json_value(params):
+        return fail_config(
+            f"{path}: [[pass]] {name}: params must contain only JSON values"
+        )
 
     return Ok(
         PassDefinition(
@@ -459,23 +490,22 @@ def load_instruction_text(
             fail_config(f"{path}: [[pass]] {name}: instruction_file must be a path")
         )
 
-    def thunk() -> Result[str, TranslationError]:
-        try:
-            with open(
-                os.path.join(base_directory, instruction_file), encoding="utf-8"
-            ) as handle:
-                instruction = handle.read().strip()
-        except OSError as error:
-            return fail_config(
-                f"{path}: [[pass]] {name}: cannot read instruction file: {error}"
-            )
+    description = f"{path}: [[pass]] {name}: instruction file"
+    file_path = os.path.join(base_directory, instruction_file)
 
-        if not instruction:
-            return fail_config(f"{path}: [[pass]] {name}: instruction file is empty")
+    def checked(
+        text_result: Result[str, TranslationError],
+    ) -> Result[str, TranslationError]:
+        return result_bind(
+            text_result,
+            lambda text: (
+                Ok(text.strip())
+                if text.strip()
+                else fail_config(f"{path}: [[pass]] {name}: instruction file is empty")
+            ),
+        )
 
-        return Ok(instruction)
-
-    return IO(thunk)
+    return io_map(read_text_file(file_path, description), checked)
 
 
 def parse_pass_table(
@@ -542,14 +572,14 @@ def document_layers(
     selected_path: str | None,
     selected_document: dict[str, Any],
 ) -> tuple[tuple[str | None, dict[str, Any]], ...]:
-    layers: tuple[tuple[str | None, dict[str, Any]], ...] = ()
-    if selected_document:
-        layers += ((selected_path, selected_document),)
-
-    if user_document:
-        layers += ((user_path, user_document),)
-
-    return layers
+    return tuple(
+        (path, document)
+        for path, document, present in (
+            (selected_path, selected_document, bool(selected_document)),
+            (user_path, user_document, bool(user_document)),
+        )
+        if present
+    )
 
 
 def resolve_passes(

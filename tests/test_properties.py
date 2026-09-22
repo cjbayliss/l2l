@@ -6,7 +6,7 @@ from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from zh2en.http import StreamState, step_stream
-from zh2en.monads import Ok
+from zh2en.monads import Ok, cons_to_tuple
 from zh2en.plans import plan_backoff
 from zh2en.settings import PartialApiSettings
 from zh2en.text import (
@@ -155,11 +155,20 @@ def test_ensure_blank_line_separators_preserves_paragraph_count(
 
 
 # --- SSE stream fold -------------------------------------------------------
+# Content excludes "<" (the <think> tag machinery legitimately consumes such
+# prefixes) and all-whitespace deltas (a whitespace-only prefix is held back
+# while checking for a tag, so raw contents differ until the held flush).
+PLAIN_TEXT = st.text(
+    alphabet=st.characters(min_codepoint=32, max_codepoint=0x10FFFF).filter(
+        lambda char: char != "<"
+    ),
+    max_size=12,
+).filter(lambda text: not text.isspace())
 CONTENT_CHUNKS = st.fixed_dictionaries(
     {
         "choices": st.lists(
             st.fixed_dictionaries(
-                {"delta": st.fixed_dictionaries({"content": st.text(max_size=12)})}
+                {"delta": st.fixed_dictionaries({"content": PLAIN_TEXT})}
             ),
             min_size=1,
             max_size=1,
@@ -206,7 +215,7 @@ def test_stream_fold_concatenates_deltas_and_keeps_last_usage(
         for chunk in chunks
         if "choices" in chunk
     )
-    assert "".join(state.contents) == expected
+    assert "".join(cons_to_tuple(state.contents)) == expected
 
     usages = [chunk["usage"] for chunk in chunks if "usage" in chunk]
     if usages:

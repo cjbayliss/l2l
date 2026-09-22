@@ -9,9 +9,11 @@ from zh2en.config import (
     document_api_settings,
     document_passes,
     load_instruction_text,
+    load_setup,
     max_tokens_api_setting,
     merge_api_settings,
     merged_api_settings,
+    params_api_setting,
     parse_options_table,
     parse_pass_table,
     pass_definition_from,
@@ -392,10 +394,67 @@ def test_load_instruction_text_rejects_bad_file_settings(
         "f", "p", {"instruction_file": "missing.txt"}, str(tmp_path)
     ).run()
     assert isinstance(result, Err)
-    assert "cannot read instruction file" in describe(result.error)
+    assert "instruction file not found" in describe(result.error)
 
 
 def test_read_document_without_a_file_is_empty() -> None:
     result = read_document("f", "config file", exists=False).run()
     assert isinstance(result, Ok)
     assert result.value == {}
+
+
+def test_resolve_config_path_discovers_local_then_user(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    empty_root = tmp_path / "empty"
+    empty_root.mkdir()
+    monkeypatch.chdir(tmp_path)
+    assert resolve_config_path(None, {"XDG_CONFIG_HOME": str(empty_root)}).run() is (
+        None
+    )
+
+    local = tmp_path / "zh2en.toml"
+    local.write_text("", encoding="utf-8")
+    assert resolve_config_path(None, {}).run() == str(local)
+
+    user_root = tmp_path / "cfg"
+    user_path = user_root / "zh2en" / "config.toml"
+    user_path.parent.mkdir(parents=True)
+    user_path.write_text("", encoding="utf-8")
+    local.unlink()
+    assert resolve_config_path(None, {"XDG_CONFIG_HOME": str(user_root)}).run() == (
+        str(user_path)
+    )
+
+
+def test_load_setup_reports_malformed_toml(tmp_path: Path) -> None:
+    config_path = tmp_path / "broken.toml"
+    config_path.write_text("[api\nbroken", encoding="utf-8")
+    arguments = Arguments(
+        config=str(config_path),
+        base_url=None,
+        api_key=None,
+        model=None,
+        timeout=None,
+        max_tokens=None,
+        no_cache=False,
+        ensure_paragraphs=False,
+        verbose=False,
+        show_log_path=False,
+        cache_dir=None,
+    )
+    result = load_setup(arguments, {}).run()
+    assert isinstance(result, Err)
+    assert "cannot parse config file" in describe(result.error)
+
+
+def test_api_params_must_contain_json_values() -> None:
+    result = params_api_setting("f", PartialApiSettings(), {"params": {"t": object()}})
+    assert isinstance(result, Err)
+    assert "[api] params must contain only JSON values" in describe(result.error)
+
+
+def test_pass_params_must_contain_json_values() -> None:
+    result = pass_definition_from("f", "p", {"params": {"t": [object()]}}, "i")
+    assert isinstance(result, Err)
+    assert "params must contain only JSON values" in describe(result.error)

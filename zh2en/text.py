@@ -11,7 +11,7 @@ from functools import reduce
 from itertools import accumulate, chain
 from typing import Any
 
-from zh2en.monads import NOTHING, Just, Maybe
+from zh2en.monads import NOTHING, Just, Maybe, maybe_or_else_get
 
 
 @dataclass(frozen=True)
@@ -90,10 +90,8 @@ def make_chunks(
 
 def split_sentences(text: str, boundary_characters: str) -> tuple[str, ...]:
     pieces = re.split(f"(?<=[{re.escape(boundary_characters)}])", text)
-    if pieces and pieces[-1] == "":
-        pieces = pieces[:-1]
-
-    return tuple(pieces)
+    trimmed = pieces[:-1] if pieces and pieces[-1] == "" else pieces
+    return tuple(trimmed)
 
 
 def split_to_budget(
@@ -162,11 +160,26 @@ def regroup_by_plan(
     )
 
 
+FLOAT_PATTERN = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+
+
+def parse_float(value: Any) -> Maybe[float]:
+    """Parse a JSON-ish number without exceptions: numbers pass through,
+    numeric strings are matched algebraically, everything else is Nothing."""
+    if isinstance(value, bool):
+        return NOTHING
+
+    if isinstance(value, (int, float)):
+        return Just(float(value))
+
+    if isinstance(value, str) and FLOAT_PATTERN.fullmatch(value.strip()):
+        return Just(float(value))
+
+    return NOTHING
+
+
 def parse_cost(value: Any) -> float:
-    try:
-        return float(value or 0.0)
-    except TypeError, ValueError:
-        return 0.0
+    return maybe_or_else_get(parse_float(value), lambda: 0.0)
 
 
 def add_usage(usage: Usage, reported: Mapping[str, Any]) -> Usage:
@@ -279,8 +292,7 @@ def sse_step(
         return state, None
 
     if line.startswith("data:"):
-        payload = line[len("data:") :]
-        payload = payload.removeprefix(" ")
+        payload = line[len("data:") :].removeprefix(" ")
 
         return replace(state, pending=state.pending + (payload,)), None
 
@@ -358,24 +370,23 @@ def cache_key(
     overrides: Mapping[str, Any] | None = None,
     context: str = "",
 ) -> str:
-    hasher = hashlib.sha256()
-    if pass_salt:
-        hasher.update(pass_salt.encode("utf-8") + b"\x00")
-
-    hasher.update(chunk_text.encode("utf-8"))
-    if work_text:
-        hasher.update(b"\x00work\x00" + work_text.encode("utf-8"))
-
-    if context:
-        hasher.update(b"\x00context\x00" + context.encode("utf-8"))
-
-    hasher.update(b"\x00" + model.encode("utf-8"))
-    if overrides:
-        hasher.update(
-            b"\x00"
-            + json.dumps(
-                overrides, sort_keys=True, ensure_ascii=False, default=str
-            ).encode("utf-8")
+    salted = pass_salt.encode("utf-8") + b"\x00" if pass_salt else b""
+    worked = b"\x00work\x00" + work_text.encode("utf-8") if work_text else b""
+    contexted = b"\x00context\x00" + context.encode("utf-8") if context else b""
+    overriden = (
+        b"\x00"
+        + json.dumps(overrides, sort_keys=True, ensure_ascii=False, default=str).encode(
+            "utf-8"
         )
-
-    return hasher.hexdigest()
+        if overrides
+        else b""
+    )
+    parts = (
+        salted,
+        chunk_text.encode("utf-8"),
+        worked,
+        contexted,
+        b"\x00" + model.encode("utf-8"),
+        overriden,
+    )
+    return hashlib.sha256(b"".join(parts)).hexdigest()

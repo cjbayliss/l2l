@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from functools import reduce
 from typing import Protocol
 
 
@@ -121,6 +122,33 @@ class Nothing:
 
 
 type Maybe[T] = Just[T] | Nothing
+
+
+@dataclass(frozen=True)
+class Cons[T]:
+    """An immutable cons cell; prepend is O(1), so an accumulation that
+    only ever reads the whole sequence at the end stays linear overall."""
+
+    head: T
+    tail: Cons[T] | None = None
+
+
+def cons[T](head: T, tail: Cons[T] | None = None) -> Cons[T]:
+    return Cons(head, tail)
+
+
+def cons_all[T](heads: Iterable[T], tail: Cons[T] | None = None) -> Cons[T] | None:
+    return reduce(lambda accumulated, head: Cons(head, accumulated), heads, tail)
+
+
+def cons_to_tuple[T](items: Cons[T] | None) -> tuple[T, ...]:
+    collected: list[T] = []
+    while items is not None:
+        collected.append(items.head)
+        items = items.tail
+
+    collected.reverse()
+    return tuple(collected)
 
 
 NOTHING: Nothing = Nothing()

@@ -16,7 +16,7 @@ def usage_line(
         fmt_duration(elapsed),
         prompt_tokens,
         completion_tokens,
-        completion_tokens / elapsed if elapsed else 0.0,
+        completion_tokens / elapsed if elapsed > 0 else 0.0,
         cost,
     )
 
@@ -24,7 +24,7 @@ def usage_line(
 def stage_done_line(
     elapsed: float, prompt_tokens: int, completion_tokens: int, cost: float
 ) -> str:
-    if prompt_tokens or completion_tokens or cost:
+    if prompt_tokens != 0 or completion_tokens != 0 or cost != 0.0:
         return usage_line("Done", elapsed, prompt_tokens, completion_tokens, cost)
 
     return "Done."

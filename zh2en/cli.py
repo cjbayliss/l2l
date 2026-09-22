@@ -18,6 +18,7 @@ from zh2en.effects import (
     io_isatty,
     now,
     open_run_log,
+    prune_old_logs,
     read_stdin,
     remove_file,
     resolve_cache_dir,
@@ -35,6 +36,7 @@ from zh2en.monads import (
     Ref,
     Result,
     fold_io,
+    io_and_then,
     io_bind,
     io_map,
     io_pure,
@@ -140,6 +142,14 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         type=int,
         help="delete cache entries older than DAYS days and exit",
     )
+    parser.add_argument(
+        "--log-keep",
+        metavar="DAYS",
+        type=int,
+        default=30,
+        help="delete run logs older than DAYS days at startup (0 keeps "
+        "every log; default: %(default)s)",
+    )
     parsed = parser.parse_args(arguments)
     return Arguments(
         config=parsed.config,
@@ -157,6 +167,7 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         dry_run=parsed.dry_run,
         stream=parsed.stream,
         cache_prune=parsed.cache_prune,
+        log_keep=parsed.log_keep,
     )
 
 
@@ -210,6 +221,58 @@ def main(
     return io_bind(parse_arguments(arguments), after_parse)
 
 
+def with_console_io(
+    stderr: TextIO,
+    bound: Callable[[Console], IO[int]],
+    verbose: bool = False,
+) -> IO[int]:
+    """Build the session console from a liveness probe, then continue."""
+
+    def with_live(live: bool) -> IO[int]:
+        return bound(Console(stderr, StatusLine(stderr, live), verbose=Ref(verbose)))
+
+    return io_bind(io_isatty(stderr), with_live)
+
+
+def build_context(
+    parsed: Arguments,
+    setup: Setup,
+    console: Console,
+    clock: Callable[[], float],
+    cache_directory: str = "",
+    use_cache: bool = False,
+    log: RunLog | None = None,
+) -> Context:
+    return Context(
+        config=setup.config,
+        settings=build_settings(),
+        use_cache=use_cache,
+        cache_directory=cache_directory,
+        ensure_paragraphs=parsed.ensure_paragraphs or setup.ensure_paragraphs,
+        console=console,
+        open_http=urllib_open,
+        log=log if log is not None else RunLog(NOTHING, clock),
+        clock=clock,
+        sleep=time_sleep,
+        stream=parsed.stream,
+    )
+
+
+def dry_run_program(
+    parsed: Arguments,
+    setup: Setup,
+    console: Console,
+    clock: Callable[[], float],
+    text: str,
+    stdout: TextIO,
+) -> IO[int]:
+    planning_ctx = build_context(parsed, setup, console, clock)
+    return io_map(
+        write_stdout(stdout, plan_report(planning_ctx, setup.passes, text) + "\n"),
+        lambda _: 0,
+    )
+
+
 def check_config_program(
     parsed: Arguments,
     environment: Mapping[str, str],
@@ -217,9 +280,7 @@ def check_config_program(
     stderr: TextIO,
     clock: Callable[[], float],
 ) -> IO[int]:
-    def with_console(live: bool) -> IO[int]:
-        console = Console(stderr, StatusLine(stderr, live))
-
+    def with_console(console: Console) -> IO[int]:
         def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
             if isinstance(setup_result, Err):
                 return io_map(console.log(describe(setup_result.error)), lambda _: 2)
@@ -232,7 +293,7 @@ def check_config_program(
 
         return io_bind(load_setup(parsed, environment), use_setup)
 
-    return io_bind(io_isatty(stderr), with_console)
+    return with_console_io(stderr, with_console)
 
 
 def prune_program(
@@ -241,10 +302,9 @@ def prune_program(
     stderr: TextIO,
     clock: Callable[[], float],
 ) -> IO[int]:
-    def with_console(live: bool) -> IO[int]:
-        console = Console(stderr, StatusLine(stderr, live))
-        days = parsed.cache_prune or 0
-        if days <= 0:
+    def with_console(console: Console) -> IO[int]:
+        days = parsed.cache_prune
+        if days is None or days <= 0:
             return io_map(
                 console.log("zh2en: --cache-prune requires a positive number of days"),
                 lambda _: 2,
@@ -281,7 +341,7 @@ def prune_program(
 
         return io_bind(resolve_cache_dir(environment, parsed.cache_dir), with_cache_dir)
 
-    return io_bind(io_isatty(stderr), with_console)
+    return with_console_io(stderr, with_console)
 
 
 def run_main_program(
@@ -295,37 +355,14 @@ def run_main_program(
     if not text.strip():
         return io_pure(0)
 
-    def with_console(live: bool) -> IO[int]:
-        console = Console(stderr, StatusLine(stderr, live), verbose=Ref(parsed.verbose))
-
+    def with_console(console: Console) -> IO[int]:
         def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
             if isinstance(setup_result, Err):
                 return io_map(console.log(describe(setup_result.error)), lambda _: 2)
 
             setup = setup_result.value
-
             if parsed.dry_run:
-                planning_ctx = Context(
-                    config=setup.config,
-                    settings=build_settings(),
-                    use_cache=False,
-                    cache_directory="",
-                    ensure_paragraphs=parsed.ensure_paragraphs
-                    or setup.ensure_paragraphs,
-                    console=console,
-                    open_http=urllib_open,
-                    log=RunLog(NOTHING, clock),
-                    clock=clock,
-                    sleep=time_sleep,
-                    stream=parsed.stream,
-                )
-                return io_map(
-                    write_stdout(
-                        stdout,
-                        plan_report(planning_ctx, setup.passes, text) + "\n",
-                    ),
-                    lambda _: 0,
-                )
+                return dry_run_program(parsed, setup, console, clock, text, stdout)
 
             def with_started(started: float) -> IO[int]:
                 def with_cache_dir(cache_directory: str) -> IO[int]:
@@ -339,21 +376,28 @@ def run_main_program(
                             lambda: io_pure(None),
                         )
 
-                        def run_with_log(_: None) -> IO[int]:
+                        def with_retention(_: None) -> IO[int]:
+                            retention = io_when_unit(
+                                parsed.log_keep > 0,
+                                io_map(
+                                    prune_old_logs(
+                                        cache_directory, parsed.log_keep, clock
+                                    ),
+                                    lambda _: None,
+                                ),
+                            )
+                            return io_and_then(retention, run_with_log())
+
+                        def run_with_log() -> IO[int]:
                             pipeline = run_pipeline(
-                                Context(
-                                    config=setup.config,
-                                    settings=build_settings(),
-                                    use_cache=not parsed.no_cache,
+                                build_context(
+                                    parsed,
+                                    setup,
+                                    console,
+                                    clock,
                                     cache_directory=cache_directory,
-                                    ensure_paragraphs=parsed.ensure_paragraphs
-                                    or setup.ensure_paragraphs,
-                                    console=console,
-                                    open_http=urllib_open,
+                                    use_cache=not parsed.no_cache,
                                     log=log,
-                                    clock=clock,
-                                    sleep=time_sleep,
-                                    stream=parsed.stream,
                                 ),
                                 setup.passes,
                                 text,
@@ -365,16 +409,18 @@ def run_main_program(
                                 def toggle() -> None:
                                     toggle_verbose(console).run()
 
-                                stop_listener = start_tab_listener(console, toggle)
+                                stop_listener = start_tab_listener(
+                                    console, toggle
+                                ).run()
                                 try:
                                     return pipeline.run()
                                 finally:
-                                    stop_listener()
+                                    stop_listener.run()
                                     close_run_log(log).run()
 
                             return IO(execute)
 
-                        return io_bind(announced, run_with_log)
+                        return io_bind(announced, with_retention)
 
                     return io_bind(open_run_log(cache_directory, clock), with_log)
 
@@ -386,7 +432,7 @@ def run_main_program(
 
         return io_bind(load_setup(parsed, environment), use_setup)
 
-    return io_bind(io_isatty(stderr), with_console)
+    return with_console_io(stderr, with_console, verbose=parsed.verbose)
 
 
 def cli() -> None:

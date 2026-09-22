@@ -11,7 +11,9 @@ from typing import TextIO
 
 from zh2en.monads import (
     IO,
+    Cons,
     Ref,
+    cons_to_tuple,
     io_and_then,
     io_atomic,
     io_bind,
@@ -353,21 +355,23 @@ def event_line(event: LogEvent) -> str:
 
 
 def replay_text(events: tuple[LogEvent, ...], pending: str, verbose: bool) -> str:
-    parts = [event_line(event) for event in events if event_visible(event, verbose)]
-    if verbose and pending:
-        parts.append(pending)
-
-    return "".join(parts)
+    return "".join(
+        (
+            *(event_line(event) for event in events if event_visible(event, verbose)),
+            pending if verbose and pending else "",
+        )
+    )
 
 
 def replay_rows(
     events: tuple[LogEvent, ...], pending: str, verbose: bool, width: int
 ) -> int:
-    rows = sum(event.rows for event in events if event_visible(event, verbose))
-    if verbose and pending:
-        rows += row_count(pending, width)
-
-    return rows
+    return sum(
+        (
+            sum(event.rows for event in events if event_visible(event, verbose)),
+            row_count(pending, width) if verbose and pending else 0,
+        )
+    )
 
 
 def erase_rows_render(rows: int, height: int) -> str:
@@ -392,22 +396,28 @@ class Console:
     stream: TextIO
     status: StatusLine
     verbose: Ref[bool] = field(default_factory=lambda: Ref(False))
-    events: Ref[tuple[LogEvent, ...]] = field(default_factory=lambda: Ref(()))
+    events: Ref[Cons[LogEvent] | None] = field(default_factory=lambda: Ref(None))
     pending_raw: Ref[str] = field(default_factory=lambda: Ref(""))
     displayed_rows: Ref[int] = field(default_factory=lambda: Ref(0))
     term_size: Callable[[], tuple[int, int]] = terminal_size
 
+    def session_events(self) -> tuple[LogEvent, ...]:
+        """Snapshot the recorded events in chronological order."""
+        return cons_to_tuple(self.events.value)
+
     def record(self, text: str, verbose_only: bool, raw: bool) -> IO[None]:
         """Append a session event; compose inside a status-lock `io_atomic`."""
-        width = self.term_size()[0]
-        event = LogEvent(
-            text=text,
-            verbose_only=verbose_only,
-            raw=raw,
-            rows=row_count(text, width),
-        )
 
-        def tracked(_: tuple[LogEvent, ...]) -> IO[None]:
+        def tracked(
+            events: Cons[LogEvent] | None,
+        ) -> tuple[Cons[LogEvent] | None, IO[None]]:
+            event = LogEvent(
+                text=text,
+                verbose_only=verbose_only,
+                raw=raw,
+                rows=row_count(text, self.term_size()[0]),
+            )
+
             def counted(verbose: bool) -> IO[None]:
                 if raw or verbose_only and not verbose:
                     return io_pure(None)
@@ -417,12 +427,12 @@ class Console:
                     lambda _: None,
                 )
 
-            return io_bind(read_ref(self.verbose), counted)
+            return Cons(event, events), io_bind(read_ref(self.verbose), counted)
 
-        return io_bind(
-            modify_ref(self.events, lambda events: events + (event,)),
-            tracked,
-        )
+        def emit(effect: IO[None]) -> IO[None]:
+            return effect
+
+        return io_bind(modify_ref_with(self.events, tracked), emit)
 
     def commit_pending_raw(self) -> IO[None]:
         """Seal an open reasoning block; compose inside a locked scope."""
@@ -542,10 +552,16 @@ class Console:
                 tuple[int, StatusView],
             ]
         ]:
+            def ordered(events: Cons[LogEvent] | None) -> tuple[LogEvent, ...]:
+                return cons_to_tuple(events)
+
             return io_pair(
                 io_pair(
                     read_ref(self.verbose),
-                    io_pair(read_ref(self.events), read_ref(self.pending_raw)),
+                    io_pair(
+                        io_map(read_ref(self.events), ordered),
+                        read_ref(self.pending_raw),
+                    ),
                 ),
                 io_pair(read_ref(self.displayed_rows), read_ref(self.status.view)),
             )
@@ -559,13 +575,13 @@ class Console:
             (verbose, (events, pending)), (shown_rows, view) = inputs
             width, height = self.term_size()
             inside = view.raw and view.raw_open
-            erase = status_erase_text(view)
-            if inside:
-                erase += "\r"
-                erase += erase_rows_render(shown_rows - 1, height)
-            elif shown_rows > 0:
-                erase += erase_rows_render(shown_rows, height)
-
+            erase = status_erase_text(view) + (
+                "\r" + erase_rows_render(shown_rows - 1, height)
+                if inside
+                else erase_rows_render(shown_rows, height)
+                if shown_rows > 0
+                else ""
+            )
             text = replay_text(events, pending, verbose)
 
             def written(_: None) -> IO[None]:
