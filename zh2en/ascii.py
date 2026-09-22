@@ -11,7 +11,7 @@ from functools import reduce
 from zh2en.cache import cached_translation
 from zh2en.effects import now
 from zh2en.errors import TranslationError, fail_ascii
-from zh2en.http import chat
+from zh2en.http import repaired_call
 from zh2en.messages import (
     ascii_cache_hit_message,
     ascii_llm_message,
@@ -21,8 +21,10 @@ from zh2en.messages import (
 )
 from zh2en.monads import (
     IO,
+    NOTHING,
     Err,
     Just,
+    Maybe,
     Ok,
     Result,
     io_and_then,
@@ -30,15 +32,15 @@ from zh2en.monads import (
     io_map,
     io_result,
     io_traverse,
-    result_bind_io,
     result_map,
 )
 from zh2en.plans import (
     ascii_drop_warning,
     build_ascii_fix_user,
     build_ascii_retry_user,
+    verbose_log,
 )
-from zh2en.settings import Context, PassDefinition, resolve_call_settings
+from zh2en.settings import Context, PassDefinition, resolve_call_settings, salt
 from zh2en.text import (
     CACHE_SALT_VERSION,
     Translated,
@@ -52,10 +54,6 @@ from zh2en.text import (
 )
 
 
-def verbose_log(ctx: Context, message: str) -> IO[None]:
-    return ctx.console.log_verbose(message)
-
-
 def ascii_fix_llm(
     ctx: Context,
     pass_definition: PassDefinition,
@@ -67,66 +65,46 @@ def ascii_fix_llm(
     key = cache_key(
         source_paragraph,
         model,
-        "\x00".join(
-            (
-                CACHE_SALT_VERSION,
-                "ascii-fix",
-                pass_definition.name,
-                ctx.settings.ascii_fix_instruction,
-            )
+        salt(
+            CACHE_SALT_VERSION,
+            "ascii-fix",
+            pass_definition.name,
+            ctx.settings.ascii_fix_instruction,
         ),
         output_paragraph,
         overrides=params,
     )
 
-    def attempt(
-        index: int, user: str, last_result: str, current_usage: Usage
-    ) -> IO[Result[Translated, TranslationError]]:
-        if index > ctx.settings.ascii_fix_attempts:
-            return io_result(Ok(Translated(last_result, current_usage)))
+    def validate(result: str) -> Maybe[str]:
+        return NOTHING if result.isascii() else Just("reply was not pure ASCII")
 
-        return io_bind(
-            chat(
-                ctx,
-                ctx.settings.ascii_fix_instruction,
-                user,
-                model,
-                params,
-                current_usage,
-            ),
-            lambda result: result_bind_io(
-                result,
-                lambda translated: ascii_outcome(
-                    index, translated.text, translated.usage
-                ),
-            ),
-        )
-
-    def ascii_outcome(
-        index: int, result: str, current_usage: Usage
-    ) -> IO[Result[Translated, TranslationError]]:
-        if result.isascii():
-            return io_result(Ok(Translated(result, current_usage)))
-
-        return io_bind(
-            verbose_log(
-                ctx,
-                ascii_retry_message(index, ctx.settings.ascii_fix_attempts),
-            ),
-            lambda _: attempt(
-                index + 1,
-                build_ascii_retry_user(source_paragraph, output_paragraph, result),
-                result,
-                current_usage,
-            ),
+    def on_repair(failed: int, _problem: str) -> IO[None]:
+        return verbose_log(
+            ctx, ascii_retry_message(failed, ctx.settings.ascii_fix_attempts)
         )
 
     def start() -> IO[Result[Translated, TranslationError]]:
-        return attempt(
-            1,
+        call = repaired_call(
+            ctx,
+            model,
+            params,
+            ctx.settings.ascii_fix_instruction,
             build_ascii_fix_user(source_paragraph, output_paragraph),
-            "",
-            usage,
+            validate,
+            lambda bad_output, _problem: build_ascii_retry_user(
+                source_paragraph, output_paragraph, bad_output
+            ),
+            # `ascii_fix_attempts` counts every LLM try, the repair loop
+            # counts retries after the first call, hence the difference.
+            ctx.settings.ascii_fix_attempts - 1,
+            on_repair,
+            None,
+        )
+        return io_map(
+            call(usage),
+            lambda outcome: result_map(
+                outcome, lambda repaired: Translated(repaired[0], repaired[1])
+            ),
         )
 
     return cached_translation(

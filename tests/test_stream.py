@@ -20,7 +20,7 @@ from zh2en.http import (
     step_stream,
     stream_step,
 )
-from zh2en.monads import IO, NOTHING, Err, Just, Ok, io_pure
+from zh2en.monads import IO, NOTHING, Err, Just, Ok, cons_to_tuple, io_pure
 from zh2en.text import (
     THINK_CLOSE,
     THINK_OPEN,
@@ -89,7 +89,7 @@ def test_think_step_bounds_whitespace_hold() -> None:
 
 def test_stream_step_filters_think_content() -> None:
     state = feed(StreamState(), "<think>secret ", "reasoning</think>", "Translation.")
-    assert "".join(state.contents) == "Translation."
+    assert "".join(cons_to_tuple(state.contents)) == "Translation."
 
 
 def test_stream_step_accumulates_reasoning_and_usage() -> None:
@@ -102,7 +102,7 @@ def test_stream_step_accumulates_reasoning_and_usage() -> None:
     )
     assert isinstance(result, Ok)
     state = result.value
-    assert state.reasoning == ("ponder",)
+    assert cons_to_tuple(state.reasoning) == ("ponder",)
     assert state.progress_request == ProgressRequest("Thinking", 1, "ponder")
 
     result = stream_step(
@@ -114,7 +114,7 @@ def test_stream_step_accumulates_reasoning_and_usage() -> None:
     )
     assert isinstance(result, Ok)
     state = result.value
-    assert state.contents == ("Hi",)
+    assert cons_to_tuple(state.contents) == ("Hi",)
     assert state.reported == {"prompt_tokens": 3, "completion_tokens": 4, "cost": 0.5}
     assert state.counted == 2
     assert state.progress_request == ProgressRequest("Working", 1, "")
@@ -127,7 +127,7 @@ def test_stream_step_content_part_list() -> None:
         {"choices": [{"delta": {"content": [{"type": "text", "text": "ok"}]}}]},
     )
     assert isinstance(result, Ok)
-    assert result.value.contents == ("ok",)
+    assert cons_to_tuple(result.value.contents) == ("ok",)
 
 
 def test_step_stream_ignores_non_dict_chunks() -> None:
@@ -145,7 +145,7 @@ def test_step_stream_ignores_non_dict_chunks() -> None:
         assert isinstance(result, Ok)
         state = result.value
 
-    assert state.contents == ("keep",)
+    assert cons_to_tuple(state.contents) == ("keep",)
     assert state.counted == 1
 
 
@@ -318,9 +318,9 @@ def test_chat_hides_streamed_reasoning_without_verbose() -> None:
     result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
     assert isinstance(result, Ok)
     assert "secret" not in stderr.getvalue()
-    assert [event.text for event in console.events.value if event.raw] == [
-        "secret thoughts\n"
-    ]
+    assert [
+        event.text for event in cons_to_tuple(console.events.value) if event.raw
+    ] == ["secret thoughts\n"]
 
 
 def test_drive_stream_stops_on_error_without_reading_next() -> None:

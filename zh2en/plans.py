@@ -7,10 +7,11 @@ from itertools import accumulate, chain
 from typing import Any
 
 from zh2en.errors import HttpError, TranslationError
-from zh2en.monads import NOTHING, Just, Maybe
+from zh2en.monads import IO, NOTHING, Just, Maybe
 from zh2en.settings import (
     Context,
     PassDefinition,
+    PassMode,
     Settings,
     Setup,
     pass_salt,
@@ -29,15 +30,20 @@ from zh2en.text import (
 )
 
 
+def verbose_log(ctx: Context, message: str) -> IO[None]:
+    return ctx.console.log_verbose(message)
+
+
 def transient(error: TranslationError) -> bool:
-    if isinstance(error, HttpError):
-        if error.kind == "unreachable":
+    match error:
+        case HttpError(kind="unreachable"):
             return True
 
-        if error.kind == "status" and error.status is not None:
-            return error.status == 429 or error.status >= 500
+        case HttpError(kind="status", status=int(code)):
+            return code == 429 or code >= 500
 
-    return False
+        case _:
+            return False
 
 
 def plan_backoff(base_delay: float, cap: float, attempts: int) -> tuple[float, ...]:
@@ -49,10 +55,12 @@ def plan_backoff(base_delay: float, cap: float, attempts: int) -> tuple[float, .
 
 
 def retry_delay(error: TranslationError, planned: float) -> float:
-    if isinstance(error, HttpError) and error.retry_after is not None:
-        return max(planned, error.retry_after)
+    match error:
+        case HttpError(retry_after=float(seconds)):
+            return max(planned, seconds)
 
-    return planned
+        case _:
+            return planned
 
 
 def unit_output_problem(
@@ -103,13 +111,16 @@ def build_pass_user(
     analysis: str | None,
     context: tuple[str, ...] = (),
 ) -> str:
-    parts = [
+    parts = (
         analysis.strip() if analysis else "",
         *context_parts(context),
         source_chunk,
-    ]
-    if work_chunk is not None and work_chunk != source_chunk:
-        parts.append(work_chunk)
+        *(
+            extra
+            for extra in (work_chunk,)
+            if extra is not None and extra != source_chunk
+        ),
+    )
     return "\n\n".join(part for part in parts if part)
 
 
@@ -118,21 +129,23 @@ def plan_info_message(
     work_paragraphs: tuple[str, ...],
     work_groups: tuple[tuple[str, ...], ...],
 ) -> str:
-    if pass_definition.mode == "paragraph":
-        return "zh2en: [%s] %d paragraph(s), one call per paragraph" % (
-            pass_definition.name,
-            len(work_groups),
-        )
+    match pass_definition.mode:
+        case "paragraph":
+            return "zh2en: [%s] %d paragraph(s), one call per paragraph" % (
+                pass_definition.name,
+                len(work_groups),
+            )
 
-    return "zh2en: [%s] %d paragraph(s) in %d chunk(s)" % (
-        pass_definition.name,
-        len(work_paragraphs),
-        len(work_groups),
-    )
+        case _:
+            return "zh2en: [%s] %d paragraph(s) in %d chunk(s)" % (
+                pass_definition.name,
+                len(work_paragraphs),
+                len(work_groups),
+            )
 
 
 def resolve_work_groups(
-    mode: str,
+    mode: PassMode,
     work_paragraphs: tuple[str, ...],
     plan: tuple[tuple[str, ...], ...],
     pass_name: str,
@@ -146,10 +159,12 @@ def resolve_work_groups(
         f"zh2en: [{pass_name}] paragraph count changed by a previous pass; "
         "grouping working text independently"
     )
-    if mode == "paragraph":
-        return tuple((paragraph,) for paragraph in work_paragraphs), warning
+    match mode:
+        case "paragraph":
+            return tuple((paragraph,) for paragraph in work_paragraphs), warning
 
-    return make_chunks(work_paragraphs, budget), warning
+        case _:
+            return make_chunks(work_paragraphs, budget), warning
 
 
 def build_ascii_fix_user(source_paragraph: str, output_paragraph: str) -> str:
@@ -212,6 +227,8 @@ class UnitCall:
     context: tuple[str, ...]
     key: str
     trailing_separator: str
+    model: str
+    params: Mapping[str, Any]
 
 
 def plan_unit_calls(
@@ -226,14 +243,19 @@ def plan_unit_calls(
     plan_starts = tuple(accumulate(map(len, plan), initial=0))
 
     def neighbour_context(index: int) -> tuple[str, ...]:
-        if pass_definition.mode != "paragraph" or index >= len(plan):
-            return ()
+        match pass_definition.mode:
+            case "paragraph":
+                if index >= len(plan):
+                    return ()
 
-        start = plan_starts[index]
-        end = plan_starts[index + 1]
-        return (flat_plan[start - 1 : start] if start > 0 else ()) + (
-            flat_plan[end : end + 1] if end < len(flat_plan) else ()
-        )
+                start = plan_starts[index]
+                end = plan_starts[index + 1]
+                return (flat_plan[start - 1 : start] if start > 0 else ()) + (
+                    flat_plan[end : end + 1] if end < len(flat_plan) else ()
+                )
+
+            case _:
+                return ()
 
     def call(index: int, work_group: tuple[str, ...]) -> UnitCall:
         source_chunk = "\n\n".join(plan[index]) if index < len(plan) else ""
@@ -256,6 +278,8 @@ def plan_unit_calls(
             trailing_separator=(
                 trailing_separators[index] if index < len(trailing_separators) else ""
             ),
+            model=model,
+            params=params,
         )
 
     return tuple(call(index, group) for index, group in enumerate(work_groups))
@@ -277,39 +301,49 @@ def plan_report(
             len(pass_definitions),
             pass_definition.name,
         )
-        if pass_definition.mode == "analysis":
-            return (f"{header}: mode=analysis, 1 call with the whole document",)
+        match pass_definition.mode:
+            case "analysis":
+                return (f"{header}: mode=analysis, 1 call with the whole document",)
 
-        plan = paragraph_plan if pass_definition.mode == "paragraph" else chunk_plan
-        work_groups, warning = resolve_work_groups(
-            pass_definition.mode,
-            source_paragraphs,
-            plan,
-            pass_definition.name,
-            ctx.settings.chunk_budget_tokens,
-        )
-        calls = plan_unit_calls(
-            ctx,
-            pass_definition,
-            plan,
-            work_groups,
-            unit_separators(plan, separators),
-        )
-        return (
-            "%s: mode=%s, %d unit(s)"
-            % (header, pass_definition.mode, len(work_groups)),
-            *(
-                "  unit %d/%d: ~%d source tokens, cache key %s..."
-                % (
-                    call.index + 1,
-                    call.total,
-                    estimate_tokens(call.source_chunk),
-                    call.key[:12],
+            case _:
+                plan = (
+                    paragraph_plan
+                    if pass_definition.mode == "paragraph"
+                    else chunk_plan
                 )
-                for call in calls
-            ),
-            *((f"  warning: {warning.value}",) if isinstance(warning, Just) else ()),
-        )
+                work_groups, warning = resolve_work_groups(
+                    pass_definition.mode,
+                    source_paragraphs,
+                    plan,
+                    pass_definition.name,
+                    ctx.settings.chunk_budget_tokens,
+                )
+                calls = plan_unit_calls(
+                    ctx,
+                    pass_definition,
+                    plan,
+                    work_groups,
+                    unit_separators(plan, separators),
+                )
+                return (
+                    "%s: mode=%s, %d unit(s)"
+                    % (header, pass_definition.mode, len(work_groups)),
+                    *(
+                        "  unit %d/%d: ~%d source tokens, cache key %s..."
+                        % (
+                            call.index + 1,
+                            call.total,
+                            estimate_tokens(call.source_chunk),
+                            call.key[:12],
+                        )
+                        for call in calls
+                    ),
+                    *(
+                        (f"  warning: {warning.value}",)
+                        if isinstance(warning, Just)
+                        else ()
+                    ),
+                )
 
     lines = (
         "source: %d character(s), %d paragraph(s), ~%d tokens"

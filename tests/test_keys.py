@@ -11,7 +11,7 @@ from fakes import make_console
 from zh2en import keys
 from zh2en.console import Console, toggle_verbose
 from zh2en.keys import TabListener, is_toggle_key, open_tty, start_tab_listener
-from zh2en.monads import NOTHING, Just
+from zh2en.monads import IO, NOTHING, Just, Ref
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="requires a POSIX TTY")
 
@@ -32,7 +32,7 @@ def test_is_toggle_key_matches_only_tab() -> None:
 
 def test_open_tty_opens_the_tty_device(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(os, "open", lambda path, flags: 42)
-    assert open_tty() == Just(42)
+    assert open_tty().run() == Just(42)
 
 
 def test_open_tty_falls_back_to_a_stdin_tty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -47,7 +47,7 @@ def test_open_tty_falls_back_to_a_stdin_tty(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(os, "open", refuse)
     monkeypatch.setattr(sys, "stdin", FakeStdin())
-    assert open_tty() == Just(slave)
+    assert open_tty().run() == Just(slave)
     os.close(master)
     os.close(slave)
 
@@ -58,13 +58,13 @@ def test_open_tty_without_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(os, "open", refuse)
     monkeypatch.setattr(sys, "stdin", 3)
-    assert open_tty() is NOTHING
+    assert open_tty().run() is NOTHING
 
 
 def test_start_tab_listener_disabled_without_live_terminal() -> None:
     console, _ = make_console(live=False)
-    stop = start_tab_listener(console, toggler(console))
-    stop()
+    stop = start_tab_listener(console, toggler(console)).run()
+    stop.run()
 
 
 def test_start_tab_listener_toggles_and_restores(
@@ -72,9 +72,9 @@ def test_start_tab_listener_toggles_and_restores(
 ) -> None:
     master, slave = pty.openpty()
     console, stream = make_console(live=True)
-    monkeypatch.setattr(keys, "open_tty", lambda: Just(slave))
+    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(slave)))
     saved = termios.tcgetattr(slave)
-    stop = start_tab_listener(console, toggler(console))
+    stop = start_tab_listener(console, toggler(console)).run()
     try:
         assert console.verbose.value is False
         os.write(master, b"\t")
@@ -88,7 +88,7 @@ def test_start_tab_listener_toggles_and_restores(
         assert console.verbose.value is True
         assert stream.getvalue() == ""
     finally:
-        stop()
+        stop.run()
         restored = termios.tcgetattr(slave)
         assert restored[3] & (termios.ECHO | termios.ICANON) == saved[3] & (
             termios.ECHO | termios.ICANON
@@ -98,7 +98,7 @@ def test_start_tab_listener_toggles_and_restores(
         os.close(master)
         os.close(slave)
 
-    stop()
+    stop.run()
 
 
 def test_start_tab_listener_twice_toggles_twice(
@@ -106,8 +106,8 @@ def test_start_tab_listener_twice_toggles_twice(
 ) -> None:
     master, slave = pty.openpty()
     console, _ = make_console(live=True)
-    monkeypatch.setattr(keys, "open_tty", lambda: Just(slave))
-    stop = start_tab_listener(console, toggler(console))
+    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(slave)))
+    stop = start_tab_listener(console, toggler(console)).run()
     try:
         os.write(master, b"\t")
         deadline = time.monotonic() + 5.0
@@ -120,7 +120,7 @@ def test_start_tab_listener_twice_toggles_twice(
 
         assert console.verbose.value is False
     finally:
-        stop()
+        stop.run()
         os.close(master)
         os.close(slave)
 
@@ -131,16 +131,16 @@ def test_start_tab_listener_survives_a_non_tty_fd(
     def refuse(fd: object) -> list[object]:
         raise OSError("not a tty")
 
-    monkeypatch.setattr(keys, "open_tty", lambda: Just(42))
+    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(42)))
     monkeypatch.setattr(termios, "tcgetattr", refuse)
     console, _ = make_console(live=True)
-    stop = start_tab_listener(console, toggler(console))
-    stop()
+    stop = start_tab_listener(console, toggler(console)).run()
+    stop.run()
 
 
 def test_tab_listener_stop_without_start() -> None:
     console, _ = make_console(live=True)
-    listener = TabListener(fd=-1, saved=[], toggle=lambda: None, restored=True)
+    listener = TabListener(fd=-1, saved=[], toggle=lambda: None, restored=Ref(True))
     listener.stop()
 
 
@@ -149,9 +149,9 @@ def test_tab_listener_exits_when_the_tty_disappears(
 ) -> None:
     master, slave = pty.openpty()
     console, _ = make_console(live=True)
-    monkeypatch.setattr(keys, "open_tty", lambda: Just(slave))
-    stop = start_tab_listener(console, toggler(console))
+    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(slave)))
+    stop = start_tab_listener(console, toggler(console)).run()
     os.close(slave)
     time.sleep(0.3)
-    stop()
+    stop.run()
     os.close(master)

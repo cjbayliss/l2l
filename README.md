@@ -30,15 +30,18 @@ zh2en [CONFIG] [options] < input.txt > output.txt
   override the corresponding `[api]` setting and its `TRANSLATE_*`
   environment variable. `--cache-dir` overrides the cache location
   (default `$XDG_CACHE_HOME/zh2en`). `--no-cache` bypasses the cache.
-  `--ensure-paragraphs` turns on the paragraph-count check described below.
+  `--cache-prune DAYS` deletes cache entries (including orphaned
+  `.txt.tmp` files) older than DAYS days and exits. `--log-keep DAYS`
+  deletes run logs older than DAYS days at startup (default 30; `0`
+  keeps every log). `--ensure-paragraphs` turns on the paragraph-count
+  check described below.
   `--verbose` prints chunking, cache, timing, and reasoning diagnostics.
   `--show-log-path` prints the run log's path to stderr at startup.
   `--stream` / `--no-stream` force streamed or plain responses (default
   follows `api.params.stream`). `--check-config` prints the resolved
   configuration and exits without translating. `--dry-run` prints the
   per-pass call plan (units, token estimates, cache keys) and exits without
-  calling the endpoint. `--cache-prune DAYS` deletes cache entries older
-  than DAYS days and exits. `--version` prints the version.
+  calling the endpoint. `--version` prints the version.
 
 Precedence: defaults < user config < selected config < environment <
 command line.
@@ -66,7 +69,9 @@ when stderr is not a TTY (pipes, CI).
 ## Logging
 
 Every run writes a log to `<cache-dir>/logs/<timestamp>-<pid>.log`
-regardless of `--no-cache`. The log records each request payload sent to
+regardless of `--no-cache`. Logs older than 30 days are deleted at
+startup; `--log-keep DAYS` changes the horizon (`--log-keep 0` keeps
+every log). The log records each request payload sent to
 the endpoint and everything received in reply: raw SSE lines for streamed
 calls, response bodies for plain calls, and any transport or protocol
 errors. Request headers (and therefore API keys) are never logged. With
@@ -147,28 +152,44 @@ idioms (PEP 695 generics, comprehensions over accumulation).
 - `Result[T, E]` (`Ok`/`Err`) and `Maybe[T]` (`Just`/`Nothing`) for error
   handling and optional values without exceptions in the core; the error
   channel is a typed ADT (`TranslationError`) built through `fail_*`
-  constructors and rendered exactly once by `describe()`. `IO[T]` thunks
+  constructors and rendered exactly once by `describe()`. Numeric parsing
+  is algebraic too (`parse_float` matches with a grammar instead of
+  catching `ValueError`). `IO[T]` thunks
   keep the whole program a composed value that runs exactly once at the
   entry point; `Ref[T]` is the sanctioned single-cell mutation primitive
   and is only ever read or written through its combinators
-  (`read_ref`/`write_ref`/`modify_ref`).
+  (`read_ref`/`write_ref`/`modify_ref`), and `Cons[T]` gives O(1)-prepend
+  accumulations for stream deltas and the session event log.
 - `IO.run` may appear only in `cli.py` (the program edge) and `monads.py`
   (the combinator runners: `io_atomic`, `io_using`, `repeat_until`,
   `fold_io`, ...). Every other module only composes IO values; an AST
   test (`tests/test_architecture.py`) enforces this, along with the
   strictly-downward dependency layering.
+- Exception handling follows one convention: small edge adapters that ARE
+  the process boundary (`urllib_open`, `load_toml`, `read_text_file`,
+  `open_tty`, the `io_catch*` combinators) may catch and translate into
+  the error ADT; composing modules never try/except. `http.py` maps
+  transport failures (`URLError`, timeouts, `OSError`,
+  `http.client.HTTPException` — including mid-body and mid-stream
+  disconnects) to `HttpError` so a broken connection surfaces as a
+  pipeline error, never a traceback. An SSE data frame left unterminated
+  at EOF is flushed and decoded rather than dropped.
 - Pure text machinery (paragraph splitting, token-budget chunking, cache
   keys, SSE and `<think>` tag state machines) is fully separated from
   effects, which live in the console/status line and the injected HTTP
   opener (`Context.open_http`). Time is injected the same way: clocks
   (`Context.clock`) and sleeps (`Context.sleep`) both come from the caller,
   as does the HTTP opener, so retries and status lines are testable.
+- Unit validation repair and ASCII LLM repair share one executor:
+  `http.repaired_call` runs the chat-validate-rebuild-retry loop (counting
+  repairs after the initial call) while callers supply the validator,
+  retry-prompt builder, and loggers.
 - Module map (dependencies point downward only):
 
-  - `monads` — `Result`, `Maybe`, `IO`, `Ref`, and their combinators
-    (`fold_io`, lazy `fold_while`, `fold_io_lazy`, `io_traverse`,
-    `io_when`, `io_pair`, `io_memoize`, `modify_ref_with`); no imports
-    from the rest of the package.
+  - `monads` — `Result`, `Maybe`, `IO`, `Ref`, the immutable `Cons` list,
+    and their combinators (`fold_io`, lazy `fold_while`, `fold_io_lazy`,
+    `io_traverse`, `io_when`, `io_pair`, `io_memoize`,
+    `modify_ref_with`); no imports from the rest of the package.
   - `messages` — pure user-facing string builders; no imports.
   - `errors` — the error ADT (`ConfigError`, `HttpError`, `BudgetError`,
     pass/unit wrappers) with `fail_*` constructors and the single
@@ -181,7 +202,9 @@ idioms (PEP 695 generics, comprehensions over accumulation).
     transitions, the session event log with verbose replay, and stderr
     reporting.
   - `keys` — the Tab-key listener on the controlling TTY (cbreak mode,
-    restored on exit) that toggles verbose mode.
+    restored on exit) that toggles verbose mode. Like `console`, it is a
+    frozen dataclass over `Ref`s whose effects are IO values; the program
+    edge runs the composed attach IO to obtain the shutdown IO.
   - `settings` — the frozen data vocabulary (`Config`, `Settings`,
     `PassDefinition`, `Arguments`, `Context`) with defaults and small
     pure accessors.

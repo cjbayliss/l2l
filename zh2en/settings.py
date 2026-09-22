@@ -6,10 +6,10 @@ TOML, environment, and arguments. Dependencies point downward only.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from zh2en.console import Console
 from zh2en.effects import Clock, RunLog, Sleep
@@ -73,6 +73,7 @@ class Arguments:
     dry_run: bool = False
     stream: bool | None = None
     cache_prune: int | None = None
+    log_keep: int = 30
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,25 @@ class Setup:
     ensure_paragraphs: bool
 
 
-OpenHTTP = Callable[[Any, float], Result[Any, TranslationError]]
+class HttpResponse(Protocol):
+    """The slice of an endpoint response the package consumes: full-body
+    reads for plain calls, line iteration for SSE streams."""
+
+    def read(self, amount: int = -1) -> bytes: ...
+
+    def __iter__(self) -> Iterator[bytes]: ...
+
+    def __enter__(self) -> HttpResponse: ...
+
+    def __exit__(
+        self,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
+    ) -> object: ...
+
+
+OpenHTTP = Callable[[Any, float], Result[HttpResponse, TranslationError]]
 
 
 @dataclass(frozen=True)
@@ -237,7 +256,10 @@ def resolve_call_settings(
     }
 
 
+def salt(*parts: str) -> str:
+    """Join cache-key salt segments with the NUL separator."""
+    return "\x00".join(parts)
+
+
 def pass_salt(pass_definition: PassDefinition) -> str:
-    return "\x00".join(
-        (CACHE_SALT_VERSION, pass_definition.name, pass_definition.instruction)
-    )
+    return salt(CACHE_SALT_VERSION, pass_definition.name, pass_definition.instruction)

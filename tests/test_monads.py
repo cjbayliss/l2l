@@ -4,15 +4,20 @@ from collections.abc import Iterator
 from zh2en.monads import (
     IO,
     NOTHING,
+    Cons,
     Err,
     Just,
     Ok,
     Result,
+    cons,
+    cons_all,
+    cons_to_tuple,
     fold_io_lazy,
     io_and_then,
     io_atomic,
     io_bind,
     io_catch,
+    io_catch_result,
     io_map,
     io_pair,
     io_pure,
@@ -264,3 +269,31 @@ def test_fold_io_lazy_empty_items_returns_initial() -> None:
         (), lambda total, value: io_result(Ok(total)), Ok(7)
     )
     assert program.run() == Ok(7)
+
+
+def test_cons_prepends_and_materialises_in_order() -> None:
+    # Prepending 1, then 2, then 3 materialises in chronological order.
+    items = cons(1)
+    items = cons(2, items)
+    items = cons(3, items)
+    assert cons_to_tuple(items) == (1, 2, 3)
+    assert cons_to_tuple(None) == ()
+    assert cons("x") == Cons("x", None)
+
+
+def test_cons_all_accumulates_head_items_before_the_tail() -> None:
+    items = cons_all(("b", "c"), cons("a"))
+    assert cons_to_tuple(items) == ("a", "b", "c")
+    assert cons_all((), cons("a")) == cons("a")
+    assert cons_all(()) is None
+
+
+def test_io_catch_result_catches_exceptions_in_result_channel() -> None:
+    def boom() -> Result[int, str]:
+        raise RuntimeError("disaster")
+
+    def handler(error: Exception) -> Result[int, str]:
+        return Err(f"caught: {error}")
+
+    assert io_catch_result(IO(boom), handler).run() == Err("caught: disaster")
+    assert io_catch_result(io_result(Ok(1)), handler).run() == Ok(1)

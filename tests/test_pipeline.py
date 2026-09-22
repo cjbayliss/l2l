@@ -21,9 +21,25 @@ from fakes import (
 from zh2en import cli
 from zh2en.errors import TranslationError, describe, fail_http
 from zh2en.http import chat
-from zh2en.monads import IO, Err, Ok, Result, fold_io, fold_while, io_pure, io_result
+from zh2en.monads import (
+    IO,
+    Err,
+    Just,
+    Nothing,
+    Ok,
+    Result,
+    fold_io,
+    fold_while,
+    io_pure,
+    io_result,
+)
 from zh2en.pipeline import analyze_document, run_pipeline
-from zh2en.plans import ascii_drop_warning, plan_report, plan_unit_calls
+from zh2en.plans import (
+    ascii_drop_warning,
+    plan_report,
+    plan_unit_calls,
+    resolve_work_groups,
+)
 from zh2en.settings import PassDefinition
 from zh2en.text import AsciiDrop, Usage, unit_separators
 
@@ -742,9 +758,13 @@ def test_parse_args_defaults() -> None:
     assert not arguments.ensure_paragraphs
     assert arguments.verbose
     assert arguments.cache_dir is None
+    assert arguments.log_keep == 30
 
     arguments = cli.parse_args(["cfg.toml", "--ensure-paragraphs"])
     assert arguments.ensure_paragraphs
+
+    arguments = cli.parse_args(["cfg.toml", "--log-keep", "0"])
+    assert arguments.log_keep == 0
 
 
 def test_plan_report_lists_units_and_keys() -> None:
@@ -766,3 +786,74 @@ def test_plan_report_reports_analysis_pass() -> None:
     analysis = PassDefinition("prep", "Brief.", "analysis", {}, None, False)
     report = plan_report(ctx, (analysis,), "你好。")
     assert "pass 1/1 [prep]: mode=analysis, 1 call with the whole document" in report
+
+
+def test_resolve_work_groups_regroups_paragraph_mode_independently() -> None:
+    paragraphs = ("一。", "二。", "三。")
+    stale_plan = (("一。", "二。"),)
+    groups, warning = resolve_work_groups("paragraph", paragraphs, stale_plan, "p", 100)
+    assert groups == (("一。",), ("二。",), ("三。",))
+    assert isinstance(warning, Just)
+
+
+def test_resolve_work_groups_rechunks_chunk_mode_independently() -> None:
+    paragraphs = tuple("一。" for _ in range(5))
+    stale_plan = (("一。",),)
+    groups, warning = resolve_work_groups("chunk", paragraphs, stale_plan, "p", 1)
+    assert all(len(group) == 1 for group in groups)
+    assert len(groups) == 5
+    assert isinstance(warning, Just)
+
+
+def test_resolve_work_groups_keeps_matching_plan() -> None:
+    paragraphs = ("一。", "二。")
+    plan = (("一。",), ("二。",))
+    groups, warning = resolve_work_groups("chunk", paragraphs, plan, "p", 100)
+    assert groups == (("一。",), ("二。",))
+    assert isinstance(warning, Nothing)
+
+
+def test_main_log_keep_prunes_old_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "zh2en.toml"
+    config_path.write_text(
+        "[api]\n"
+        'base_url = "http://endpoint.test/v1"\n'
+        'api_key = "key"\n'
+        'model = "m"\n'
+        "\n[[pass]]\n"
+        'name = "translate"\n'
+        'mode = "chunk"\n'
+        'instruction = "Translate."'
+    )
+    cache_directory = tmp_path / "cache"
+    logs = cache_directory / "logs"
+    logs.mkdir(parents=True)
+    ancient = logs / "ancient.log"
+    ancient.write_text("old", encoding="utf-8")
+    month_ago = time.time() - 40 * 86400
+    os.utime(ancient, (month_ago, month_ago))
+
+    chunks = with_usage(stream_chunks("Hello."), USAGE)
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    monkeypatch.setattr(cli, "urllib_open", http.open)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(config_path),
+            "--cache-dir",
+            str(cache_directory),
+            "--no-cache",
+            "--log-keep",
+            "30",
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+    ).run()
+    assert code == 0
+    assert not ancient.exists()
+    assert len(list(logs.glob("*.log"))) == 1

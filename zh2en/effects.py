@@ -10,7 +10,20 @@ from dataclasses import dataclass
 from typing import Any, TextIO
 
 from zh2en.errors import TranslationError, fail_config
-from zh2en.monads import IO, NOTHING, Just, Maybe, Nothing, Ok, Result, io_bind
+from zh2en.monads import (
+    IO,
+    NOTHING,
+    Just,
+    Maybe,
+    Nothing,
+    Ok,
+    Result,
+    fold_io,
+    io_bind,
+    io_map,
+    io_result,
+    result_or_else,
+)
 from zh2en.text import cache_path
 
 Clock = Callable[[], float]
@@ -97,6 +110,19 @@ def load_toml(
             return fail_config(f"cannot read {description}: {error}")
         except tomllib.TOMLDecodeError as error:
             return fail_config(f"cannot parse {description} {path}: {error}")
+
+    return IO(thunk)
+
+
+def read_text_file(path: str, description: str) -> IO[Result[str, TranslationError]]:
+    def thunk() -> Result[str, TranslationError]:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return Ok(handle.read())
+        except FileNotFoundError:
+            return fail_config(f"{description} not found: {path}")
+        except OSError as error:
+            return fail_config(f"cannot read {description}: {error}")
 
     return IO(thunk)
 
@@ -217,10 +243,60 @@ def cache_entry_paths(cache_directory: str) -> IO[tuple[str, ...]]:
         return tuple(
             entry.path
             for entry in entries
-            if entry.is_file() and entry.name.endswith(".txt")
+            if entry.is_file()
+            and (entry.name.endswith(".txt") or entry.name.endswith(".txt.tmp"))
         )
 
     return IO(thunk)
+
+
+def log_paths(cache_directory: str) -> IO[tuple[str, ...]]:
+    def thunk() -> tuple[str, ...]:
+        try:
+            entries = tuple(os.scandir(os.path.join(cache_directory, "logs")))
+        except OSError:
+            return ()
+
+        return tuple(
+            entry.path
+            for entry in entries
+            if entry.is_file() and entry.name.endswith(".log")
+        )
+
+    return IO(thunk)
+
+
+LOG_SECONDS_PER_DAY = 86400.0
+
+
+def prune_old_logs(cache_directory: str, keep_days: int, clock: Clock) -> IO[int]:
+    """Delete run logs older than `keep_days` days, counting removals."""
+    horizon = keep_days * LOG_SECONDS_PER_DAY
+
+    def with_now(now_value: float) -> IO[int]:
+        def step(count: int, path: str) -> IO[Result[int, TranslationError]]:
+            def decide(age: float) -> IO[Result[int, TranslationError]]:
+                if age <= horizon:
+                    return io_result(Ok(count))
+
+                return io_map(
+                    remove_file(path),
+                    lambda removed: Ok(count + (1 if removed else 0)),
+                )
+
+            return io_bind(file_age(path, now_value), decide)
+
+        def report(pruned: Result[int, TranslationError]) -> int:
+            return result_or_else(pruned, lambda: 0)
+
+        return io_map(
+            io_bind(
+                log_paths(cache_directory), lambda paths: fold_io(paths, step, Ok(0))
+            ),
+            report,
+        )
+
+    return io_bind(now(clock), with_now)
 
 
 def file_age(path: str, now_value: float) -> IO[float]:

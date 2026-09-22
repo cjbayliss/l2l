@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -7,21 +8,31 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from types import MappingProxyType
-from typing import Any, TypeVar
+from typing import Any, TypedDict, TypeVar
 
 from zh2en import __version__
 from zh2en.console import Console
 from zh2en.effects import log_entry, log_error, log_request, run_log_write
-from zh2en.errors import HttpError, TranslationError, describe, fail_budget, fail_http
+from zh2en.errors import (
+    HttpError,
+    TranslationError,
+    describe,
+    fail_budget,
+    fail_http,
+)
 from zh2en.monads import (
     IO,
     NOTHING,
+    Cons,
     Err,
     Just,
     Maybe,
     Nothing,
     Ok,
     Result,
+    cons,
+    cons_all,
+    cons_to_tuple,
     fold_io,
     fold_io_lazy,
     io_and_then,
@@ -32,7 +43,9 @@ from zh2en.monads import (
     io_result,
     io_using,
     maybe_either,
+    maybe_map,
     maybe_or,
+    maybe_to_optional,
     read_ref,
     result_bind,
     result_map,
@@ -46,6 +59,7 @@ from zh2en.text import (
     Usage,
     add_usage,
     estimate_tokens,
+    parse_float,
     sse_step,
     strip_think_tag,
     think_step,
@@ -71,6 +85,43 @@ def build_chat_payload(
         },
         **{key: value for key, value in params.items() if value is not None},
     }
+
+
+# Expected shapes of the chat-completions JSON. They document the wire
+# contract; parsing stays defensive because bodies come from the endpoint.
+class ChatMessage(TypedDict, total=False):
+    role: str
+    content: object
+    reasoning_content: object
+    reasoning: object
+
+
+class ChatChoice(TypedDict, total=False):
+    message: ChatMessage
+    delta: ChatMessage
+
+
+class UsageReport(TypedDict, total=False):
+    prompt_tokens: int
+    completion_tokens: int
+    cost: float
+
+
+class ChatCompletion(TypedDict, total=False):
+    choices: list[ChatChoice]
+    usage: UsageReport
+
+
+class StreamChunk(ChatCompletion, total=False):
+    error: dict[str, Any]
+
+
+TRANSPORT_ERRORS = (
+    urllib.error.URLError,
+    TimeoutError,
+    OSError,
+    http.client.HTTPException,
+)
 
 
 def extract_message(
@@ -119,16 +170,32 @@ def flatten_content_parts(content: Any) -> tuple[Any, tuple[str, ...]]:
     return "".join(texts), thoughts
 
 
-def message_reasoning_texts(message: Mapping[str, Any]) -> tuple[str, ...]:
-    def reasoning_at(key: str) -> Maybe[str]:
-        value = message.get(key)
-        return (
-            Just(value.rstrip())
-            if isinstance(value, str) and value.strip()
-            else NOTHING
-        )
+REASONING_KEYS = ("reasoning_content", "reasoning")
 
-    found = maybe_or(reasoning_at("reasoning_content"), reasoning_at("reasoning"))
+
+def reasoning_at(
+    container: Mapping[str, Any], clean: Callable[[str], Maybe[str]]
+) -> Maybe[str]:
+    def from_key(key: str) -> Maybe[str]:
+        value = container.get(key)
+        return clean(value) if isinstance(value, str) else NOTHING
+
+    initial: Maybe[str] = NOTHING
+    return reduce(maybe_or, (from_key(key) for key in REASONING_KEYS), initial)
+
+
+def keep_raw(value: str) -> Maybe[str]:
+    """Deltas keep every character: live display needs the newlines."""
+    return Just(value) if value else NOTHING
+
+
+def keep_trimmed(value: str) -> Maybe[str]:
+    """Complete messages drop surrounding whitespace."""
+    return Just(value.rstrip()) if value.strip() else NOTHING
+
+
+def message_reasoning_texts(message: Mapping[str, Any]) -> tuple[str, ...]:
+    found = reasoning_at(message, keep_trimmed)
     return maybe_either(found, lambda text: (text,), tuple)
 
 
@@ -141,14 +208,6 @@ def parse_chunk_delta(chunk: Mapping[str, Any]) -> dict[str, Any]:
         return choices[0].get("delta") or {}
     except AttributeError, IndexError, TypeError:
         return {}
-
-
-def delta_reasoning_text(delta: Mapping[str, Any]) -> Maybe[str]:
-    def reasoning_at(key: str) -> Maybe[str]:
-        value = delta.get(key)
-        return Just(value) if isinstance(value, str) and value else NOTHING
-
-    return maybe_or(reasoning_at("reasoning_content"), reasoning_at("reasoning"))
 
 
 def delta_text(delta: Mapping[str, Any]) -> str:
@@ -171,14 +230,22 @@ class ProgressRequest:
 
 @dataclass(frozen=True)
 class StreamState:
-    reasoning: tuple[str, ...] = ()
-    contents: tuple[str, ...] = ()
+    reasoning: Cons[str] | None = None
+    contents: Cons[str] | None = None
     reported: Mapping[str, Any] | None = None
     counted: int = 0
     content_started: bool = False
     think: ThinkState = ThinkState()
     sse: SseState = SseState()
     progress_request: ProgressRequest | None = None
+
+
+def stream_text(state: StreamState) -> str:
+    """Materialise the accumulated visible text, including a held prefix
+    that was still waiting to be classified as a `<think>` tag at EOF."""
+    return "".join(cons_to_tuple(state.contents)) + (
+        state.think.held if state.think.checking and not state.think.open else ""
+    )
 
 
 def stream_step(
@@ -191,7 +258,7 @@ def stream_step(
         else state.reported
     )
     delta = parse_chunk_delta(chunk)
-    reasoning_found = delta_reasoning_text(delta)
+    reasoning_found = reasoning_at(delta, keep_raw)
     text = delta_text(delta)
     if isinstance(reasoning_found, Nothing) and not text:
         return Ok(replace(state, reported=reported, progress_request=None))
@@ -215,8 +282,8 @@ def stream_step(
 
     return Ok(
         StreamState(
-            reasoning=state.reasoning + reasoning_texts,
-            contents=state.contents + (visible,) if visible else state.contents,
+            reasoning=cons_all(reasoning_texts, state.reasoning),
+            contents=cons(visible, state.contents) if visible else state.contents,
             reported=reported,
             counted=state.counted + thinking_progress + text_progress,
             content_started=state.content_started or bool(text),
@@ -230,14 +297,14 @@ def step_stream(
     state: StreamState, raw_line: bytes
 ) -> Result[StreamState, TranslationError]:
     sse, chunk = sse_step(state.sse, raw_line)
-    state = state if sse == state.sse else replace(state, sse=sse)
+    updated = state if sse == state.sse else replace(state, sse=sse)
     if chunk is None:
-        return Ok(replace(state, progress_request=None))
+        return Ok(replace(updated, progress_request=None))
 
     if isinstance(chunk.get("error"), dict):
         return fail_http("stream", str(chunk["error"])[:500])
 
-    return stream_step(state, chunk)
+    return stream_step(updated, chunk)
 
 
 @dataclass(frozen=True)
@@ -277,12 +344,13 @@ def http_request(
     config: Config, payload: Mapping[str, Any], accept: str | None = None
 ) -> urllib.request.Request:
     headers = {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + config.api_key,
-        "User-Agent": "zh2en/" + __version__,
+        **{
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + config.api_key,
+            "User-Agent": "zh2en/" + __version__,
+        },
+        **({"Accept": accept} if accept else {}),
     }
-    if accept:
-        headers = {**headers, "Accept": accept}
 
     return urllib.request.Request(
         config.base_url + "/chat/completions",
@@ -292,29 +360,34 @@ def http_request(
     )
 
 
+def http_error_detail(error: urllib.error.HTTPError) -> str:
+    """Read the error body; a failing read (closed socket) degrades to ''."""
+    try:
+        return error.read().decode("utf-8", "replace")[:500]
+    except TRANSPORT_ERRORS:
+        return str(error)
+
+
 def urllib_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
     try:
         return Ok(urllib.request.urlopen(request, timeout=timeout))
     except urllib.error.HTTPError as error:
         return fail_http(
             "status",
-            error.read().decode("utf-8", "replace")[:500],
+            http_error_detail(error),
             error.code,
-            retry_after_seconds(error.headers),
+            maybe_to_optional(retry_after_seconds(error.headers)),
         )
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         return fail_http("unreachable", str(error))
 
 
-def retry_after_seconds(headers: Any) -> float | None:
+def retry_after_seconds(headers: Any) -> Maybe[float]:
     raw = headers.get("Retry-After") if headers is not None else None
     if raw is None:
-        return None
+        return NOTHING
 
-    try:
-        return max(float(raw), 0.0)
-    except TypeError, ValueError:
-        return None
+    return maybe_map(parse_float(raw), lambda seconds: max(seconds, 0.0))
 
 
 def verbose_retry_log(
@@ -377,6 +450,8 @@ def http_post_json(
                 return Ok((body, json.loads(body)))
             except (json.JSONDecodeError, UnicodeDecodeError) as error:
                 return fail_http("protocol", f"invalid JSON response: {error}")
+            except TRANSPORT_ERRORS as error:
+                return fail_http("unreachable", f"response read failed: {error}")
 
     def attempt() -> IO[Result[tuple[str, Any], TranslationError]]:
         def thunk() -> Result[tuple[str, Any], TranslationError]:
@@ -494,7 +569,17 @@ def drive_stream(
         logged = io_pure(None) if on_raw_line is None else on_raw_line(raw_line)
         return io_bind(logged, after_log)
 
-    return fold_io_lazy(response, advance, Ok(StreamState()))
+    def flush(
+        outcome: Result[StreamState, TranslationError],
+    ) -> IO[Result[StreamState, TranslationError]]:
+        """A data frame left unterminated at EOF is still decoded, so the
+        final chunk's content and usage are never silently dropped."""
+        if isinstance(outcome, Err):
+            return io_result(outcome)
+
+        return io_result(step_stream(outcome.value, b""))
+
+    return io_bind(fold_io_lazy(response, advance, Ok(StreamState())), flush)
 
 
 def collect_stream(
@@ -531,10 +616,12 @@ def collect_stream(
         return io_and_then(ctx.console.end_raw(), recorded(None))
 
     def handle(error: Exception) -> Result[StreamState, TranslationError]:
-        if isinstance(error, (urllib.error.URLError, TimeoutError, OSError)):
+        """Transport failures interrupt the stream; anything else is a
+        protocol-level defect. Both become errors — nothing re-raises."""
+        if isinstance(error, TRANSPORT_ERRORS):
             return fail_http("interrupted", str(error))
 
-        raise error
+        return fail_http("protocol", f"{type(error).__name__}: {error}")
 
     def respond(
         opened: Result[Any, TranslationError],
@@ -610,9 +697,8 @@ def chat(
 
 def to_chat_reply(state: StreamState, verbose: bool) -> ChatReply:
     return ChatReply(
-        content="".join(state.contents)
-        + (state.think.held if state.think.checking and not state.think.open else ""),
-        reasoning=state.reasoning,
+        content=stream_text(state),
+        reasoning=cons_to_tuple(state.reasoning),
         reported=state.reported,
         counted=state.counted,
         reasoning_shown=verbose,
@@ -622,9 +708,15 @@ def to_chat_reply(state: StreamState, verbose: bool) -> ChatReply:
 def streamed_call(
     ctx: Context, payload: Mapping[str, Any]
 ) -> IO[Result[ChatReply, TranslationError]]:
-    full_payload = {**payload, "stream": True}
-    if "stream_options" not in full_payload:
-        full_payload = {**full_payload, "stream_options": {"include_usage": True}}
+    full_payload = {
+        **payload,
+        "stream": True,
+        **(
+            {}
+            if "stream_options" in payload
+            else {"stream_options": {"include_usage": True}}
+        ),
+    }
 
     def on_progress(label: str, count: int) -> IO[None]:
         return ctx.console.progress(label, count)
@@ -641,12 +733,68 @@ def streamed_call(
 
 
 def plain_call(
-    ctx: Context, payload: Mapping[str, Any]
+    ctx: Context,
+    payload: Mapping[str, Any],
 ) -> IO[Result[ChatReply, TranslationError]]:
     return io_bind(
         http_post_json(ctx, payload),
         lambda body_result: io_result(result_bind(body_result, plain_reply)),
     )
+
+
+type RepairOutcome = tuple[str, Usage, bool]
+"""Final output text, accumulated usage, and whether validation passed."""
+
+
+def repaired_call(
+    ctx: Context,
+    model: str,
+    params: Mapping[str, Any],
+    instruction: str,
+    initial_user: str,
+    validate: Callable[[str], Maybe[str]],
+    build_retry_user: Callable[[str, str], str],
+    max_repairs: int,
+    on_repair: Callable[[int, str], IO[None]],
+    on_exhausted: Callable[[str, str], IO[None]] | None,
+) -> Callable[[Usage], IO[Result[RepairOutcome, TranslationError]]]:
+    """Chat once, then validate-and-repair: each failed validation logs,
+    rebuilds the prompt, and retries up to `max_repairs` times. A final
+    reply that still fails validation is returned (flagged `False`),
+    optionally after `on_exhausted` reports it."""
+
+    def attempt(
+        user: str, failed: int, usage: Usage
+    ) -> IO[Result[RepairOutcome, TranslationError]]:
+        def assessed(
+            reply_result: Result[Translated, TranslationError],
+        ) -> IO[Result[RepairOutcome, TranslationError]]:
+            if isinstance(reply_result, Err):
+                return io_result(reply_result)
+
+            reply = reply_result.value
+            problem = validate(reply.text)
+            if isinstance(problem, Nothing):
+                return io_result(Ok((reply.text, reply.usage, True)))
+
+            if failed > max_repairs:
+                announce = (
+                    on_exhausted(reply.text, problem.value)
+                    if on_exhausted is not None
+                    else io_pure(None)
+                )
+                return io_map(announce, lambda _: Ok((reply.text, reply.usage, False)))
+
+            def continued(_: None) -> IO[Result[RepairOutcome, TranslationError]]:
+                return attempt(
+                    build_retry_user(reply.text, problem.value), failed + 1, reply.usage
+                )
+
+            return io_bind(on_repair(failed, problem.value), continued)
+
+        return io_bind(chat(ctx, instruction, user, model, params, usage), assessed)
+
+    return lambda usage: attempt(initial_user, 1, usage)
 
 
 def conclude_chat(

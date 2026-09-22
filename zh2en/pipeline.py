@@ -15,7 +15,7 @@ from zh2en.errors import (
     fail_pass,
     fail_unit,
 )
-from zh2en.http import chat
+from zh2en.http import RepairOutcome, chat, repaired_call
 from zh2en.messages import (
     analysis_info_message,
     done_in_message,
@@ -35,7 +35,6 @@ from zh2en.monads import (
     Err,
     Just,
     Maybe,
-    Nothing,
     Ok,
     Result,
     fold_io,
@@ -56,6 +55,7 @@ from zh2en.plans import (
     plan_unit_calls,
     resolve_work_groups,
     unit_output_problem,
+    verbose_log,
 )
 from zh2en.settings import (
     Context,
@@ -100,10 +100,6 @@ class UnitsSoFar:
 
 
 StateResult = Result[State, TranslationError]
-
-
-def verbose_log(ctx: Context, message: str) -> IO[None]:
-    return ctx.console.log_verbose(message)
 
 
 def run_analysis(
@@ -161,26 +157,6 @@ def run_analysis_once(
     )
 
 
-def translate_chunk(
-    ctx: Context,
-    pass_definition: PassDefinition,
-    source_chunk: str,
-    work_chunk: str | None,
-    analysis: str | None,
-    usage: Usage,
-    context: tuple[str, ...] = (),
-) -> IO[Result[Translated, TranslationError]]:
-    model, params = resolve_call_settings(ctx.config, pass_definition)
-    return chat(
-        ctx,
-        pass_definition.instruction,
-        build_pass_user(source_chunk, work_chunk, analysis, context),
-        model,
-        params,
-        usage,
-    )
-
-
 def log_stage(
     console: Console,
     label: str,
@@ -193,6 +169,35 @@ def log_stage(
     return console.log(
         usage_line(label, ended_at - started_at, prompt, completion, cost)
     )
+
+
+def finish_pass_stage(
+    ctx: Context,
+    pass_definition: PassDefinition,
+    previous_usage: Usage,
+    next_state: State,
+    started_at: float,
+    source_paragraphs: tuple[str, ...],
+) -> IO[StateResult]:
+    """Log the stage's usage line, then apply the pass's conclusion."""
+
+    def after_stage(ended_at: float) -> IO[StateResult]:
+        def concluded(_: None) -> IO[StateResult]:
+            return conclude_state(ctx, pass_definition, next_state, source_paragraphs)
+
+        return io_bind(
+            log_stage(
+                ctx.console,
+                "Done",
+                started_at,
+                ended_at,
+                previous_usage,
+                next_state.usage,
+            ),
+            concluded,
+        )
+
+    return io_bind(now(ctx.clock), after_stage)
 
 
 def conclude_state(
@@ -239,26 +244,14 @@ def run_analysis_pass(
             return io_result(fail_pass(pass_definition.name, analysis_result.error))
 
         outcome = analysis_result.value
-
-        def after_stage(ended_at: float) -> IO[StateResult]:
-            return io_bind(
-                log_stage(
-                    ctx.console,
-                    "Done",
-                    started_at,
-                    ended_at,
-                    state.usage,
-                    outcome.usage,
-                ),
-                lambda _: conclude_state(
-                    ctx,
-                    pass_definition,
-                    State(text=state.text, analysis=outcome.text, usage=outcome.usage),
-                    source_paragraphs,
-                ),
-            )
-
-        return io_bind(now(ctx.clock), after_stage)
+        return finish_pass_stage(
+            ctx,
+            pass_definition,
+            state.usage,
+            State(text=state.text, analysis=outcome.text, usage=outcome.usage),
+            started_at,
+            source_paragraphs,
+        )
 
     return io_bind(
         verbose_log(
@@ -281,90 +274,58 @@ def run_unit(
     analysis: str | None,
     usage: Usage,
 ) -> IO[Result[UnitResult, TranslationError]]:
-    model, params = resolve_call_settings(ctx.config, pass_definition)
+    def validate(output: str) -> Maybe[str]:
+        return unit_output_problem(call.source_chunk, output, ctx.settings)
 
-    def settle(
-        attempt_index: int, reply: Translated
-    ) -> IO[Result[UnitResult, TranslationError]]:
-        problem = unit_output_problem(call.source_chunk, reply.text, ctx.settings)
-        if isinstance(problem, Nothing):
-            return io_result(Ok(UnitResult(reply.text, True, reply.usage)))
+    def build_retry_user(bad_output: str, problem: str) -> str:
+        return build_unit_retry_user(
+            call.source_chunk, call.context, bad_output, problem
+        )
 
-        return repair(attempt_index, reply.text, reply.usage, problem.value)
-
-    def repair(
-        attempt_index: int,
-        bad_output: str,
-        unit_usage: Usage,
-        problem: str,
-    ) -> IO[Result[UnitResult, TranslationError]]:
-        if attempt_index > ctx.settings.unit_fix_attempts:
-            return io_map(
-                ctx.console.log(
-                    unit_failed_validation_final(
-                        pass_definition.name,
-                        call.index + 1,
-                        call.total,
-                        ctx.settings.unit_fix_attempts,
-                        problem,
-                    )
-                ),
-                lambda _: Ok(UnitResult(bad_output, False, unit_usage)),
-            )
-
-        def continued(
-            reply_result: Result[Translated, TranslationError],
-        ) -> IO[Result[UnitResult, TranslationError]]:
-            if isinstance(reply_result, Err):
-                return io_result(reply_result)
-
-            return settle(attempt_index + 1, reply_result.value)
-
-        return io_bind(
-            verbose_log(
-                ctx,
-                unit_failed_validation_attempt(
-                    pass_definition.name,
-                    call.index + 1,
-                    call.total,
-                    problem,
-                    attempt_index,
-                    ctx.settings.unit_fix_attempts,
-                ),
-            ),
-            lambda _: io_bind(
-                chat(
-                    ctx,
-                    pass_definition.instruction,
-                    build_unit_retry_user(
-                        call.source_chunk, call.context, bad_output, problem
-                    ),
-                    model,
-                    params,
-                    unit_usage,
-                ),
-                continued,
+    def on_repair(failed: int, problem: str) -> IO[None]:
+        return verbose_log(
+            ctx,
+            unit_failed_validation_attempt(
+                pass_definition.name,
+                call.index + 1,
+                call.total,
+                problem,
+                failed,
+                ctx.settings.unit_fix_attempts,
             ),
         )
 
+    def on_exhausted(bad_output: str, problem: str) -> IO[None]:
+        return ctx.console.log(
+            unit_failed_validation_final(
+                pass_definition.name,
+                call.index + 1,
+                call.total,
+                ctx.settings.unit_fix_attempts,
+                problem,
+            )
+        )
+
     def assessed(
-        reply_result: Result[Translated, TranslationError],
-    ) -> IO[Result[UnitResult, TranslationError]]:
-        if isinstance(reply_result, Err):
-            return io_result(reply_result)
+        outcome: Result[RepairOutcome, TranslationError],
+    ) -> Result[UnitResult, TranslationError]:
+        return result_map(
+            outcome, lambda repaired: UnitResult(repaired[0], repaired[2], repaired[1])
+        )
 
-        return settle(1, reply_result.value)
-
-    return io_bind(
-        translate_chunk(
+    return io_map(
+        repaired_call(
             ctx,
-            pass_definition,
-            call.source_chunk,
-            call.work_chunk,
-            analysis,
-            usage,
-            call.context,
-        ),
+            call.model,
+            call.params,
+            pass_definition.instruction,
+            build_pass_user(call.source_chunk, call.work_chunk, analysis, call.context),
+            validate,
+            build_retry_user,
+            ctx.settings.unit_fix_attempts,
+            on_repair,
+            on_exhausted,
+        )(usage),
         assessed,
     )
 
@@ -465,7 +426,13 @@ def run_text_pass_once(
     chunk_plan: tuple[tuple[str, ...], ...],
     paragraph_plan: tuple[tuple[str, ...], ...],
 ) -> IO[StateResult]:
-    plan = paragraph_plan if pass_definition.mode == "paragraph" else chunk_plan
+    match pass_definition.mode:
+        case "paragraph":
+            plan = paragraph_plan
+
+        case _:
+            plan = chunk_plan
+
     work_paragraphs, _ = split_paragraphs(state.text)
     work_groups, warning = resolve_work_groups(
         pass_definition.mode,
@@ -487,23 +454,14 @@ def run_text_pass_once(
                 analysis=state.analysis,
                 usage=units_result.value.usage,
             )
-
-            def after_stage(ended_at: float) -> IO[StateResult]:
-                return io_bind(
-                    log_stage(
-                        ctx.console,
-                        "Done",
-                        started_at,
-                        ended_at,
-                        state.usage,
-                        next_state.usage,
-                    ),
-                    lambda _: conclude_state(
-                        ctx, pass_definition, next_state, source_paragraphs
-                    ),
-                )
-
-            return io_bind(now(ctx.clock), after_stage)
+            return finish_pass_stage(
+                ctx,
+                pass_definition,
+                state.usage,
+                next_state,
+                started_at,
+                source_paragraphs,
+            )
 
         return io_and_then(
             verbose_log(
@@ -586,11 +544,15 @@ def run_text_pass(
         if count == len(source_paragraphs):
             return io_result(result)
 
-        if pass_definition.mode != "chunk":
-            return io_map(
-                ctx.console.log(mismatch_message(count, "continuing")),
-                lambda _: result,
-            )
+        match pass_definition.mode:
+            case "chunk":
+                pass
+
+            case _:
+                return io_map(
+                    ctx.console.log(mismatch_message(count, "continuing")),
+                    lambda _: result,
+                )
 
         def retry_at(retry_started: float) -> IO[StateResult]:
             return io_bind(
@@ -624,21 +586,23 @@ def run_pass(
     chunk_plan: tuple[tuple[str, ...], ...],
     paragraph_plan: tuple[tuple[str, ...], ...],
 ) -> IO[StateResult]:
-    if pass_definition.mode == "analysis":
-        return run_analysis_pass(
-            ctx, pass_definition, state, started_at, source_paragraphs
-        )
+    match pass_definition.mode:
+        case "analysis":
+            return run_analysis_pass(
+                ctx, pass_definition, state, started_at, source_paragraphs
+            )
 
-    return run_text_pass(
-        ctx,
-        pass_definition,
-        state,
-        started_at,
-        source_paragraphs,
-        separators,
-        chunk_plan,
-        paragraph_plan,
-    )
+        case _:
+            return run_text_pass(
+                ctx,
+                pass_definition,
+                state,
+                started_at,
+                source_paragraphs,
+                separators,
+                chunk_plan,
+                paragraph_plan,
+            )
 
 
 def run_passes(
