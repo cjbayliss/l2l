@@ -112,14 +112,19 @@ ensure_paragraphs = true
   - `chunk`: translates paragraphs grouped into token-budgeted chunks.
   - `paragraph`: translates each paragraph with its own call.
 - `model` and `params` on a pass override the API-level values per call.
+- `ascii = true` and `ensure_paragraphs = true` may also be set on a pass;
+  an explicit per-pass value overrides `[options]` and the
+  `--ensure-paragraphs` flag for that pass, otherwise the global setting
+  applies.
 - `[options] ascii = true` (or `ascii = true` on a pass) enforces pure
   ASCII output: mechanical Unicode folding first, then LLM repair with
   retries, then character dropping as a last resort.
-- `[options] ensure_paragraphs = true` (or the `--ensure-paragraphs` flag)
-  checks each pass's output paragraph count against the source after the
-  pass runs. On a mismatch the pass is re-run with one call per paragraph,
-  which preserves the source's paragraph count; a warning is printed if the
-  count still differs, and the output is emitted either way.
+- `[options] ensure_paragraphs = true` (or the `--ensure-paragraphs` flag,
+  or `ensure_paragraphs = true` on a pass) checks each pass's output
+  paragraph count against the source after the pass runs. On a mismatch the
+  pass is re-run with one call per paragraph, which preserves the source's
+  paragraph count; a warning is printed if the count still differs, and the
+  output is emitted either way.
 - Every pass reply is validated before it is used: it must be non-empty,
   contain exactly as many paragraphs as the source unit it was given, and
   stay within a plausible length of that source. A failed reply is

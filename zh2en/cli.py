@@ -248,7 +248,6 @@ def build_context(
         settings=build_settings(),
         use_cache=use_cache,
         cache_directory=cache_directory,
-        ensure_paragraphs=parsed.ensure_paragraphs or setup.ensure_paragraphs,
         console=console,
         open_http=urllib_open,
         log=log if log is not None else RunLog(NOTHING, clock),
@@ -286,9 +285,7 @@ def check_config_program(
                 return io_map(console.log(describe(setup_result.error)), lambda _: 2)
 
             setup = setup_result.value
-            report = setup_report(
-                setup, parsed.ensure_paragraphs or setup.ensure_paragraphs
-            )
+            report = setup_report(setup, setup.ensure_paragraphs)
             return io_map(write_stdout(stdout, report + "\n"), lambda _: 0)
 
         return io_bind(load_setup(parsed, environment), use_setup)

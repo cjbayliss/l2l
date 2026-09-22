@@ -425,6 +425,14 @@ def pass_definition_from(
     if ascii_value is not None and not isinstance(ascii_value, bool):
         return fail_config(f"{path}: [[pass]] {name}: ascii must be true or false")
 
+    ensure_paragraphs_value = table.get("ensure_paragraphs")
+    if ensure_paragraphs_value is not None and not isinstance(
+        ensure_paragraphs_value, bool
+    ):
+        return fail_config(
+            f"{path}: [[pass]] {name}: ensure_paragraphs must be true or false"
+        )
+
     model = table.get("model")
     if model is not None and (not isinstance(model, str) or not model.strip()):
         return fail_config(f"{path}: [[pass]] {name}: model must be a non-empty string")
@@ -446,18 +454,31 @@ def pass_definition_from(
             params=MappingProxyType(dict(params)),
             model=model.strip() if model else None,
             ascii=ascii_value,
+            ensure_paragraphs=ensure_paragraphs_value,
         )
     )
 
 
-def apply_default_ascii(
-    pass_definitions: tuple[PassDefinition, ...], options: Mapping[str, bool]
+def apply_default_options(
+    pass_definitions: tuple[PassDefinition, ...],
+    options: Mapping[str, bool],
+    ensure_paragraphs_flag: bool,
 ) -> tuple[PassDefinition, ...]:
+    ascii_default = options.get("ascii", False)
+    ensure_default = options.get("ensure_paragraphs", False) or ensure_paragraphs_flag
     return tuple(
-        (
-            replace(pass_definition, ascii=options.get("ascii", False))
-            if pass_definition.ascii is None
-            else pass_definition
+        replace(
+            pass_definition,
+            ascii=(
+                ascii_default
+                if pass_definition.ascii is None
+                else pass_definition.ascii
+            ),
+            ensure_paragraphs=(
+                ensure_default
+                if pass_definition.ensure_paragraphs is None
+                else pass_definition.ensure_paragraphs
+            ),
         )
         for pass_definition in pass_definitions
     )
@@ -686,18 +707,21 @@ SetupResult = Result[Setup, TranslationError]
 
 
 def build_setup(
-    config: Config, pair: Result[ResolvedPasses, TranslationError]
+    config: Config,
+    pair: Result[ResolvedPasses, TranslationError],
+    ensure_paragraphs_flag: bool = False,
 ) -> Result[Setup, TranslationError]:
-    return result_bind(
-        pair,
-        lambda resolved: Ok(
-            Setup(
-                config=config,
-                passes=apply_default_ascii(resolved[1], resolved[0]),
-                ensure_paragraphs=resolved[0].get("ensure_paragraphs", False),
-            )
-        ),
-    )
+    def with_options(resolved: ResolvedPasses) -> Setup:
+        effective = (
+            resolved[0].get("ensure_paragraphs", False) or ensure_paragraphs_flag
+        )
+        return Setup(
+            config=config,
+            passes=apply_default_options(resolved[1], resolved[0], effective),
+            ensure_paragraphs=effective,
+        )
+
+    return result_bind(pair, lambda resolved: Ok(with_options(resolved)))
 
 
 def load_setup(arguments: Arguments, environment: Mapping[str, str]) -> IO[SetupResult]:
@@ -725,7 +749,9 @@ def load_setup(arguments: Arguments, environment: Mapping[str, str]) -> IO[Setup
                         selected_path,
                         documents[1],
                     ),
-                    lambda config: build_setup(config, resolved),
+                    lambda config: build_setup(
+                        config, resolved, arguments.ensure_paragraphs
+                    ),
                 )
 
             return io_map(

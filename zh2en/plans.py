@@ -383,13 +383,15 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool) -> str:
         for number, pass_definition in enumerate(setup.passes, 1)
         for line in (
             (
-                "pass %d/%d [%s]: mode=%s ascii=%s model=%s instruction=%d chars"
+                "pass %d/%d [%s]: mode=%s ascii=%s ensure_paragraphs=%s "
+                "model=%s instruction=%d chars"
                 % (
                     number,
                     len(setup.passes),
                     pass_definition.name,
                     pass_definition.mode,
                     pass_definition.ascii,
+                    pass_definition.ensure_paragraphs,
                     pass_definition.model or "<default>",
                     len(pass_definition.instruction),
                 ),
