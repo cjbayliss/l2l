@@ -313,6 +313,9 @@ class ChatReply:
     reasoning: tuple[str, ...] = ()
     reported: Mapping[str, Any] | None = None
     counted: int = 0
+    # True when the reasoning needs no conclude-time dump: streamed replies
+    # show it live (verbose) or record it as replayable console events, so
+    # only plain replies ever re-dump their (complete-text) reasoning.
     reasoning_shown: bool = False
 
 
@@ -695,13 +698,14 @@ def chat(
     return io_and_then(ctx.console.start("Working"), io_bind(call, stopped))
 
 
-def to_chat_reply(state: StreamState, verbose: bool) -> ChatReply:
+def to_chat_reply(state: StreamState) -> ChatReply:
+    joined = "".join(cons_to_tuple(state.reasoning))
     return ChatReply(
         content=stream_text(state),
-        reasoning=cons_to_tuple(state.reasoning),
+        reasoning=(joined,) if joined.strip() else (),
         reported=state.reported,
         counted=state.counted,
-        reasoning_shown=verbose,
+        reasoning_shown=True,
     )
 
 
@@ -721,15 +725,10 @@ def streamed_call(
     def on_progress(label: str, count: int) -> IO[None]:
         return ctx.console.progress(label, count)
 
-    def collect(verbose: bool) -> IO[Result[ChatReply, TranslationError]]:
-        return io_map(
-            collect_stream(ctx, full_payload, on_progress),
-            lambda outcome: result_map(
-                outcome, lambda state: to_chat_reply(state, verbose)
-            ),
-        )
-
-    return io_bind(read_ref(ctx.console.verbose), collect)
+    return io_map(
+        collect_stream(ctx, full_payload, on_progress),
+        lambda outcome: result_map(outcome, lambda state: to_chat_reply(state)),
+    )
 
 
 def plain_call(

@@ -256,6 +256,13 @@ def test_row_count_accounts_for_wrapping_and_blank_lines() -> None:
     assert row_count("word", 0) == 4
 
 
+def test_row_count_weights_wide_characters_by_display_width() -> None:
+    assert row_count("阿" * 40, 80) == 1
+    assert row_count("阿" * 60, 80) == 2
+    assert row_count("阿\nb", 80) == 2
+    assert row_count("ok 阿爹", 80) == 1
+
+
 def test_event_line_appends_newlines() -> None:
     assert event_line(LogEvent("done", False, False, 1)) == "done\n"
     assert event_line(LogEvent("thought", True, True, 1)) == "thought\n"
@@ -402,6 +409,17 @@ def test_toggle_off_erases_shown_reasoning_and_replays_from_events() -> None:
 
     toggle_verbose(console).run()
     assert stream.getvalue() == ("thoughts\n" + "\x1b[1A\x1b[J" + "thoughts\n")
+
+
+def test_toggle_off_erases_all_rows_of_wide_character_reasoning() -> None:
+    console, stream = make_live_console()
+    write_ref(console.verbose, True).run()
+    console.stream_reasoning("阿" * 120 + "\n").run()
+    console.end_raw().run()
+    assert stream.getvalue() == "阿" * 120 + "\n"
+
+    toggle_verbose(console).run()
+    assert stream.getvalue() == "阿" * 120 + "\n" + "\x1b[3A\x1b[J"
 
 
 def test_log_commits_open_reasoning_block_before_the_message() -> None:

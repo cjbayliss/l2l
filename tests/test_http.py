@@ -17,9 +17,10 @@ from fakes import (
     with_usage,
 )
 
+from zh2en.console import toggle_verbose
 from zh2en.errors import HttpError, describe, fail_http
 from zh2en.http import chat, retry_after_seconds, urllib_open
-from zh2en.monads import NOTHING, Err, Just, Ok
+from zh2en.monads import NOTHING, Err, Just, Ok, cons_to_tuple
 from zh2en.text import Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
@@ -261,6 +262,61 @@ def test_chat_reports_an_interrupted_stream() -> None:
     assert isinstance(failure, HttpError)
     assert failure.kind == "interrupted"
     assert "connection reset mid-stream" in describe(failure)
+
+
+class TogglingStreamResponse:
+    """SSE response that flips verbose mode mid-stream, like a Tab press."""
+
+    def __init__(
+        self, chunks: list[dict[str, Any]], console: Any, toggle_after_chunks: int
+    ) -> None:
+        self._lines = [
+            line
+            for chunk in chunks
+            for line in (
+                b"data: " + json.dumps(chunk).encode("utf-8") + b"\n",
+                b"\n",
+            )
+        ]
+        self._console = console
+        self._toggle_after = toggle_after_chunks * 2
+
+    def __iter__(self) -> Iterator[bytes]:
+        for index, line in enumerate(self._lines):
+            if index == self._toggle_after:
+                toggle_verbose(self._console).run()
+
+            yield line
+
+    def __enter__(self) -> TogglingStreamResponse:
+        return self
+
+    def __exit__(self, *args: object) -> Literal[False]:
+        return False
+
+
+def test_chat_shows_streamed_reasoning_once_across_a_mid_stream_toggle() -> None:
+    """Toggling verbose mid-stream must not re-dump the reasoning per delta
+    when the call concludes; the live tail plus sealed event already cover it."""
+    console, stderr = make_console()
+    chunks = [
+        {"choices": [{"delta": {"reasoning_content": "Most"}}]},
+        {"choices": [{"delta": {"reasoning_content": "ly fine."}}]},
+        {"choices": [{"delta": {"reasoning_content": " Second line."}}]},
+        {"choices": [{"delta": {"content": "Hi"}}]},
+    ]
+    http = FakeHttp([TogglingStreamResponse(chunks, console, toggle_after_chunks=2)])
+    ctx = make_context(console, http.open)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == "Hi"
+    assert stderr.getvalue() == " Second line.\n"
+    sealed = [
+        event.text
+        for event in cons_to_tuple(console.events.value)
+        if event.raw and event.verbose_only
+    ]
+    assert sealed == ["Mostly fine. Second line."]
 
 
 class UnterminatedStreamResponse:
