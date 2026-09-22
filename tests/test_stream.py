@@ -19,6 +19,7 @@ from zh2en.http import (
     plain_reply,
     step_stream,
     stream_step,
+    to_chat_reply,
 )
 from zh2en.monads import IO, NOTHING, Err, Just, Ok, cons_to_tuple, io_pure
 from zh2en.text import (
@@ -321,6 +322,26 @@ def test_chat_hides_streamed_reasoning_without_verbose() -> None:
     assert [
         event.text for event in cons_to_tuple(console.events.value) if event.raw
     ] == ["secret thoughts\n"]
+
+
+def test_to_chat_reply_joins_reasoning_fragments_into_one_text() -> None:
+    state = StreamState()
+    for text in ("Most", "ly fine", ".\n\nSecond paragraph."):
+        result = stream_step(
+            state, {"choices": [{"delta": {"reasoning_content": text}}]}
+        )
+        assert isinstance(result, Ok)
+        state = result.value
+
+    reply = to_chat_reply(state)
+    assert reply.reasoning == ("Mostly fine.\n\nSecond paragraph.",)
+    assert reply.reasoning_shown
+
+
+def test_to_chat_reply_without_reasoning_reports_none() -> None:
+    reply = to_chat_reply(StreamState())
+    assert reply.reasoning == ()
+    assert reply.reasoning_shown
 
 
 def test_drive_stream_stops_on_error_without_reading_next() -> None:

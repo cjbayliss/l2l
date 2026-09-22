@@ -5,6 +5,7 @@ import shutil
 import sys
 import threading
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import TextIO
@@ -335,12 +336,26 @@ def terminal_size() -> tuple[int, int]:
     return columns, lines
 
 
+def display_width(text: str) -> int:
+    """Terminal cells a string occupies: wide CJK/fullwidth chars span two."""
+    width = 0
+    for char in text:
+        if unicodedata.combining(char):
+            continue
+
+        width += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+
+    return width
+
+
 def row_count(text: str, width: int) -> int:
     columns = max(width, 1)
     segments = text.split("\n")
-    wrapped = sum(max(1, -(-len(segment) // columns)) for segment in segments[:-1])
+    wrapped = sum(
+        max(1, -(-display_width(segment) // columns)) for segment in segments[:-1]
+    )
     tail = segments[-1]
-    return wrapped + (-(-len(tail) // columns) if tail else 0)
+    return wrapped + (-(-display_width(tail) // columns) if tail else 0)
 
 
 def event_visible(event: LogEvent, verbose: bool) -> bool:
