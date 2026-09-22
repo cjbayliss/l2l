@@ -1,0 +1,22 @@
+[api]
+base_url = "https://openrouter.ai/api/v1"
+api_key = "sk-..."
+model = "z-ai/glm-5.3-flash"
+timeout = 120.0
+max_tokens = 100000
+
+[api.params]
+provider = { allow_fallbacks = true, sort = { by = "throughput" } }
+stop = ["END"]
+
+[[pass]]
+name = "translate"
+mode = "chunk"
+instruction_file = "ja2en.txt"
+model = "z-ai/glm-5.3-flash"
+[pass.params]
+reasoning_effort = "high"
+
+[options]
+ascii = true
+ensure_paragraphs = true

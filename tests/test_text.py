@@ -4,6 +4,8 @@ from zh2en.http import build_chat_payload
 from zh2en.messages import usage_line
 from zh2en.monads import NOTHING, Just
 from zh2en.plans import (
+    build_ascii_fix_user,
+    build_ascii_retry_user,
     build_pass_user,
     build_unit_retry_user,
     context_parts,
@@ -15,6 +17,7 @@ from zh2en.text import (
     Usage,
     add_usage,
     cache_key,
+    chars_per_token,
     drop_non_ascii,
     ensure_blank_line_separators,
     estimate_tokens,
@@ -97,6 +100,19 @@ def test_estimate_tokens() -> None:
     assert estimate_tokens("中文") == 2
     assert estimate_tokens("abcd") == 1
     assert estimate_tokens("中文abc") == 3
+    assert estimate_tokens("한국어") == 3
+    assert estimate_tokens("ありがとう") == 5
+    assert estimate_tokens("привет") == 2
+
+
+def test_chars_per_token_by_script() -> None:
+    assert chars_per_token("中") == 1
+    assert chars_per_token("。") == 1
+    assert chars_per_token("한") == 1
+    assert chars_per_token("あ") == 1
+    assert chars_per_token("ก") == 2
+    assert chars_per_token("a") == 4
+    assert chars_per_token("п") == 4
 
 
 def test_is_cjk_char() -> None:
@@ -104,6 +120,13 @@ def test_is_cjk_char() -> None:
     assert is_cjk_char("。")
     assert not is_cjk_char("a")
     assert not is_cjk_char(" ")
+    assert not is_cjk_char("한")
+
+
+def test_default_sentence_boundaries_cover_other_scripts() -> None:
+    boundaries = build_settings().sentence_boundary_characters
+    assert split_sentences("أهلاً؟ وسؤال؟", boundaries) == ("أهلاً؟", " وسؤال؟")
+    assert split_sentences("एक। दो।", boundaries) == ("एक।", " दो।")
 
 
 def test_non_ascii_sample() -> None:
@@ -222,3 +245,20 @@ def test_cache_key_distinguishes_context() -> None:
     repeated = cache_key("你好。", "m", "salt", "你好。", context="世界。")
     assert base != repeated
     assert repeated == cache_key("你好。", "m", "salt", "你好。", context="世界。")
+
+
+def test_build_ascii_fix_user_is_language_agnostic() -> None:
+    user = build_ascii_fix_user("原文", "output")
+    assert "ASCII" in user
+    assert "English" not in user
+    assert "原文" in user
+    assert "output" in user
+
+
+def test_build_ascii_retry_user_is_language_agnostic() -> None:
+    user = build_ascii_retry_user("原文", "output", "résumé")
+    assert "English" not in user
+    assert "ASCII characters only" in user
+    assert "é" in user
+    assert "原文" in user
+    assert "output" in user

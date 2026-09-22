@@ -27,22 +27,52 @@ class Translated:
     usage: Usage
 
 
-def is_cjk_char(char: str) -> bool:
+CJK_RANGES: tuple[tuple[int, int], ...] = (
+    (0x3000, 0x303F),
+    (0x3040, 0x30FF),
+    (0x3400, 0x4DBF),
+    (0x4E00, 0x9FFF),
+    (0xF900, 0xFAFF),
+    (0xFF00, 0xFFEF),
+    (0x20000, 0x2FA1F),
+)
+
+HANGUL_RANGES: tuple[tuple[int, int], ...] = (
+    (0x1100, 0x11FF),
+    (0xAC00, 0xD7AF),
+)
+
+THAI_RANGES: tuple[tuple[int, int], ...] = (
+    (0x0E00, 0x0E7F),
+    (0x0E80, 0x0EFF),
+)
+
+ONE_CHAR_PER_TOKEN_RANGES = CJK_RANGES + HANGUL_RANGES
+TWO_CHARS_PER_TOKEN_RANGES = THAI_RANGES
+
+
+def in_ranges(char: str, ranges: tuple[tuple[int, int], ...]) -> bool:
     code = ord(char)
-    return (
-        0x3000 <= code <= 0x303F
-        or 0x3040 <= code <= 0x30FF
-        or 0x3400 <= code <= 0x4DBF
-        or 0x4E00 <= code <= 0x9FFF
-        or 0xF900 <= code <= 0xFAFF
-        or 0xFF00 <= code <= 0xFFEF
-        or 0x20000 <= code <= 0x2FA1F
-    )
+    return any(start <= code <= end for start, end in ranges)
+
+
+def is_cjk_char(char: str) -> bool:
+    return in_ranges(char, CJK_RANGES)
+
+
+def chars_per_token(char: str) -> int:
+    if in_ranges(char, ONE_CHAR_PER_TOKEN_RANGES):
+        return 1
+
+    return 2 if in_ranges(char, TWO_CHARS_PER_TOKEN_RANGES) else 4
+
+
+def token_weight(char: str) -> int:
+    return 4 // chars_per_token(char)
 
 
 def estimate_tokens(text: str) -> int:
-    cjk_count = sum(1 for char in text if is_cjk_char(char))
-    return cjk_count + (len(text) - cjk_count + 3) // 4
+    return (sum(map(token_weight, text)) + 3) // 4
 
 
 def split_paragraphs(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:

@@ -129,11 +129,11 @@ def build_settings() -> Settings:
         retry_attempts=2,
         retry_base_delay=1.0,
         retry_cap=30.0,
-        sentence_boundary_characters="。！？!?；;\n",
+        sentence_boundary_characters="。！？…⋯!?；;\n؟؛।॥։።",
         ascii_fix_instruction="""
 This paragraph failed to be fully translated or contains non-ASCII
-characters. Please analyse it and only output a clean translation
-without any non-ASCII.
+characters. Please analyse it and only output a clean translation that
+uses ASCII characters only.
 """,
         ascii_character_map=MappingProxyType(
             {
