@@ -170,9 +170,10 @@ def resolve_work_groups(
 def build_ascii_fix_user(source_paragraph: str, output_paragraph: str) -> str:
     return (
         f"Source paragraph (original language):\n{source_paragraph}\n\n"
-        "Translated paragraph (must become pure ASCII English):\n"
+        "Translated paragraph (must use ASCII characters only):\n"
         f"{output_paragraph}\n\n"
-        "Rewrite the translated paragraph as pure ASCII English."
+        "Rewrite the translated paragraph using ASCII characters only, "
+        "preserving its meaning, register, and language."
     )
 
 
@@ -181,12 +182,13 @@ def build_ascii_retry_user(
 ) -> str:
     return (
         f"Source paragraph (original language):\n{source_paragraph}\n\n"
-        "Translated paragraph (must become pure ASCII English):\n"
+        "Translated paragraph (must use ASCII characters only):\n"
         f"{output_paragraph}\n\n"
         "Your previous reply still contained these non-ASCII "
         f"characters: {non_ascii_sample(result)}. Rewrite the translated "
-        "paragraph again, inferring English for every one of them from the "
-        "source and context. Reply with ASCII characters only."
+        "paragraph again, finding an equivalent ASCII formulation for "
+        "every one of them from the source and context. Reply with ASCII "
+        "characters only."
     )
 
 

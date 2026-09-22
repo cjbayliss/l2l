@@ -53,7 +53,8 @@ from zh2en.settings import Arguments, Context, Setup, build_settings
 def parse_args(arguments: Sequence[str]) -> Arguments:
     parser = argparse.ArgumentParser(
         prog="zh2en",
-        description="Translate Chinese text from stdin to English on stdout.",
+        description="Translate text between any pair of languages on "
+        "stdin/stdout using any OpenAI-compatible chat completions endpoint.",
     )
     parser.add_argument(
         "config",

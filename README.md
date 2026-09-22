@@ -1,7 +1,11 @@
 # zh2en
 
-Translate Chinese text from stdin to English on stdout using any
-OpenAI-compatible chat completions endpoint (including OpenRouter).
+Translate text from stdin to a target language on stdout — any source
+language, any target language — using any OpenAI-compatible chat
+completions endpoint (including OpenRouter). The name is historical:
+the language pair is defined entirely by the translation instructions
+you configure, so the same tool handles Chinese to English, Japanese to
+English, English to German, or any other combination.
 
 Standard-library-only Python (3.14+), organised as a small layered
 package: pure machinery in the middle, effects only at the edges.
@@ -51,7 +55,30 @@ Exit codes: `0` success (including empty input), `1` a pipeline error
 error, `130` on Ctrl-C, and `141` when stdout is closed early
 (SIGPIPE).
 
-See `example.toml` for a starting point.
+See `example.toml` for a Chinese-to-English starting point and
+`examples/` for other language pairs.
+
+## Language pairs
+
+The tool has no built-in notion of source or target language: a
+language pair is whatever your pass instructions ask for. Write an
+instruction file naming the source language and the desired target
+style, point an `[[pass]]` entry at it, and the whole pipeline —
+chunking, caching, validation, repair — works unchanged. For example,
+to translate Japanese fiction to English:
+
+```toml
+[[pass]]
+name = "translate"
+mode = "chunk"
+instruction_file = "examples/ja2en.txt"
+```
+
+`translate.txt` (Chinese fiction to English) and `examples/ja2en.txt`
+(Japanese fiction to English) are complete instruction files you can
+copy and adapt. Note that `[options] ascii = true` assumes a
+Latin-script target language (it enforces pure ASCII output); leave it
+off for targets such as Russian, Greek, Japanese, or Chinese.
 
 ## Interactive verbose toggle
 
