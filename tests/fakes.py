@@ -89,6 +89,7 @@ def make_context(
     ensure_paragraphs: bool = False,
     stream: bool | None = None,
     verbose: bool = False,
+    clock: Callable[[], float] = time.time,
 ) -> Context:
     config = Config(
         base_url="http://endpoint.test/v1",
@@ -107,8 +108,8 @@ def make_context(
         ensure_paragraphs=ensure_paragraphs,
         console=console,
         open_http=open_http,
-        log=log if log is not None else RunLog(NOTHING, time.time),
-        clock=time.time,
+        log=log if log is not None else RunLog(NOTHING, clock),
+        clock=clock,
         sleep=recording_sleep,
         stream=stream,
     )

@@ -679,13 +679,15 @@ def finish_output(
     stdout: TextIO,
 ) -> IO[int]:
     def after_write(_: None) -> IO[int]:
-        def report_total(total_elapsed: float) -> IO[int]:
+        def report_total(ended_at: float) -> IO[int]:
+            elapsed = ended_at - started
+
             def after_done(_: None) -> IO[int]:
                 return io_map(
                     ctx.console.log(
                         usage_line(
                             "TOTAL",
-                            total_elapsed,
+                            elapsed,
                             state.usage.prompt_tokens,
                             state.usage.completion_tokens,
                             state.usage.cost,
@@ -695,7 +697,7 @@ def finish_output(
                 )
 
             return io_bind(
-                verbose_log(ctx, done_in_message(total_elapsed)),
+                verbose_log(ctx, done_in_message(elapsed)),
                 after_done,
             )
 

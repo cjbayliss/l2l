@@ -241,6 +241,31 @@ def test_run_pipeline_translates() -> None:
     assert "TOTAL" in stderr.getvalue()
 
 
+def test_run_pipeline_total_elapsed_measures_since_started() -> None:
+    console, stderr = make_console()
+    http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
+    readings: list[float] = []
+    current = 100.0
+
+    def clock() -> float:
+        nonlocal current
+        current += 5.0
+        readings.append(current)
+        return current
+
+    ctx = make_context(console, http.open, clock=clock)
+    stdout = io.StringIO()
+    started = clock()
+    code = run_pipeline(ctx, (chunk_pass(),), "你好。", started, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n"
+    elapsed = readings[-1] - readings[0]
+    total = [line for line in stderr.getvalue().splitlines() if "TOTAL" in line][0]
+    assert f"TOTAL: {elapsed:.1f}s" in total
+    rate = USAGE["completion_tokens"] / elapsed if elapsed > 0 else 0.0
+    assert f"{rate:.1f} tok/s" in total
+
+
 def test_ascii_drop_warning_mentions_paragraph_sample_and_attempts() -> None:
     warning = ascii_drop_warning(AsciiDrop(index=1, sample="中", attempts=3))
     assert warning == (

@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 .env
 .coverage
+uv.lock
 dist/
 build/
 .mypy_cache/
