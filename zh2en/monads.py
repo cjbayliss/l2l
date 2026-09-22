@@ -320,16 +320,16 @@ def io_result_bind[T, E, R](
 
 
 def io_memoize[T](io_value: IO[T]) -> IO[T]:
-    lock = threading.Lock()
-    cached: Maybe[T] = NOTHING
+    cached: Ref[Maybe[T]] = Ref[Maybe[T]](NOTHING)
 
     def thunk() -> T:
-        nonlocal cached
-        with lock:
-            if isinstance(cached, Nothing):
-                cached = Just(io_value.run())
+        with cached.lock:
+            current = cached.value
+            if isinstance(current, Nothing):
+                current = Just(io_value.run())
+                cached.value = current
 
-            return cached.value
+            return current.value
 
     return IO(thunk)
 
