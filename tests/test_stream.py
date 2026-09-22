@@ -314,6 +314,9 @@ def test_chat_hides_streamed_reasoning_without_verbose() -> None:
     result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
     assert isinstance(result, Ok)
     assert "secret" not in stderr.getvalue()
+    assert [event.text for event in console.events.value if event.raw] == [
+        "secret thoughts\n"
+    ]
 
 
 def test_drive_stream_stops_on_error_without_reading_next() -> None:

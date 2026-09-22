@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import shutil
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -9,7 +12,6 @@ from typing import TextIO
 from zh2en.monads import (
     IO,
     Ref,
-    io_when,
     modify_ref,
     modify_ref_with,
     read_ref,
@@ -163,31 +165,40 @@ class StatusLine:
     def begin_raw(self) -> IO[None]:
         def thunk() -> None:
             with self.lock:
-                text = modify_ref_with(self.view, raw_begin_render).run()
-                if text:
-                    self.stream.write(text)
-                    self.stream.flush()
+                self._begin_raw_locked()
 
         return IO(thunk)
+
+    def _begin_raw_locked(self) -> None:
+        text = modify_ref_with(self.view, raw_begin_render).run()
+        if text:
+            self.stream.write(text)
+            self.stream.flush()
 
     def write_raw(self, text: str) -> IO[None]:
         def thunk() -> None:
             with self.lock:
-                modify_ref(self.view, lambda view: raw_write_render(view, text)).run()
-                self.stream.write(text)
-                self.stream.flush()
+                self._write_raw_locked(text)
 
         return IO(thunk)
+
+    def _write_raw_locked(self, text: str) -> None:
+        modify_ref(self.view, lambda view: raw_write_render(view, text)).run()
+        self.stream.write(text)
+        self.stream.flush()
 
     def end_raw(self) -> IO[None]:
         def thunk() -> None:
             with self.lock:
-                text = modify_ref_with(self.view, raw_end_render).run()
-                if text:
-                    self.stream.write(text)
-                    self.stream.flush()
+                self._end_raw_locked()
 
         return IO(thunk)
+
+    def _end_raw_locked(self) -> None:
+        text = modify_ref_with(self.view, raw_end_render).run()
+        if text:
+            self.stream.write(text)
+            self.stream.flush()
 
     def start(self, label: str) -> IO[None]:
         def thunk() -> None:
@@ -238,29 +249,30 @@ class StatusLine:
         def thunk() -> None:
             self._halt()
             with self.lock:
-                text = modify_ref_with(
-                    self.view, lambda view: interrupt_render(view, self.live)
-                ).run()
-                self.stream.write(text)
-                self.stream.flush()
-
-            return None
+                self._interrupt_locked()
 
         return IO(thunk)
+
+    def _interrupt_locked(self) -> None:
+        text = modify_ref_with(
+            self.view, lambda view: interrupt_render(view, self.live)
+        ).run()
+        if text:
+            self.stream.write(text)
+            self.stream.flush()
 
     def finish(self, text: str) -> IO[None]:
         def thunk() -> None:
             self._halt()
             with self.lock:
-                line = modify_ref_with(
-                    self.view, lambda view: finish_render(view, text)
-                ).run()
-                self.stream.write(line)
-                self.stream.flush()
-
-            return None
+                self._finish_locked(text)
 
         return IO(thunk)
+
+    def _finish_locked(self, text: str) -> None:
+        line = modify_ref_with(self.view, lambda view: finish_render(view, text)).run()
+        self.stream.write(line)
+        self.stream.flush()
 
     def _halt(self) -> None:
         worker = read_ref(self.worker).run()
@@ -282,28 +294,217 @@ class StatusLine:
 
 
 @dataclass(frozen=True)
+class LogEvent:
+    text: str
+    verbose_only: bool
+    raw: bool
+    rows: int
+
+
+def terminal_size() -> tuple[int, int]:
+    try:
+        size = os.get_terminal_size(sys.stderr.fileno())
+    except OSError, ValueError, AttributeError:
+        size = shutil.get_terminal_size()
+
+    columns = size.columns if size.columns > 0 else 80
+    lines = size.lines if size.lines > 0 else 24
+    return columns, lines
+
+
+def row_count(text: str, width: int) -> int:
+    columns = max(width, 1)
+    segments = text.split("\n")
+    wrapped = sum(max(1, -(-len(segment) // columns)) for segment in segments[:-1])
+    tail = segments[-1]
+    return wrapped + (-(-len(tail) // columns) if tail else 0)
+
+
+def event_visible(event: LogEvent, verbose: bool) -> bool:
+    return verbose if event.verbose_only else True
+
+
+def event_line(event: LogEvent) -> str:
+    if event.raw:
+        return event.text if event.text.endswith("\n") else event.text + "\n"
+
+    return event.text + "\n"
+
+
+def replay_text(events: tuple[LogEvent, ...], pending: str, verbose: bool) -> str:
+    parts = [event_line(event) for event in events if event_visible(event, verbose)]
+    if verbose and pending:
+        parts.append(pending)
+
+    return "".join(parts)
+
+
+def replay_rows(
+    events: tuple[LogEvent, ...], pending: str, verbose: bool, width: int
+) -> int:
+    rows = sum(event.rows for event in events if event_visible(event, verbose))
+    if verbose and pending:
+        rows += row_count(pending, width)
+
+    return rows
+
+
+def erase_rows_render(rows: int, height: int) -> str:
+    """Erase `rows` content rows, the last of which holds the cursor."""
+    if rows < 0:
+        return ""
+
+    count = min(rows, max(height - 1, 0))
+    up = "\x1b[%dA" % count if count > 0 else ""
+    return up + "\x1b[J"
+
+
+def toggle_verbose(console: Console) -> IO[bool]:
+    def thunk() -> bool:
+        flipped = modify_ref(console.verbose, lambda verbose: not verbose).run()
+        console.replay().run()
+        return flipped
+
+    return IO(thunk)
+
+
+@dataclass(frozen=True)
 class Console:
     stream: TextIO
     status: StatusLine
+    verbose: Ref[bool] = field(default_factory=lambda: Ref(False))
+    events: Ref[tuple[LogEvent, ...]] = field(default_factory=lambda: Ref(()))
+    pending_raw: Ref[str] = field(default_factory=lambda: Ref(""))
+    displayed_rows: Ref[int] = field(default_factory=lambda: Ref(0))
+    term_size: Callable[[], tuple[int, int]] = terminal_size
+
+    def record(self, text: str, verbose_only: bool, raw: bool) -> None:
+        """Append an event to the session log; the status lock must be held."""
+        width = self.term_size()[0]
+        event = LogEvent(
+            text=text,
+            verbose_only=verbose_only,
+            raw=raw,
+            rows=row_count(text, width),
+        )
+        modify_ref(self.events, lambda events: events + (event,)).run()
+        if not raw and (not verbose_only or self.verbose.value):
+            modify_ref(self.displayed_rows, lambda rows: rows + event.rows).run()
+
+    def commit_pending_raw(self) -> None:
+        """Seal an open reasoning block into an event; the lock must be held."""
+        pending = self.pending_raw.value
+        if not pending:
+            return
+
+        self.pending_raw.value = ""
+        self.record(pending, verbose_only=True, raw=True)
 
     def log(self, message: str) -> IO[None]:
+        return self._log_line(message, verbose_only=False)
+
+    def log_verbose(self, message: str) -> IO[None]:
+        return self._log_line(message, verbose_only=True)
+
+    def _log_line(self, message: str, verbose_only: bool) -> IO[None]:
         def thunk() -> None:
-            self.status.interrupt().run()
-            print(message, file=self.stream, flush=True)
+            shown = not verbose_only or self.verbose.value
+            if shown:
+                self.status._halt()
+
+            with self.status.lock:
+                if shown:
+                    text = modify_ref_with(
+                        self.status.view,
+                        lambda view: interrupt_render(view, self.status.live),
+                    ).run()
+                    if text:
+                        self.status.stream.write(text)
+                        self.status.stream.flush()
+
+                self.commit_pending_raw()
+                if shown:
+                    print(message, file=self.stream, flush=True)
+
+                self.record(message, verbose_only, raw=False)
+
+        return IO(thunk)
+
+    def stream_reasoning(self, text: str) -> IO[None]:
+        """Capture a reasoning delta; display it live only when verbose."""
+
+        def thunk() -> None:
+            with self.status.lock:
+                previous = self.pending_raw.value
+                pending = previous + text
+                self.pending_raw.value = pending
+                if self.verbose.value:
+                    self.status._begin_raw_locked()
+                    self.status._write_raw_locked(text)
+                    width = self.term_size()[0]
+                    modify_ref(
+                        self.displayed_rows,
+                        lambda rows: (
+                            rows
+                            + row_count(pending, width)
+                            - row_count(previous, width)
+                        ),
+                    ).run()
+
+        return IO(thunk)
+
+    def end_raw(self) -> IO[None]:
+        def thunk() -> None:
+            with self.status.lock:
+                self.status._end_raw_locked()
+                self.commit_pending_raw()
+
+        return IO(thunk)
+
+    def replay(self) -> IO[None]:
+        """Erase this session's output and re-render it for the current mode."""
+
+        def thunk() -> None:
+            if not self.status.live:
+                return None
+
+            with self.status.lock:
+                verbose = self.verbose.value
+                events = self.events.value
+                pending = self.pending_raw.value
+                width, height = self.term_size()
+                view = self.status.view.value
+                inside = view.raw and view.raw_open
+                erase = status_erase_text(view)
+                if inside:
+                    erase += "\r"
+                    erase += erase_rows_render(self.displayed_rows.value - 1, height)
+                elif self.displayed_rows.value > 0:
+                    erase += erase_rows_render(self.displayed_rows.value, height)
+
+                text = replay_text(events, pending, verbose)
+                if erase or text:
+                    self.status.stream.write(erase + text)
+                    self.status.stream.flush()
+
+                shown_pending = verbose and bool(pending)
+                rows = replay_rows(events, pending, verbose, width)
+                write_ref(self.displayed_rows, rows).run()
+                modify_ref(
+                    self.status.view,
+                    lambda current: replace(
+                        current,
+                        drawn="",
+                        raw=shown_pending,
+                        raw_open=shown_pending and not pending.endswith("\n"),
+                        prefix="" if shown_pending else current.prefix,
+                    ),
+                ).run()
 
         return IO(thunk)
 
     def write_partial(self, text: str) -> IO[None]:
         return self.status.write_partial(text)
-
-    def begin_raw(self) -> IO[None]:
-        return self.status.begin_raw()
-
-    def write_raw(self, text: str) -> IO[None]:
-        return self.status.write_raw(text)
-
-    def end_raw(self) -> IO[None]:
-        return self.status.end_raw()
 
     def start(self, label: str) -> IO[None]:
         return self.status.start(label)
@@ -318,8 +519,11 @@ class Console:
         return self.status.interrupt()
 
     def finish(self, text: str) -> IO[None]:
-        return self.status.finish(text)
+        def thunk() -> None:
+            self.status._halt()
+            with self.status.lock:
+                prefix = self.status.view.value.prefix
+                self.status._finish_locked(text)
+                self.record(prefix + text, verbose_only=False, raw=False)
 
-
-def log_when(verbose: bool, console: Console, message: str) -> IO[None]:
-    return io_when(verbose, console.log(message))
+        return IO(thunk)

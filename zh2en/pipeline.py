@@ -45,7 +45,6 @@ from zh2en.monads import (
     io_pure,
     io_result,
     io_traverse,
-    io_when,
     maybe_either,
     result_map,
 )
@@ -104,7 +103,7 @@ StateResult = Result[State, TranslationError]
 
 
 def verbose_log(ctx: Context, message: str) -> IO[None]:
-    return io_when(ctx.verbose, ctx.console.log(message))
+    return ctx.console.log_verbose(message)
 
 
 def run_analysis(

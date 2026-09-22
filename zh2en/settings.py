@@ -91,7 +91,6 @@ class Context:
     settings: Settings
     use_cache: bool
     cache_directory: str
-    verbose: bool
     ensure_paragraphs: bool
     console: Console
     open_http: OpenHTTP

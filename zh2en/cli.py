@@ -24,11 +24,13 @@ from zh2en.effects import (
 )
 from zh2en.errors import TranslationError, describe, fail_config
 from zh2en.http import urllib_open
+from zh2en.keys import start_tab_listener
 from zh2en.monads import (
     IO,
     NOTHING,
     Err,
     Ok,
+    Ref,
     Result,
     fold_io,
     io_bind,
@@ -104,7 +106,8 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         "-v",
         action="store_true",
         help="diagnostics (chunks, cache hits, timings) and LLM reasoning "
-        "traces to stderr",
+        "traces to stderr; press Tab while running to toggle them "
+        "interactively",
     )
     parser.add_argument(
         "--show-log-path",
@@ -291,7 +294,7 @@ def run_main_program(
         return io_pure(0)
 
     def with_console(live: bool) -> IO[int]:
-        console = Console(stderr, StatusLine(stderr, live))
+        console = Console(stderr, StatusLine(stderr, live), verbose=Ref(parsed.verbose))
         started = clock()
 
         def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
@@ -306,7 +309,6 @@ def run_main_program(
                     settings=build_settings(),
                     use_cache=False,
                     cache_directory="",
-                    verbose=parsed.verbose,
                     ensure_paragraphs=parsed.ensure_paragraphs
                     or setup.ensure_paragraphs,
                     console=console,
@@ -336,13 +338,12 @@ def run_main_program(
                     )
 
                     def run_with_log(_: None) -> IO[int]:
-                        return run_pipeline(
+                        pipeline = run_pipeline(
                             Context(
                                 config=setup.config,
                                 settings=build_settings(),
                                 use_cache=not parsed.no_cache,
                                 cache_directory=cache_directory,
-                                verbose=parsed.verbose,
                                 ensure_paragraphs=parsed.ensure_paragraphs
                                 or setup.ensure_paragraphs,
                                 console=console,
@@ -357,6 +358,15 @@ def run_main_program(
                             started,
                             stdout,
                         )
+
+                        def execute() -> int:
+                            stop_listener = start_tab_listener(console)
+                            try:
+                                return pipeline.run()
+                            finally:
+                                stop_listener()
+
+                        return IO(execute)
 
                     return io_bind(announced, run_with_log)
 
