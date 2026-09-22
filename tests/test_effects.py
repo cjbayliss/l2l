@@ -2,7 +2,7 @@ import time
 from pathlib import Path
 from typing import TextIO, cast
 
-from zh2en.effects import (
+from l2l.effects import (
     cache_entry_paths,
     cache_read,
     cache_write,
@@ -11,7 +11,7 @@ from zh2en.effects import (
     resolve_cache_dir,
     user_config_path,
 )
-from zh2en.monads import NOTHING, Just
+from l2l.monads import NOTHING, Just
 
 
 def test_io_isatty_handles_errors() -> None:
@@ -36,7 +36,7 @@ def test_resolve_cache_dir_defaults_under_xdg(tmp_path: Path) -> None:
 
 def test_user_config_path_honours_xdg() -> None:
     path = user_config_path({"XDG_CONFIG_HOME": "/cfg"}).run()
-    assert path == "/cfg/zh2en/config.toml"
+    assert path == "/cfg/l2l/config.toml"
 
 
 def test_cache_write_and_read_roundtrip(tmp_path: Path) -> None:

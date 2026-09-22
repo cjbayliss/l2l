@@ -4,19 +4,19 @@ from dataclasses import dataclass, replace
 from functools import reduce
 from typing import TextIO
 
-from zh2en.ascii import enforce_pass_ascii
-from zh2en.cache import cache_lookup, cache_store, cached_translation, non_empty
-from zh2en.console import Console
-from zh2en.effects import now, write_stdout
-from zh2en.errors import (
+from l2l.ascii import enforce_pass_ascii
+from l2l.cache import cache_lookup, cache_store, cached_translation, non_empty
+from l2l.console import Console
+from l2l.effects import now, write_stdout
+from l2l.errors import (
     TranslationError,
     describe,
     fail_budget,
     fail_pass,
     fail_unit,
 )
-from zh2en.http import RepairOutcome, chat, repaired_call
-from zh2en.messages import (
+from l2l.http import RepairOutcome, chat, repaired_call
+from l2l.messages import (
     analysis_info_message,
     done_in_message,
     paragraph_mismatch_message,
@@ -30,7 +30,7 @@ from zh2en.messages import (
     unit_no_source_message,
     usage_line,
 )
-from zh2en.monads import (
+from l2l.monads import (
     IO,
     Err,
     Just,
@@ -47,7 +47,7 @@ from zh2en.monads import (
     maybe_either,
     result_map,
 )
-from zh2en.plans import (
+from l2l.plans import (
     UnitCall,
     build_pass_user,
     build_unit_retry_user,
@@ -57,13 +57,13 @@ from zh2en.plans import (
     unit_output_problem,
     verbose_log,
 )
-from zh2en.settings import (
+from l2l.settings import (
     Context,
     PassDefinition,
     pass_salt,
     resolve_call_settings,
 )
-from zh2en.text import (
+from l2l.text import (
     Translated,
     Usage,
     cache_key,

@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from itertools import accumulate, chain
 from typing import Any
 
-from zh2en.errors import HttpError, TranslationError
-from zh2en.monads import IO, NOTHING, Just, Maybe
-from zh2en.settings import (
+from l2l.errors import HttpError, TranslationError
+from l2l.monads import IO, NOTHING, Just, Maybe
+from l2l.settings import (
     Context,
     PassDefinition,
     PassMode,
@@ -17,7 +17,7 @@ from zh2en.settings import (
     pass_salt,
     resolve_call_settings,
 )
-from zh2en.text import (
+from l2l.text import (
     AsciiDrop,
     cache_key,
     count_paragraphs,
@@ -131,13 +131,13 @@ def plan_info_message(
 ) -> str:
     match pass_definition.mode:
         case "paragraph":
-            return "zh2en: [%s] %d paragraph(s), one call per paragraph" % (
+            return "l2l: [%s] %d paragraph(s), one call per paragraph" % (
                 pass_definition.name,
                 len(work_groups),
             )
 
         case _:
-            return "zh2en: [%s] %d paragraph(s) in %d chunk(s)" % (
+            return "l2l: [%s] %d paragraph(s) in %d chunk(s)" % (
                 pass_definition.name,
                 len(work_paragraphs),
                 len(work_groups),
@@ -156,7 +156,7 @@ def resolve_work_groups(
         return grouped.value, NOTHING
 
     warning: Maybe[str] = Just(
-        f"zh2en: [{pass_name}] paragraph count changed by a previous pass; "
+        f"l2l: [{pass_name}] paragraph count changed by a previous pass; "
         "grouping working text independently"
     )
     match mode:
@@ -214,7 +214,7 @@ def build_unit_retry_user(
 
 def ascii_drop_warning(drop: AsciiDrop) -> str:
     return (
-        "zh2en: ascii: warning: paragraph %d still contained "
+        "l2l: ascii: warning: paragraph %d still contained "
         "non-ASCII characters (%s) after %d LLM attempts; dropping "
         "them" % (drop.index + 1, drop.sample, drop.attempts)
     )

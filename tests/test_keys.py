@@ -8,10 +8,10 @@ from collections.abc import Callable
 import pytest
 from fakes import make_console
 
-from zh2en import keys
-from zh2en.console import Console, toggle_verbose
-from zh2en.keys import TabListener, is_toggle_key, open_tty, start_tab_listener
-from zh2en.monads import IO, NOTHING, Just, Ref
+from l2l import keys
+from l2l.console import Console, toggle_verbose
+from l2l.keys import TabListener, is_toggle_key, open_tty, start_tab_listener
+from l2l.monads import IO, NOTHING, Just, Ref
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="requires a POSIX TTY")
 

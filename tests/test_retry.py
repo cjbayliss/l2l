@@ -1,5 +1,5 @@
-from zh2en.errors import BudgetError, ConfigError, HttpError, describe, fail_http
-from zh2en.plans import plan_backoff, retry_delay, transient
+from l2l.errors import BudgetError, ConfigError, HttpError, describe, fail_http
+from l2l.plans import plan_backoff, retry_delay, transient
 
 
 def test_transient_kinds() -> None:

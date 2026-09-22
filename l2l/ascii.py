@@ -8,18 +8,18 @@ from __future__ import annotations
 
 from functools import reduce
 
-from zh2en.cache import cached_translation
-from zh2en.effects import now
-from zh2en.errors import TranslationError, fail_ascii
-from zh2en.http import repaired_call
-from zh2en.messages import (
+from l2l.cache import cached_translation
+from l2l.effects import now
+from l2l.errors import TranslationError, fail_ascii
+from l2l.http import repaired_call
+from l2l.messages import (
     ascii_cache_hit_message,
     ascii_llm_message,
     ascii_mechanical_message,
     ascii_retry_message,
     stage_done_line,
 )
-from zh2en.monads import (
+from l2l.monads import (
     IO,
     NOTHING,
     Err,
@@ -34,14 +34,14 @@ from zh2en.monads import (
     io_traverse,
     result_map,
 )
-from zh2en.plans import (
+from l2l.plans import (
     ascii_drop_warning,
     build_ascii_fix_user,
     build_ascii_retry_user,
     verbose_log,
 )
-from zh2en.settings import Context, PassDefinition, resolve_call_settings, salt
-from zh2en.text import (
+from l2l.settings import Context, PassDefinition, resolve_call_settings, salt
+from l2l.text import (
     CACHE_SALT_VERSION,
     Translated,
     Usage,

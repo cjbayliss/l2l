@@ -9,8 +9,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, TextIO
 
-from zh2en.errors import TranslationError, fail_config
-from zh2en.monads import (
+from l2l.errors import TranslationError, fail_config
+from l2l.monads import (
     IO,
     NOTHING,
     Just,
@@ -24,7 +24,7 @@ from zh2en.monads import (
     io_result,
     result_or_else,
 )
-from zh2en.text import cache_path
+from l2l.text import cache_path
 
 Clock = Callable[[], float]
 Sleep = Callable[[float], None]
@@ -73,7 +73,7 @@ def user_config_path(environment: Mapping[str, str]) -> IO[str]:
     return IO(
         lambda: os.path.join(
             environment.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
-            "zh2en",
+            "l2l",
             "config.toml",
         )
     )
@@ -88,7 +88,7 @@ def resolve_cache_dir(
         else:
             directory = os.path.join(
                 environment.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
-                "zh2en",
+                "l2l",
             )
 
         os.makedirs(directory, exist_ok=True)

@@ -5,11 +5,11 @@ from typing import Any
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
-from zh2en.http import StreamState, step_stream
-from zh2en.monads import Ok, cons_to_tuple
-from zh2en.plans import plan_backoff
-from zh2en.settings import PartialApiSettings
-from zh2en.text import (
+from l2l.http import StreamState, step_stream
+from l2l.monads import Ok, cons_to_tuple
+from l2l.plans import plan_backoff
+from l2l.settings import PartialApiSettings
+from l2l.text import (
     ThinkState,
     cache_key,
     count_paragraphs,

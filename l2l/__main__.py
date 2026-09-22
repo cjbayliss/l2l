@@ -1,4 +1,4 @@
-from zh2en.cli import cli
+from l2l.cli import cli
 
 if __name__ == "__main__":
     cli()

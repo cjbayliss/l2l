@@ -23,8 +23,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from zh2en.console import Console
-from zh2en.monads import (
+from l2l.console import Console
+from l2l.monads import (
     IO,
     NOTHING,
     Just,

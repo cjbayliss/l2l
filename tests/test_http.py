@@ -17,11 +17,11 @@ from fakes import (
     with_usage,
 )
 
-from zh2en.console import toggle_verbose
-from zh2en.errors import HttpError, describe, fail_http
-from zh2en.http import chat, retry_after_seconds, urllib_open
-from zh2en.monads import NOTHING, Err, Just, Ok, cons_to_tuple
-from zh2en.text import Usage
+from l2l.console import toggle_verbose
+from l2l.errors import HttpError, describe, fail_http
+from l2l.http import chat, retry_after_seconds, urllib_open
+from l2l.monads import NOTHING, Err, Just, Ok, cons_to_tuple
+from l2l.text import Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 

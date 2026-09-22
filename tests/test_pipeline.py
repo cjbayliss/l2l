@@ -18,10 +18,10 @@ from fakes import (
     with_usage,
 )
 
-from zh2en import cli
-from zh2en.errors import TranslationError, describe, fail_http
-from zh2en.http import chat
-from zh2en.monads import (
+from l2l import cli
+from l2l.errors import TranslationError, describe, fail_http
+from l2l.http import chat
+from l2l.monads import (
     IO,
     Err,
     Just,
@@ -33,15 +33,15 @@ from zh2en.monads import (
     io_pure,
     io_result,
 )
-from zh2en.pipeline import analyze_document, run_pipeline
-from zh2en.plans import (
+from l2l.pipeline import analyze_document, run_pipeline
+from l2l.plans import (
     ascii_drop_warning,
     plan_report,
     plan_unit_calls,
     resolve_work_groups,
 )
-from zh2en.settings import PassDefinition
-from zh2en.text import AsciiDrop, Usage, unit_separators
+from l2l.settings import PassDefinition
+from l2l.text import AsciiDrop, Usage, unit_separators
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -275,7 +275,7 @@ def test_run_pipeline_total_elapsed_measures_since_started() -> None:
 def test_ascii_drop_warning_mentions_paragraph_sample_and_attempts() -> None:
     warning = ascii_drop_warning(AsciiDrop(index=1, sample="中", attempts=3))
     assert warning == (
-        "zh2en: ascii: warning: paragraph 2 still contained non-ASCII "
+        "l2l: ascii: warning: paragraph 2 still contained non-ASCII "
         "characters (中) after 3 LLM attempts; dropping them"
     )
 
@@ -539,7 +539,7 @@ def test_main_empty_stdin_succeeds_without_config() -> None:
 def test_main_end_to_end_with_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config_path = tmp_path / "zh2en.toml"
+    config_path = tmp_path / "l2l.toml"
     config_path.write_text(
         "[api]\n"
         'base_url = "http://endpoint.test/v1"\n'
@@ -587,7 +587,7 @@ def test_parse_arguments_reraises_version_exit() -> None:
 def test_main_check_config_prints_report_without_http(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config_path = tmp_path / "zh2en.toml"
+    config_path = tmp_path / "l2l.toml"
     config_path.write_text(
         "[api]\n"
         'base_url = "http://endpoint.test/v1"\n'
@@ -632,13 +632,13 @@ def test_main_check_config_reports_config_errors(
         time.time,
     ).run()
     assert code == 2
-    assert "zh2en: config file not found" in stderr.getvalue()
+    assert "l2l: config file not found" in stderr.getvalue()
 
 
 def test_main_dry_run_prints_plan_without_http(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config_path = tmp_path / "zh2en.toml"
+    config_path = tmp_path / "l2l.toml"
     config_path.write_text(
         "[api]\n"
         'base_url = "http://endpoint.test/v1"\n'
@@ -671,7 +671,7 @@ def test_main_dry_run_prints_plan_without_http(
 def test_main_no_stream_flag_forces_plain_responses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config_path = tmp_path / "zh2en.toml"
+    config_path = tmp_path / "l2l.toml"
     config_path.write_text(
         "[api]\n"
         'base_url = "http://endpoint.test/v1"\n'
@@ -851,7 +851,7 @@ def test_resolve_work_groups_keeps_matching_plan() -> None:
 def test_main_log_keep_prunes_old_logs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config_path = tmp_path / "zh2en.toml"
+    config_path = tmp_path / "l2l.toml"
     config_path.write_text(
         "[api]\n"
         'base_url = "http://endpoint.test/v1"\n'

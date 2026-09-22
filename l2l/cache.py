@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from zh2en.effects import cache_read, cache_write
-from zh2en.errors import TranslationError
-from zh2en.monads import (
+from l2l.effects import cache_read, cache_write
+from l2l.errors import TranslationError
+from l2l.monads import (
     IO,
     NOTHING,
     Just,
@@ -17,8 +17,8 @@ from zh2en.monads import (
     io_result,
     io_when_unit,
 )
-from zh2en.settings import Context
-from zh2en.text import Translated, Usage
+from l2l.settings import Context
+from l2l.text import Translated, Usage
 
 
 def const_acceptable(_: str) -> bool:

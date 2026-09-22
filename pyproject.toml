@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "zh2en"
+name = "l2l"
 description = "Translate text between any pair of languages on stdin/stdout using any OpenAI-compatible chat completions endpoint."
 requires-python = ">=3.14"
 dependencies = []
@@ -19,18 +19,18 @@ dev = [
 ]
 
 [project.scripts]
-zh2en = "zh2en.cli:cli"
+l2l = "l2l.cli:cli"
 
 [tool.setuptools]
-packages = ["zh2en"]
+packages = ["l2l"]
 
 [tool.setuptools.dynamic]
-version = { attr = "zh2en.__version__" }
+version = { attr = "l2l.__version__" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "--cov=zh2en --cov-report=term-missing --cov-fail-under=90"
+addopts = "--cov=l2l --cov-report=term-missing --cov-fail-under=90"
 
 [tool.coverage.run]
 branch = true
@@ -52,4 +52,4 @@ ignore = [
 strict = true
 python_version = "3.14"
 mypy_path = [".", "tests"]
-files = ["zh2en", "tests"]
+files = ["l2l", "tests"]

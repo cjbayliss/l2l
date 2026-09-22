@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any
 
-from zh2en.config import (
+from l2l.config import (
     api_settings_from_arguments,
     api_settings_from_environment,
     apply_default_options,
@@ -25,10 +25,10 @@ from zh2en.config import (
     timeout_api_setting,
     validate_document,
 )
-from zh2en.errors import TranslationError, describe
-from zh2en.monads import Err, Ok, Result
-from zh2en.plans import mask_api_key, setup_report
-from zh2en.settings import (
+from l2l.errors import TranslationError, describe
+from l2l.monads import Err, Ok, Result
+from l2l.plans import mask_api_key, setup_report
+from l2l.settings import (
     DEFAULT_API_SETTINGS,
     Arguments,
     Config,
@@ -38,7 +38,7 @@ from zh2en.settings import (
     pass_salt,
     resolve_call_settings,
 )
-from zh2en.text import CACHE_SALT_VERSION, cache_key
+from l2l.text import CACHE_SALT_VERSION, cache_key
 
 
 def ok_document(document: dict[str, Any]) -> Result[dict[str, Any], TranslationError]:
@@ -467,12 +467,12 @@ def test_resolve_config_path_discovers_local_then_user(
         None
     )
 
-    local = tmp_path / "zh2en.toml"
+    local = tmp_path / "l2l.toml"
     local.write_text("", encoding="utf-8")
     assert resolve_config_path(None, {}).run() == str(local)
 
     user_root = tmp_path / "cfg"
-    user_path = user_root / "zh2en" / "config.toml"
+    user_path = user_root / "l2l" / "config.toml"
     user_path.parent.mkdir(parents=True)
     user_path.write_text("", encoding="utf-8")
     local.unlink()

@@ -1,4 +1,4 @@
-# zh2en
+# l2l
 
 Translate text from stdin to a target language on stdout — any source
 language, any target language — using any OpenAI-compatible chat
@@ -16,24 +16,24 @@ package: pure machinery in the middle, effects only at the edges.
 pip install .
 ```
 
-This provides the `zh2en` console script. You can also run it directly with
-`python3 -m zh2en`.
+This provides the `l2l` console script. You can also run it directly with
+`python3 -m l2l`.
 
 ## Usage
 
 ```sh
-zh2en [CONFIG] [options] < input.txt > output.txt
+l2l [CONFIG] [options] < input.txt > output.txt
 ```
 
 - `CONFIG` is a TOML file. Resolution order: the positional argument, then
-  `$TRANSLATE_CONFIG`, then `./zh2en.toml`, then
-  `~/.config/zh2en/config.toml`. A user config at
-  `~/.config/zh2en/config.toml` (or `$XDG_CONFIG_HOME`) is always merged in
+  `$TRANSLATE_CONFIG`, then `./l2l.toml`, then
+  `~/.config/l2l/config.toml`. A user config at
+  `~/.config/l2l/config.toml` (or `$XDG_CONFIG_HOME`) is always merged in
   first when it exists; the selected config overrides it.
 - Options: `--base-url`, `--api-key`, `--model`, `--timeout`, `--max-tokens`
   override the corresponding `[api]` setting and its `TRANSLATE_*`
   environment variable. `--cache-dir` overrides the cache location
-  (default `$XDG_CACHE_HOME/zh2en`). `--no-cache` bypasses the cache.
+  (default `$XDG_CACHE_HOME/l2l`). `--no-cache` bypasses the cache.
   `--cache-prune DAYS` deletes cache entries (including orphaned
   `.txt.tmp` files) older than DAYS days and exits. `--log-keep DAYS`
   deletes run logs older than DAYS days at startup (default 30; `0`
@@ -82,7 +82,7 @@ off for targets such as Russian, Greek, Japanese, or Chinese.
 
 ## Interactive verbose toggle
 
-When stderr is a terminal, zh2en listens for key presses on the
+When stderr is a terminal, l2l listens for key presses on the
 controlling TTY while the pipeline runs (stdin stays reserved for the
 input text). Pressing **Tab** toggles verbose mode: the session's output
 on stderr is erased (only the rows this run printed — your scrollback is

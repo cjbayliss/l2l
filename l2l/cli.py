@@ -7,10 +7,10 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import TextIO
 
-from zh2en import __version__
-from zh2en.config import load_setup
-from zh2en.console import Console, StatusLine, toggle_verbose
-from zh2en.effects import (
+from l2l import __version__
+from l2l.config import load_setup
+from l2l.console import Console, StatusLine, toggle_verbose
+from l2l.effects import (
     RunLog,
     cache_entry_paths,
     close_run_log,
@@ -25,10 +25,10 @@ from zh2en.effects import (
     time_sleep,
     write_stdout,
 )
-from zh2en.errors import TranslationError, describe, fail_config
-from zh2en.http import urllib_open
-from zh2en.keys import start_tab_listener
-from zh2en.monads import (
+from l2l.errors import TranslationError, describe, fail_config
+from l2l.http import urllib_open
+from l2l.keys import start_tab_listener
+from l2l.monads import (
     IO,
     NOTHING,
     Err,
@@ -45,14 +45,14 @@ from zh2en.monads import (
     maybe_either,
     result_or_else,
 )
-from zh2en.pipeline import run_pipeline
-from zh2en.plans import plan_report, setup_report
-from zh2en.settings import Arguments, Context, Setup, build_settings
+from l2l.pipeline import run_pipeline
+from l2l.plans import plan_report, setup_report
+from l2l.settings import Arguments, Context, Setup, build_settings
 
 
 def parse_args(arguments: Sequence[str]) -> Arguments:
     parser = argparse.ArgumentParser(
-        prog="zh2en",
+        prog="l2l",
         description="Translate text between any pair of languages on "
         "stdin/stdout using any OpenAI-compatible chat completions endpoint.",
     )
@@ -61,13 +61,13 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         metavar="CONFIG",
         nargs="?",
         help="TOML config file defining [api] settings and [[pass]] passes "
-        "(default: $TRANSLATE_CONFIG, then ./zh2en.toml, then "
-        "~/.config/zh2en/config.toml)",
+        "(default: $TRANSLATE_CONFIG, then ./l2l.toml, then "
+        "~/.config/l2l/config.toml)",
     )
     parser.add_argument(
         "--version",
         action="version",
-        version="zh2en " + __version__,
+        version="l2l " + __version__,
     )
     parser.add_argument(
         "--base-url",
@@ -95,7 +95,7 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
     )
     parser.add_argument(
         "--cache-dir",
-        help="translation cache directory (default: $XDG_CACHE_HOME/zh2en)",
+        help="translation cache directory (default: $XDG_CACHE_HOME/l2l)",
     )
     parser.add_argument(
         "--no-cache", action="store_true", help="bypass the translation cache"
@@ -181,7 +181,7 @@ def parse_arguments(
         except SystemExit as exit_error:
             if exit_error.code == 0:
                 raise
-            return fail_config("invalid arguments; run zh2en --help")
+            return fail_config("invalid arguments; run l2l --help")
 
     return IO(thunk)
 
@@ -304,7 +304,7 @@ def prune_program(
         days = parsed.cache_prune
         if days is None or days <= 0:
             return io_map(
-                console.log("zh2en: --cache-prune requires a positive number of days"),
+                console.log("l2l: --cache-prune requires a positive number of days"),
                 lambda _: 2,
             )
 
@@ -325,7 +325,7 @@ def prune_program(
                 count = result_or_else(pruned, lambda: 0)
                 noun = "entry" if count == 1 else "entries"
                 return io_map(
-                    console.log("zh2en: pruned %d cache %s" % (count, noun)),
+                    console.log("l2l: pruned %d cache %s" % (count, noun)),
                     lambda _: 0,
                 )
 
@@ -369,7 +369,7 @@ def run_main_program(
                             log.path,
                             lambda path: io_when_unit(
                                 parsed.show_log_path,
-                                console.log(f"zh2en: log: {path}"),
+                                console.log(f"l2l: log: {path}"),
                             ),
                             lambda: io_pure(None),
                         )
@@ -444,7 +444,7 @@ def cli() -> None:
             time.time,
         ).run()
     except KeyboardInterrupt:
-        print("zh2en: interrupted", file=sys.stderr)
+        print("l2l: interrupted", file=sys.stderr)
         code = 130
     except BrokenPipeError:
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())

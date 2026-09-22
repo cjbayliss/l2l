@@ -1,7 +1,7 @@
 import threading
 from collections.abc import Iterator
 
-from zh2en.monads import (
+from l2l.monads import (
     IO,
     NOTHING,
     Cons,
