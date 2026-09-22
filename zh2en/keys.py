@@ -8,7 +8,6 @@ original attributes are restored on exit.
 
 from __future__ import annotations
 
-import atexit
 import contextlib
 import os
 import select
@@ -106,7 +105,6 @@ def start_tab_listener(console: Console) -> Callable[[], None]:
             return lambda: None
 
         listener = TabListener(console=console, fd=fd, saved=saved)
-        atexit.register(listener.restore)
         listener.start()
         return listener.stop
 

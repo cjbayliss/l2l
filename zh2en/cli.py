@@ -15,6 +15,7 @@ from zh2en.effects import (
     cache_entry_paths,
     file_age,
     io_isatty,
+    now,
     open_run_log,
     read_stdin,
     remove_file,
@@ -295,7 +296,6 @@ def run_main_program(
 
     def with_console(live: bool) -> IO[int]:
         console = Console(stderr, StatusLine(stderr, live), verbose=Ref(parsed.verbose))
-        started = clock()
 
         def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
             if isinstance(setup_result, Err):
@@ -326,55 +326,58 @@ def run_main_program(
                     lambda _: 0,
                 )
 
-            def with_cache_dir(cache_directory: str) -> IO[int]:
-                def with_log(log: RunLog) -> IO[int]:
-                    announced: IO[None] = maybe_either(
-                        log.path,
-                        lambda path: io_when(
-                            parsed.show_log_path,
-                            console.log(f"zh2en: log: {path}"),
-                        ),
-                        lambda: io_pure(None),
-                    )
-
-                    def run_with_log(_: None) -> IO[int]:
-                        pipeline = run_pipeline(
-                            Context(
-                                config=setup.config,
-                                settings=build_settings(),
-                                use_cache=not parsed.no_cache,
-                                cache_directory=cache_directory,
-                                ensure_paragraphs=parsed.ensure_paragraphs
-                                or setup.ensure_paragraphs,
-                                console=console,
-                                open_http=urllib_open,
-                                log=log,
-                                clock=clock,
-                                sleep=time_sleep,
-                                stream=parsed.stream,
+            def with_started(started: float) -> IO[int]:
+                def with_cache_dir(cache_directory: str) -> IO[int]:
+                    def with_log(log: RunLog) -> IO[int]:
+                        announced: IO[None] = maybe_either(
+                            log.path,
+                            lambda path: io_when(
+                                parsed.show_log_path,
+                                console.log(f"zh2en: log: {path}"),
                             ),
-                            setup.passes,
-                            text,
-                            started,
-                            stdout,
+                            lambda: io_pure(None),
                         )
 
-                        def execute() -> int:
-                            stop_listener = start_tab_listener(console)
-                            try:
-                                return pipeline.run()
-                            finally:
-                                stop_listener()
+                        def run_with_log(_: None) -> IO[int]:
+                            pipeline = run_pipeline(
+                                Context(
+                                    config=setup.config,
+                                    settings=build_settings(),
+                                    use_cache=not parsed.no_cache,
+                                    cache_directory=cache_directory,
+                                    ensure_paragraphs=parsed.ensure_paragraphs
+                                    or setup.ensure_paragraphs,
+                                    console=console,
+                                    open_http=urllib_open,
+                                    log=log,
+                                    clock=clock,
+                                    sleep=time_sleep,
+                                    stream=parsed.stream,
+                                ),
+                                setup.passes,
+                                text,
+                                started,
+                                stdout,
+                            )
 
-                        return IO(execute)
+                            def execute() -> int:
+                                stop_listener = start_tab_listener(console)
+                                try:
+                                    return pipeline.run()
+                                finally:
+                                    stop_listener()
 
-                    return io_bind(announced, run_with_log)
+                            return IO(execute)
 
-                return io_bind(open_run_log(cache_directory, clock), with_log)
+                        return io_bind(announced, run_with_log)
 
-            return io_bind(
-                resolve_cache_dir(environment, parsed.cache_dir), with_cache_dir
-            )
+                    return io_bind(open_run_log(cache_directory, clock), with_log)
+
+                return io_bind(
+                    resolve_cache_dir(environment, parsed.cache_dir), with_cache_dir
+                )
+
+            return io_bind(now(clock), with_started)
 
         return io_bind(load_setup(parsed, environment), use_setup)
 

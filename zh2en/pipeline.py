@@ -608,21 +608,23 @@ def run_text_pass(
                 lambda _: result,
             )
 
-        retried = io_bind(
-            attempt(
-                replace(pass_definition, mode="paragraph"),
-                replace(state, usage=result.value.usage),
-                ctx.clock(),
-            ),
-            after_retry,
-        )
+        def retry_at(retry_started: float) -> IO[StateResult]:
+            return io_bind(
+                attempt(
+                    replace(pass_definition, mode="paragraph"),
+                    replace(state, usage=result.value.usage),
+                    retry_started,
+                ),
+                after_retry,
+            )
+
         return io_and_then(
             ctx.console.log(
                 mismatch_message(
                     count, "re-running the pass with one call per paragraph"
                 )
             ),
-            retried,
+            io_bind(now(ctx.clock), retry_at),
         )
 
     return io_bind(attempt(pass_definition, state, started_at), check)
@@ -729,25 +731,26 @@ def finish_output(
     stdout: TextIO,
 ) -> IO[int]:
     def after_write(_: None) -> IO[int]:
-        total_elapsed = ctx.clock() - started
+        def report_total(total_elapsed: float) -> IO[int]:
+            def after_done(_: None) -> IO[int]:
+                return io_map(
+                    ctx.console.log(
+                        usage_line(
+                            "TOTAL",
+                            total_elapsed,
+                            state.usage.prompt_tokens,
+                            state.usage.completion_tokens,
+                            state.usage.cost,
+                        )
+                    ),
+                    lambda _: 0,
+                )
 
-        def after_done(_: None) -> IO[int]:
-            return io_map(
-                ctx.console.log(
-                    usage_line(
-                        "TOTAL",
-                        total_elapsed,
-                        state.usage.prompt_tokens,
-                        state.usage.completion_tokens,
-                        state.usage.cost,
-                    )
-                ),
-                lambda _: 0,
+            return io_bind(
+                verbose_log(ctx, done_in_message(total_elapsed)),
+                after_done,
             )
 
-        return io_bind(
-            verbose_log(ctx, done_in_message(total_elapsed)),
-            after_done,
-        )
+        return io_bind(now(ctx.clock), report_total)
 
     return io_bind(write_stdout(stdout, state.text), after_write)

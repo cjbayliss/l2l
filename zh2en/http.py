@@ -31,6 +31,7 @@ from zh2en.monads import (
     io_result,
     maybe_either,
     maybe_or,
+    read_ref,
     result_bind,
     result_map,
 )
@@ -552,6 +553,17 @@ def chat(
     return io_and_then(ctx.console.start("Working"), io_bind(call, stopped))
 
 
+def to_chat_reply(state: StreamState, verbose: bool) -> ChatReply:
+    return ChatReply(
+        content="".join(state.contents)
+        + (state.think.held if state.think.checking and not state.think.open else ""),
+        reasoning=state.reasoning,
+        reported=state.reported,
+        counted=state.counted,
+        reasoning_shown=verbose,
+    )
+
+
 def streamed_call(
     ctx: Context, payload: Mapping[str, Any]
 ) -> IO[Result[ChatReply, TranslationError]]:
@@ -562,24 +574,15 @@ def streamed_call(
     def on_progress(label: str, count: int) -> IO[None]:
         return ctx.console.progress(label, count)
 
-    def to_reply(state: StreamState) -> ChatReply:
-        return ChatReply(
-            content="".join(state.contents)
-            + (
-                state.think.held
-                if state.think.checking and not state.think.open
-                else ""
+    def collect(verbose: bool) -> IO[Result[ChatReply, TranslationError]]:
+        return io_map(
+            collect_stream(ctx, full_payload, on_progress),
+            lambda outcome: result_map(
+                outcome, lambda state: to_chat_reply(state, verbose)
             ),
-            reasoning=state.reasoning,
-            reported=state.reported,
-            counted=state.counted,
-            reasoning_shown=ctx.console.verbose.value,
         )
 
-    return io_map(
-        collect_stream(ctx, full_payload, on_progress),
-        lambda outcome: result_map(outcome, to_reply),
-    )
+    return io_bind(read_ref(ctx.console.verbose), collect)
 
 
 def plain_call(
@@ -610,31 +613,37 @@ def conclude_chat(
     think_texts: tuple[str, ...] = maybe_either(
         think_text, lambda text: (text,), lambda: ()
     )
-    messages = (
-        tuple(text.rstrip() for text in reply.reasoning + think_texts if text.strip())
-        if ctx.console.verbose.value and not reply.reasoning_shown
-        else ()
-    )
 
-    def finish(
-        _: Result[tuple[()], TranslationError],
-    ) -> Result[Translated, TranslationError]:
-        reported = reply.reported
-        return Ok(
-            Translated(
-                content,
-                (
-                    add_usage(usage, reported)
-                    if reported
-                    else add_usage(
-                        usage,
-                        {
-                            "prompt_tokens": estimated,
-                            "completion_tokens": reply.counted,
-                        },
-                    )
-                ),
+    def conclude(verbose: bool) -> IO[Result[Translated, TranslationError]]:
+        messages = (
+            tuple(
+                text.rstrip() for text in reply.reasoning + think_texts if text.strip()
             )
+            if verbose and not reply.reasoning_shown
+            else ()
         )
 
-    return io_map(log_all(ctx.console, messages), finish)
+        def finish(
+            _: Result[tuple[()], TranslationError],
+        ) -> Result[Translated, TranslationError]:
+            reported = reply.reported
+            return Ok(
+                Translated(
+                    content,
+                    (
+                        add_usage(usage, reported)
+                        if reported
+                        else add_usage(
+                            usage,
+                            {
+                                "prompt_tokens": estimated,
+                                "completion_tokens": reply.counted,
+                            },
+                        )
+                    ),
+                )
+            )
+
+        return io_map(log_all(ctx.console, messages), finish)
+
+    return io_bind(read_ref(ctx.console.verbose), conclude)
