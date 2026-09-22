@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -9,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, TextIO
 
 from zh2en.errors import TranslationError, fail_config
-from zh2en.monads import IO, NOTHING, Just, Maybe, Nothing, Ok, Result
+from zh2en.monads import IO, NOTHING, Just, Maybe, Nothing, Ok, Result, io_bind
 from zh2en.text import cache_path
 
 Clock = Callable[[], float]
@@ -127,10 +128,20 @@ def log_stamp(now_value: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_value))
 
 
+def _no_append(_content: str) -> None:
+    return None
+
+
+def _no_close() -> None:
+    return None
+
+
 @dataclass(frozen=True)
 class RunLog:
     path: Maybe[str]
     clock: Clock
+    append: Callable[[str], None] = _no_append
+    close: Callable[[], None] = _no_close
 
 
 def run_log_path(cache_directory: str, now_value: float) -> str:
@@ -146,7 +157,25 @@ def open_run_log(cache_directory: str, clock: Clock) -> IO[RunLog]:
     def thunk() -> RunLog:
         path = run_log_path(cache_directory, clock())
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        return RunLog(path=Just(path), clock=clock)
+        # The handle intentionally outlives this scope; `close_run_log` closes it.
+        handle = open(path, "a", encoding="utf-8")  # noqa: SIM115
+
+        def append(content: str) -> None:
+            with contextlib.suppress(OSError, ValueError):
+                handle.write(content)
+
+        def close() -> None:
+            with contextlib.suppress(OSError):
+                handle.close()
+
+        return RunLog(path=Just(path), clock=clock, append=append, close=close)
+
+    return IO(thunk)
+
+
+def close_run_log(log: RunLog) -> IO[None]:
+    def thunk() -> None:
+        log.close()
 
     return IO(thunk)
 
@@ -156,22 +185,16 @@ def run_log_write(log: RunLog, content: str) -> IO[None]:
         if isinstance(log.path, Nothing):
             return
 
-        try:
-            with open(log.path.value, "a", encoding="utf-8") as handle:
-                handle.write(content)
-        except OSError:
-            pass
+        log.append(content)
 
     return IO(thunk)
 
 
 def log_entry(log: RunLog, label: str, body: str) -> IO[None]:
-    def thunk() -> None:
-        return run_log_write(
-            log, f"== {log_stamp(log.clock())} {label}\n{body}\n\n"
-        ).run()
+    def stamped(now_value: float) -> IO[None]:
+        return run_log_write(log, f"== {log_stamp(now_value)} {label}\n{body}\n\n")
 
-    return IO(thunk)
+    return io_bind(now(log.clock), stamped)
 
 
 def log_request(

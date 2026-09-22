@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from zh2en.console import Console, toggle_verbose
+from zh2en.console import Console
 from zh2en.monads import NOTHING, Just, Maybe, maybe_either, maybe_or
 
 POLL_SECONDS = 0.1
@@ -49,9 +49,9 @@ def open_tty() -> Maybe[int]:
 
 @dataclass
 class TabListener:
-    console: Console
     fd: int
     saved: list[Any]
+    toggle: Callable[[], None]
     halt: threading.Event = field(default_factory=threading.Event)
     thread: threading.Thread | None = None
     restored: bool = False
@@ -83,15 +83,19 @@ class TabListener:
                     continue
 
                 if is_toggle_key(os.read(self.fd, 1)):
-                    toggle_verbose(self.console).run()
+                    self.toggle()
             except OSError, termios.error:
                 return
 
 
-def start_tab_listener(console: Console) -> Callable[[], None]:
-    """Poll the TTY for Tab presses toggling verbose mode.
+def start_tab_listener(
+    console: Console, toggle: Callable[[], None]
+) -> Callable[[], None]:
+    """Poll the TTY for Tab presses and invoke `toggle` on each press.
 
-    Returns a no-op when stderr is not a terminal or no TTY is available.
+    `toggle` performs the mode flip and re-render; the program edge
+    supplies it, so this module never executes IO itself. Returns a
+    no-op when stderr is not a terminal or no TTY is available.
     The returned callable stops the listener and restores the terminal.
     """
     if not console.status.live:
@@ -104,7 +108,7 @@ def start_tab_listener(console: Console) -> Callable[[], None]:
         except OSError, termios.error:
             return lambda: None
 
-        listener = TabListener(console=console, fd=fd, saved=saved)
+        listener = TabListener(fd=fd, saved=saved, toggle=toggle)
         listener.start()
         return listener.stop
 

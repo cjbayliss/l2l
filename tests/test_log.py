@@ -17,7 +17,13 @@ from fakes import (
 )
 
 from zh2en import cli
-from zh2en.effects import RunLog, log_error, run_log_write
+from zh2en.effects import (
+    RunLog,
+    close_run_log,
+    log_error,
+    open_run_log,
+    run_log_write,
+)
 from zh2en.errors import TranslationError, fail_http
 from zh2en.http import chat
 from zh2en.monads import NOTHING, Just, Ok, Result
@@ -85,17 +91,19 @@ def test_run_log_captures_stream_request_and_response(
 
 
 def test_run_log_captures_plain_request_and_response(tmp_path: Path) -> None:
-    log_path = tmp_path / "run.log"
     console, _ = make_console()
     body = {
         "choices": [{"message": {"content": "Plain"}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
     http = FakeHttp([FakePlainResponse(body)])
-    ctx = make_context(console, http.open, log=RunLog(Just(str(log_path)), time.time))
+    log = open_run_log(str(tmp_path), time.time).run()
+    assert isinstance(log.path, Just)
+    ctx = make_context(console, http.open, log=log)
     result = chat(ctx, "sys", "user", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Ok)
-    content = log_path.read_text(encoding="utf-8")
+    close_run_log(log).run()
+    content = Path(log.path.value).read_text(encoding="utf-8")
     assert "REQUEST" in content
     assert '"stream": false' in content
     assert "RESPONSE" in content

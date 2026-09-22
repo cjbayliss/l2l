@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import replace
@@ -107,30 +106,46 @@ def string_api_setting(
     return reduce(step, STRING_API_KEYS, initial)
 
 
+NumericApiKey = Literal["timeout", "max_tokens"]
+
+
+def positive_number_setting(
+    path: str,
+    partial: PartialApiSettings,
+    table: Mapping[str, Any],
+    key: NumericApiKey,
+    whole: bool,
+) -> Result[PartialApiSettings, TranslationError]:
+    if key not in table:
+        return Ok(partial)
+
+    value = table[key]
+    valid = (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and value > 0
+        and (isinstance(value, int) or not whole)
+    )
+    if not valid:
+        expected = "a positive integer" if whole else "a positive number"
+        return fail_config(f"{path}: [api] {key} must be {expected}")
+
+    if whole:
+        return Ok(replace(partial, max_tokens=int(value)))
+
+    return Ok(replace(partial, timeout=float(value)))
+
+
 def timeout_api_setting(
     path: str, partial: PartialApiSettings, table: Mapping[str, Any]
 ) -> Result[PartialApiSettings, TranslationError]:
-    if "timeout" not in table:
-        return Ok(partial)
-
-    value = table["timeout"]
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-        return fail_config(f"{path}: [api] timeout must be a positive number")
-
-    return Ok(replace(partial, timeout=float(value)))
+    return positive_number_setting(path, partial, table, "timeout", whole=False)
 
 
 def max_tokens_api_setting(
     path: str, partial: PartialApiSettings, table: Mapping[str, Any]
 ) -> Result[PartialApiSettings, TranslationError]:
-    if "max_tokens" not in table:
-        return Ok(partial)
-
-    value = table["max_tokens"]
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        return fail_config(f"{path}: [api] max_tokens must be a positive integer")
-
-    return Ok(replace(partial, max_tokens=value))
+    return positive_number_setting(path, partial, table, "max_tokens", whole=True)
 
 
 def params_api_setting(
@@ -201,40 +216,49 @@ def env_string_settings(environment: Mapping[str, str]) -> PartialApiSettings:
     )
 
 
+def env_positive_setting(
+    environment: Mapping[str, str],
+    variable: str,
+    parse: Callable[[str], float],
+    kind: str,
+) -> Result[float | None, TranslationError]:
+    raw = environment.get(variable, "").strip()
+    if not raw:
+        return Ok(None)
+
+    try:
+        parsed = parse(raw)
+    except ValueError:
+        return fail_config(f"{variable} must be {kind}, got {raw!r}")
+
+    if parsed <= 0:
+        return fail_config(f"{variable} must be positive")
+
+    return Ok(parsed)
+
+
 def env_timeout_setting(
     environment: Mapping[str, str], partial: PartialApiSettings
 ) -> Result[PartialApiSettings, TranslationError]:
-    raw = environment.get("TRANSLATE_TIMEOUT", "").strip()
-    if not raw:
-        return Ok(partial)
-
-    try:
-        timeout = float(raw)
-    except ValueError:
-        return fail_config(f"TRANSLATE_TIMEOUT must be a number, got {raw!r}")
-
-    if timeout <= 0:
-        return fail_config("TRANSLATE_TIMEOUT must be positive")
-
-    return Ok(replace(partial, timeout=timeout))
+    parsed = env_positive_setting(environment, "TRANSLATE_TIMEOUT", float, "a number")
+    return result_map(
+        parsed,
+        lambda value: partial if value is None else replace(partial, timeout=value),
+    )
 
 
 def env_max_tokens_setting(
     environment: Mapping[str, str], partial: PartialApiSettings
 ) -> Result[PartialApiSettings, TranslationError]:
-    raw = environment.get("TRANSLATE_MAX_TOKENS", "").strip()
-    if not raw:
-        return Ok(partial)
-
-    try:
-        max_tokens = int(raw)
-    except ValueError:
-        return fail_config(f"TRANSLATE_MAX_TOKENS must be an integer, got {raw!r}")
-
-    if max_tokens <= 0:
-        return fail_config("TRANSLATE_MAX_TOKENS must be positive")
-
-    return Ok(replace(partial, max_tokens=max_tokens))
+    parsed = env_positive_setting(
+        environment, "TRANSLATE_MAX_TOKENS", int, "an integer"
+    )
+    return result_map(
+        parsed,
+        lambda value: (
+            partial if value is None else replace(partial, max_tokens=int(value))
+        ),
+    )
 
 
 def api_settings_from_environment(
@@ -690,55 +714,4 @@ def load_setup(arguments: Arguments, environment: Mapping[str, str]) -> IO[Setup
             resolve_config_path(arguments.config, environment),
             lambda selected_path: with_paths(user_path, selected_path),
         ),
-    )
-
-
-def mask_api_key(api_key: str) -> str:
-    if len(api_key) <= 8:
-        return "***"
-
-    return api_key[:4] + "..." + api_key[-2:]
-
-
-def params_text(params: Mapping[str, Any]) -> str:
-    return json.dumps(params, sort_keys=True, ensure_ascii=False, default=str)
-
-
-def setup_report(setup: Setup, effective_ensure_paragraphs: bool) -> str:
-    config = setup.config
-    api_lines: tuple[str, ...] = (
-        f"api.base_url: {config.base_url}",
-        f"api.model: {config.model}",
-        f"api.timeout: {config.timeout:g}",
-        "api.max_tokens: %d" % config.max_tokens,
-        f"api.api_key: {mask_api_key(config.api_key)}",
-        *((f"api.params: {params_text(config.params)}",) if config.params else ()),
-    )
-    pass_lines = tuple(
-        line
-        for number, pass_definition in enumerate(setup.passes, 1)
-        for line in (
-            (
-                "pass %d/%d [%s]: mode=%s ascii=%s model=%s instruction=%d chars"
-                % (
-                    number,
-                    len(setup.passes),
-                    pass_definition.name,
-                    pass_definition.mode,
-                    pass_definition.ascii,
-                    pass_definition.model or "<default>",
-                    len(pass_definition.instruction),
-                ),
-                *(
-                    (f"  params: {params_text(pass_definition.params)}",)
-                    if pass_definition.params
-                    else ()
-                ),
-            )
-        )
-    )
-    return "\n".join(
-        api_lines
-        + pass_lines
-        + (f"options.ensure_paragraphs: {effective_ensure_paragraphs}",)
     )

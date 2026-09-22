@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import reduce
 from typing import TextIO
 
 from zh2en.ascii import enforce_pass_ascii
-from zh2en.cache import cache_lookup, cache_store, cached_translation
+from zh2en.cache import cache_lookup, cache_store, cached_translation, non_empty
 from zh2en.console import Console
 from zh2en.effects import now, write_stdout
 from zh2en.errors import (
@@ -36,6 +35,7 @@ from zh2en.monads import (
     Err,
     Just,
     Maybe,
+    Nothing,
     Ok,
     Result,
     fold_io,
@@ -283,14 +283,14 @@ def run_unit(
 ) -> IO[Result[UnitResult, TranslationError]]:
     model, params = resolve_call_settings(ctx.config, pass_definition)
 
-    def assess_initial(
-        translated: str, unit_usage: Usage
+    def settle(
+        attempt_index: int, reply: Translated
     ) -> IO[Result[UnitResult, TranslationError]]:
-        problem = unit_output_problem(call.source_chunk, translated, ctx.settings)
-        if isinstance(problem, Just):
-            return repair(1, translated, unit_usage, problem.value)
+        problem = unit_output_problem(call.source_chunk, reply.text, ctx.settings)
+        if isinstance(problem, Nothing):
+            return io_result(Ok(UnitResult(reply.text, True, reply.usage)))
 
-        return io_result(Ok(UnitResult(translated, True, unit_usage)))
+        return repair(attempt_index, reply.text, reply.usage, problem.value)
 
     def repair(
         attempt_index: int,
@@ -311,6 +311,14 @@ def run_unit(
                 ),
                 lambda _: Ok(UnitResult(bad_output, False, unit_usage)),
             )
+
+        def continued(
+            reply_result: Result[Translated, TranslationError],
+        ) -> IO[Result[UnitResult, TranslationError]]:
+            if isinstance(reply_result, Err):
+                return io_result(reply_result)
+
+            return settle(attempt_index + 1, reply_result.value)
 
         return io_bind(
             verbose_log(
@@ -335,33 +343,9 @@ def run_unit(
                     params,
                     unit_usage,
                 ),
-                settled(attempt_index),
+                continued,
             ),
         )
-
-    def settled(
-        attempt_index: int,
-    ) -> Callable[
-        [Result[Translated, TranslationError]], IO[Result[UnitResult, TranslationError]]
-    ]:
-        def continue_after(
-            reply_result: Result[Translated, TranslationError],
-        ) -> IO[Result[UnitResult, TranslationError]]:
-            if isinstance(reply_result, Err):
-                return io_result(reply_result)
-
-            translated = reply_result.value
-            problem = unit_output_problem(
-                call.source_chunk, translated.text, ctx.settings
-            )
-            if isinstance(problem, Just):
-                return repair(
-                    attempt_index + 1, translated.text, translated.usage, problem.value
-                )
-
-            return io_result(Ok(UnitResult(translated.text, True, translated.usage)))
-
-        return continue_after
 
     def assessed(
         reply_result: Result[Translated, TranslationError],
@@ -369,7 +353,7 @@ def run_unit(
         if isinstance(reply_result, Err):
             return io_result(reply_result)
 
-        return assess_initial(reply_result.value.text, reply_result.value.usage)
+        return settle(1, reply_result.value)
 
     return io_bind(
         translate_chunk(
@@ -457,7 +441,7 @@ def run_units(
                 store,
             )
 
-        return io_bind(cache_lookup(ctx, call.key), proceed)
+        return io_bind(cache_lookup(ctx, call.key, acceptable=non_empty), proceed)
 
     def collect(parts: tuple[tuple[str, Usage], ...]) -> UnitsSoFar:
         return UnitsSoFar(
