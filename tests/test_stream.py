@@ -9,8 +9,8 @@ from fakes import (
     with_usage,
 )
 
-from zh2en.errors import describe
-from zh2en.http import (
+from l2l.errors import describe
+from l2l.http import (
     ProgressRequest,
     StreamState,
     chat,
@@ -21,8 +21,8 @@ from zh2en.http import (
     stream_step,
     to_chat_reply,
 )
-from zh2en.monads import IO, NOTHING, Err, Just, Ok, cons_to_tuple, io_pure
-from zh2en.text import (
+from l2l.monads import IO, NOTHING, Err, Just, Ok, cons_to_tuple, io_pure
+from l2l.text import (
     THINK_CLOSE,
     THINK_OPEN,
     SseState,

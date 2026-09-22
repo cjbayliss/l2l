@@ -1,4 +1,4 @@
-from zh2en.errors import (
+from l2l.errors import (
     AsciiError,
     BudgetError,
     ConfigError,
@@ -16,14 +16,14 @@ from zh2en.errors import (
     fail_pass,
     fail_unit,
 )
-from zh2en.monads import Err
+from l2l.monads import Err
 
 
 def test_fail_config_wraps_message_with_prefix() -> None:
     failure = fail_config("config file not found: x.toml")
     assert isinstance(failure, Err)
     assert failure.error == ConfigError("config file not found: x.toml")
-    assert describe(failure.error) == "zh2en: config file not found: x.toml"
+    assert describe(failure.error) == "l2l: config file not found: x.toml"
 
 
 def test_fail_missing_settings_renders_field_list() -> None:
@@ -31,7 +31,7 @@ def test_fail_missing_settings_renders_field_list() -> None:
     assert isinstance(failure, Err)
     assert failure.error == MissingSettings(("api.model", "api.api_key"))
     assert describe(failure.error) == (
-        "zh2en: missing required API settings: api.model, api.api_key"
+        "l2l: missing required API settings: api.model, api.api_key"
     )
 
 
@@ -73,7 +73,7 @@ def test_describe_wraps_nested_errors_without_double_prefix() -> None:
     inner: TranslationError = fail_http("unreachable", "down").error
     unit = UnitError("translate", 2, inner)
     assert describe(unit) == (
-        "zh2en: [translate] failed on unit 2: could not reach endpoint: down"
+        "l2l: [translate] failed on unit 2: could not reach endpoint: down"
     )
 
     wrapped: TranslationError = fail_pass(
@@ -81,7 +81,7 @@ def test_describe_wraps_nested_errors_without_double_prefix() -> None:
     ).error
     assert isinstance(wrapped, PassError)
     assert describe(wrapped) == (
-        "zh2en: pass [prep] failed: zh2en: [prep] failed on unit 1: "
+        "l2l: pass [prep] failed: l2l: [prep] failed on unit 1: "
         "could not reach endpoint: down"
     )
 
@@ -92,7 +92,7 @@ def test_describe_ascii_error() -> None:
     assert isinstance(failure, Err)
     assert isinstance(failure.error, AsciiError)
     assert describe(failure.error).startswith(
-        "zh2en: pass [translate] ascii enforcement failed: request is ~500"
+        "l2l: pass [translate] ascii enforcement failed: request is ~500"
     )
 
 

@@ -31,7 +31,7 @@ def stage_done_line(
 
 
 def analysis_info_message(pass_name: str, characters: int, tokens: int) -> str:
-    return "zh2en: [%s] whole-document analysis (%d characters, ~%d tokens)" % (
+    return "l2l: [%s] whole-document analysis (%d characters, ~%d tokens)" % (
         pass_name,
         characters,
         tokens,
@@ -42,7 +42,7 @@ def unit_failed_validation_final(
     pass_name: str, index: int, total: int, attempts: int, problem: str
 ) -> str:
     return (
-        "zh2en: [%s] unit %d/%d failed validation %d time(s); "
+        "l2l: [%s] unit %d/%d failed validation %d time(s); "
         "last problem: %s. Keeping the last reply, uncached"
         % (pass_name, index, total, attempts, problem)
     )
@@ -51,7 +51,7 @@ def unit_failed_validation_final(
 def unit_failed_validation_attempt(
     pass_name: str, index: int, total: int, problem: str, attempt: int, attempts: int
 ) -> str:
-    return "zh2en: [%s] unit %d/%d failed validation (%s); repair attempt %d/%d" % (
+    return "l2l: [%s] unit %d/%d failed validation (%s); repair attempt %d/%d" % (
         pass_name,
         index,
         total,
@@ -63,21 +63,21 @@ def unit_failed_validation_attempt(
 
 def unit_no_source_message(pass_name: str, index: int, total: int) -> str:
     return (
-        "zh2en: [%s] unit %d/%d has no matching source; "
+        "l2l: [%s] unit %d/%d has no matching source; "
         "passing it through unchanged" % (pass_name, index, total)
     )
 
 
 def unit_done_message(pass_name: str, index: int, total: int) -> str:
-    return "zh2en: [%s] unit %d/%d done" % (pass_name, index, total)
+    return "l2l: [%s] unit %d/%d done" % (pass_name, index, total)
 
 
 def unit_cache_hit_message(pass_name: str, index: int, total: int) -> str:
-    return "zh2en: [%s] unit %d/%d cache hit" % (pass_name, index, total)
+    return "l2l: [%s] unit %d/%d cache hit" % (pass_name, index, total)
 
 
 def pass_cache_hit_message(pass_name: str) -> str:
-    return f"zh2en: [{pass_name}] cache hit"
+    return f"l2l: [{pass_name}] cache hit"
 
 
 def pass_started_message(number: int, total: int, pass_name: str) -> str:
@@ -87,7 +87,7 @@ def pass_started_message(number: int, total: int, pass_name: str) -> str:
 def paragraph_mismatch_message(
     pass_name: str, count: int, source: int, action: str
 ) -> str:
-    return "zh2en: [%s] output has %d paragraph(s), source has %d; %s" % (
+    return "l2l: [%s] output has %d paragraph(s), source has %d; %s" % (
         pass_name,
         count,
         source,
@@ -96,7 +96,7 @@ def paragraph_mismatch_message(
 
 
 def paragraph_still_differs_message(pass_name: str, count: int, source: int) -> str:
-    return "zh2en: [%s] paragraph count still differs (%d vs %d); continuing" % (
+    return "l2l: [%s] paragraph count still differs (%d vs %d); continuing" % (
         pass_name,
         count,
         source,
@@ -104,15 +104,15 @@ def paragraph_still_differs_message(pass_name: str, count: int, source: int) -> 
 
 
 def ascii_cache_hit_message() -> str:
-    return "zh2en: ascii: cache hit"
+    return "l2l: ascii: cache hit"
 
 
 def ascii_retry_message(attempt: int, attempts: int) -> str:
-    return "zh2en: ascii: attempt %d/%d still non-ASCII; retrying" % (attempt, attempts)
+    return "l2l: ascii: attempt %d/%d still non-ASCII; retrying" % (attempt, attempts)
 
 
 def ascii_mechanical_message(index: int, total: int) -> str:
-    return "zh2en: ascii: paragraph %d/%d converted mechanically" % (
+    return "l2l: ascii: paragraph %d/%d converted mechanically" % (
         index + 1,
         total,
     )
@@ -120,10 +120,10 @@ def ascii_mechanical_message(index: int, total: int) -> str:
 
 def ascii_llm_message(index: int, total: int) -> str:
     return (
-        "zh2en: ascii: paragraph %d/%d still non-ASCII; asking the "
+        "l2l: ascii: paragraph %d/%d still non-ASCII; asking the "
         "LLM to repair it" % (index + 1, total)
     )
 
 
 def done_in_message(elapsed: float) -> str:
-    return f"zh2en: done in {elapsed:.1f}s"
+    return f"l2l: done in {elapsed:.1f}s"

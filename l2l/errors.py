@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, assert_never
 
-from zh2en.monads import Err
+from l2l.monads import Err
 
 
 @dataclass(frozen=True)
@@ -147,10 +147,10 @@ def describe_budget(error: BudgetError) -> str:
 def describe(error: TranslationError) -> str:
     match error:
         case ConfigError():
-            return "zh2en: " + error.message
+            return "l2l: " + error.message
 
         case MissingSettings():
-            return "zh2en: missing required API settings: " + ", ".join(error.fields)
+            return "l2l: missing required API settings: " + ", ".join(error.fields)
 
         case HttpError():
             return describe_http(error)
@@ -159,10 +159,10 @@ def describe(error: TranslationError) -> str:
             return describe_budget(error)
 
         case PassError():
-            return f"zh2en: pass [{error.pass_name}] failed: {describe(error.inner)}"
+            return f"l2l: pass [{error.pass_name}] failed: {describe(error.inner)}"
 
         case UnitError():
-            return "zh2en: [%s] failed on unit %d: %s" % (
+            return "l2l: [%s] failed on unit %d: %s" % (
                 error.pass_name,
                 error.unit_index,
                 describe(error.inner),
@@ -170,7 +170,7 @@ def describe(error: TranslationError) -> str:
 
         case AsciiError():
             return (
-                f"zh2en: pass [{error.pass_name}] ascii enforcement failed: "
+                f"l2l: pass [{error.pass_name}] ascii enforcement failed: "
                 f"{describe(error.inner)}"
             )
 

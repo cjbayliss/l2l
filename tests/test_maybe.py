@@ -1,7 +1,7 @@
 from hypothesis import given
 from hypothesis import strategies as st
 
-from zh2en.monads import (
+from l2l.monads import (
     NOTHING,
     Err,
     Just,

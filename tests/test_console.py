@@ -3,7 +3,7 @@ import time
 
 from fakes import make_console
 
-from zh2en.console import (
+from l2l.console import (
     Console,
     LogEvent,
     StatusLine,
@@ -28,7 +28,7 @@ from zh2en.console import (
     terminal_size,
     toggle_verbose,
 )
-from zh2en.monads import cons_to_tuple, write_ref
+from l2l.monads import cons_to_tuple, write_ref
 
 
 def test_status_line_text_renders_prefix_and_values() -> None:

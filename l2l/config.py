@@ -7,15 +7,15 @@ from functools import reduce
 from types import MappingProxyType
 from typing import Any, Literal, assert_never
 
-from zh2en.effects import (
+from l2l.effects import (
     cwd,
     load_toml,
     path_exists,
     read_text_file,
     user_config_path,
 )
-from zh2en.errors import TranslationError, fail_config, fail_missing_settings
-from zh2en.monads import (
+from l2l.errors import TranslationError, fail_config, fail_missing_settings
+from l2l.monads import (
     IO,
     Ok,
     Result,
@@ -30,7 +30,7 @@ from zh2en.monads import (
     result_map,
     results_sequence,
 )
-from zh2en.settings import (
+from l2l.settings import (
     API_SETTING_KEYS,
     DEFAULT_API_SETTINGS,
     DEFAULT_MAX_TOKENS,
@@ -686,7 +686,7 @@ def resolve_config_path(
         return io_pure(configured)
 
     def pick(cwd_value: str, user_path: str) -> str | None:
-        local = os.path.join(cwd_value, "zh2en.toml")
+        local = os.path.join(cwd_value, "l2l.toml")
         if os.path.exists(local):
             return local
 

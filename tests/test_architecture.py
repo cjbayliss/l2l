@@ -9,10 +9,10 @@ import ast
 from itertools import chain
 from pathlib import Path
 
-PACKAGE = Path(__file__).resolve().parents[1] / "zh2en"
+PACKAGE = Path(__file__).resolve().parents[1] / "l2l"
 
 # Bottom-to-top layers; a module may import only from strictly lower
-# layers (the bare `zh2en` root, which carries only `__version__`, may be
+# layers (the bare `l2l` root, which carries only `__version__`, may be
 # imported from anywhere).
 LAYERS: tuple[tuple[str, ...], ...] = (
     ("monads", "messages"),
@@ -49,19 +49,19 @@ def parse_module(name: str) -> ast.Module:
     return ast.parse(source, filename=name + ".py")
 
 
-def zh2en_imports(tree: ast.Module) -> set[str]:
-    """Package names imported by a module; "" is the `zh2en` root itself."""
+def l2l_imports(tree: ast.Module) -> set[str]:
+    """Package names imported by a module; "" is the `l2l` root itself."""
     imported: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.level == 0:
             parts = (node.module or "").split(".")
-            if parts[0] == "zh2en":
+            if parts[0] == "l2l":
                 imported.add(parts[1] if len(parts) > 1 else "")
 
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 parts = alias.name.split(".")
-                if parts[0] == "zh2en":
+                if parts[0] == "l2l":
                     imported.add(parts[1] if len(parts) > 1 else "")
 
     return imported
@@ -72,16 +72,16 @@ def test_layers_cover_every_module() -> None:
 
 
 def test_monads_imports_nothing_from_the_package() -> None:
-    assert zh2en_imports(parse_module("monads")) == set()
+    assert l2l_imports(parse_module("monads")) == set()
 
 
 def test_messages_imports_nothing() -> None:
-    assert zh2en_imports(parse_module("messages")) == set()
+    assert l2l_imports(parse_module("messages")) == set()
 
 
 def test_dependencies_point_strictly_downward() -> None:
     for name in sorted(module_names()):
-        for imported in sorted(zh2en_imports(parse_module(name))):
+        for imported in sorted(l2l_imports(parse_module(name))):
             if imported == "":
                 continue
 

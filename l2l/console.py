@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import TextIO
 
-from zh2en.monads import (
+from l2l.monads import (
     IO,
     Cons,
     Ref,

@@ -4,16 +4,16 @@ from pathlib import Path
 
 from fakes import make_console, make_context
 
-from zh2en.cache import (
+from l2l.cache import (
     cache_lookup,
     cache_store,
     cached_translation,
     const_acceptable,
 )
-from zh2en.errors import TranslationError, fail_http
-from zh2en.monads import IO, NOTHING, Err, Just, Ok, Result, io_pure
-from zh2en.settings import Context
-from zh2en.text import Translated, Usage, cache_key
+from l2l.errors import TranslationError, fail_http
+from l2l.monads import IO, NOTHING, Err, Just, Ok, Result, io_pure
+from l2l.settings import Context
+from l2l.text import Translated, Usage, cache_key
 
 
 def make_cached_context(

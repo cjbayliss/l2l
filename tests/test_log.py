@@ -16,18 +16,18 @@ from fakes import (
     with_usage,
 )
 
-from zh2en import cli
-from zh2en.effects import (
+from l2l import cli
+from l2l.effects import (
     RunLog,
     close_run_log,
     log_error,
     open_run_log,
     run_log_write,
 )
-from zh2en.errors import TranslationError, fail_http
-from zh2en.http import chat
-from zh2en.monads import NOTHING, Just, Ok, Result
-from zh2en.text import Usage
+from l2l.errors import TranslationError, fail_http
+from l2l.http import chat
+from l2l.monads import NOTHING, Just, Ok, Result
+from l2l.text import Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -45,12 +45,12 @@ CONFIG_TEXT = (
 
 
 def write_config(tmp_path: Path) -> Path:
-    config_path = tmp_path / "zh2en.toml"
+    config_path = tmp_path / "l2l.toml"
     config_path.write_text(CONFIG_TEXT)
     return config_path
 
 
-def run_zh2en(
+def run_l2l(
     config_path: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -75,7 +75,7 @@ def test_run_log_captures_stream_request_and_response(
 ) -> None:
     chunks = with_usage(stream_chunks("Hello."), USAGE)
     http = FakeHttp([FakeStreamResponse(chunks)])
-    code, _, _ = run_zh2en(
+    code, _, _ = run_l2l(
         write_config(tmp_path), tmp_path, monkeypatch, http.open, ["--no-cache"]
     )
     assert code == 0
@@ -118,7 +118,7 @@ def test_run_log_captures_http_error(
 
     slept: list[float] = []
     monkeypatch.setattr(cli, "time_sleep", lambda seconds: slept.append(seconds))
-    code, _, _ = run_zh2en(
+    code, _, _ = run_l2l(
         write_config(tmp_path), tmp_path, monkeypatch, open_fail, ["--no-cache"]
     )
     assert code == 1
@@ -136,12 +136,12 @@ def test_show_log_path_prints_log_path_to_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
-    code, _, stderr = run_zh2en(
+    code, _, stderr = run_l2l(
         write_config(tmp_path), tmp_path, monkeypatch, http.open, ["--no-cache", "-l"]
     )
     assert code == 0
 
-    match = re.search(r"zh2en: log: (\S+)", stderr)
+    match = re.search(r"l2l: log: (\S+)", stderr)
     assert match is not None
     assert Path(match.group(1)).exists()
 
@@ -150,33 +150,33 @@ def test_show_log_path_short_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
-    code, _, stderr = run_zh2en(
+    code, _, stderr = run_l2l(
         write_config(tmp_path), tmp_path, monkeypatch, http.open, ["-l"]
     )
     assert code == 0
-    assert "zh2en: log: " in stderr
+    assert "l2l: log: " in stderr
 
 
 def test_verbose_alone_does_not_print_log_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
-    code, _, stderr = run_zh2en(
+    code, _, stderr = run_l2l(
         write_config(tmp_path), tmp_path, monkeypatch, http.open, ["--no-cache", "-v"]
     )
     assert code == 0
-    assert "zh2en: log:" not in stderr
+    assert "l2l: log:" not in stderr
 
 
 def test_without_verbose_log_path_not_printed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
-    code, _, stderr = run_zh2en(
+    code, _, stderr = run_l2l(
         write_config(tmp_path), tmp_path, monkeypatch, http.open, ["--no-cache"]
     )
     assert code == 0
-    assert "zh2en: log:" not in stderr
+    assert "l2l: log:" not in stderr
 
 
 def test_run_log_write_ignores_absent_path() -> None:

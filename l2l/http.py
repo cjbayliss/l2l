@@ -10,17 +10,17 @@ from functools import reduce
 from types import MappingProxyType
 from typing import Any, TypedDict, TypeVar
 
-from zh2en import __version__
-from zh2en.console import Console
-from zh2en.effects import log_entry, log_error, log_request, run_log_write
-from zh2en.errors import (
+from l2l import __version__
+from l2l.console import Console
+from l2l.effects import log_entry, log_error, log_request, run_log_write
+from l2l.errors import (
     HttpError,
     TranslationError,
     describe,
     fail_budget,
     fail_http,
 )
-from zh2en.monads import (
+from l2l.monads import (
     IO,
     NOTHING,
     Cons,
@@ -50,9 +50,9 @@ from zh2en.monads import (
     result_bind,
     result_map,
 )
-from zh2en.plans import plan_backoff, retry_delay, transient
-from zh2en.settings import Config, Context
-from zh2en.text import (
+from l2l.plans import plan_backoff, retry_delay, transient
+from l2l.settings import Config, Context
+from l2l.text import (
     SseState,
     ThinkState,
     Translated,
@@ -350,7 +350,7 @@ def http_request(
         **{
             "Content-Type": "application/json",
             "Authorization": "Bearer " + config.api_key,
-            "User-Agent": "zh2en/" + __version__,
+            "User-Agent": "l2l/" + __version__,
         },
         **({"Accept": accept} if accept else {}),
     }
@@ -397,7 +397,7 @@ def verbose_retry_log(
     ctx: Context, retry_number: int, retries: int, wait: float
 ) -> IO[None]:
     return ctx.console.log_verbose(
-        "zh2en: transient failure; retry %d/%d in %.1fs" % (retry_number, retries, wait)
+        "l2l: transient failure; retry %d/%d in %.1fs" % (retry_number, retries, wait)
     )
 
 

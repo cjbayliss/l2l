@@ -11,7 +11,7 @@ from functools import reduce
 from itertools import accumulate, chain
 from typing import Any
 
-from zh2en.monads import NOTHING, Just, Maybe, maybe_or_else_get
+from l2l.monads import NOTHING, Just, Maybe, maybe_or_else_get
 
 
 @dataclass(frozen=True)

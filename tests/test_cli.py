@@ -6,9 +6,9 @@ from typing import Any
 import pytest
 from fakes import FakeHttp, FakePlainResponse, FakeStreamResponse, stream_chunks
 
-from zh2en import cli
-from zh2en.errors import TranslationError
-from zh2en.monads import Result
+from l2l import cli
+from l2l.errors import TranslationError
+from l2l.monads import Result
 
 CONFIG_TEXT = (
     "[api]\n"
@@ -24,12 +24,12 @@ CONFIG_TEXT = (
 
 
 def write_config(tmp_path: Path) -> Path:
-    config_path = tmp_path / "zh2en.toml"
+    config_path = tmp_path / "l2l.toml"
     config_path.write_text(CONFIG_TEXT)
     return config_path
 
 
-def run_zh2en(
+def run_l2l(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     arguments: list[str],
@@ -52,23 +52,21 @@ def run_zh2en(
 
 
 def test_empty_stdin_exits_zero_without_config(tmp_path: Path) -> None:
-    code, stdout, stderr = run_zh2en(
-        tmp_path, pytest.MonkeyPatch(), [str(tmp_path)], ""
-    )
+    code, stdout, stderr = run_l2l(tmp_path, pytest.MonkeyPatch(), [str(tmp_path)], "")
     assert code == 0
     assert stdout == ""
     assert stderr == ""
 
 
 def test_invalid_arguments_exit_two(tmp_path: Path) -> None:
-    code, stdout, stderr = run_zh2en(tmp_path, pytest.MonkeyPatch(), ["--no-such-flag"])
+    code, stdout, stderr = run_l2l(tmp_path, pytest.MonkeyPatch(), ["--no-such-flag"])
     assert code == 2
     assert stdout == ""
     assert "invalid arguments" in stderr
 
 
 def test_missing_config_fails_with_error(tmp_path: Path) -> None:
-    code, stdout, stderr = run_zh2en(
+    code, stdout, stderr = run_l2l(
         tmp_path, pytest.MonkeyPatch(), [str(tmp_path / "absent.toml")]
     )
     assert code == 2
@@ -77,7 +75,7 @@ def test_missing_config_fails_with_error(tmp_path: Path) -> None:
 
 
 def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
-    code, stdout, stderr = run_zh2en(
+    code, stdout, stderr = run_l2l(
         tmp_path, pytest.MonkeyPatch(), [str(write_config(tmp_path)), "--check-config"]
     )
     assert code == 0
@@ -90,7 +88,7 @@ def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
 def test_check_config_reports_setup_errors(tmp_path: Path) -> None:
     broken = tmp_path / "broken.toml"
     broken.write_text("[api]\nunknown_key = 1\n")
-    code, stdout, stderr = run_zh2en(
+    code, stdout, stderr = run_l2l(
         tmp_path, pytest.MonkeyPatch(), [str(broken), "--check-config"]
     )
     assert code == 2
@@ -99,7 +97,7 @@ def test_check_config_reports_setup_errors(tmp_path: Path) -> None:
 
 
 def test_dry_run_prints_plan_without_calling_endpoint(tmp_path: Path) -> None:
-    code, stdout, stderr = run_zh2en(
+    code, stdout, stderr = run_l2l(
         tmp_path, pytest.MonkeyPatch(), [str(write_config(tmp_path)), "--dry-run"]
     )
     assert code == 0
@@ -122,7 +120,7 @@ def test_cache_prune_removes_old_entries(tmp_path: Path) -> None:
     fresh = cache_dir / "fresh.txt"
     fresh.write_text("new")
 
-    code, _, stderr = run_zh2en(
+    code, _, stderr = run_l2l(
         tmp_path,
         pytest.MonkeyPatch(),
         [str(tmp_path), "--cache-dir", str(cache_dir), "--cache-prune", "7"],
@@ -134,7 +132,7 @@ def test_cache_prune_removes_old_entries(tmp_path: Path) -> None:
 
 
 def test_cache_prune_requires_positive_days(tmp_path: Path) -> None:
-    code, _, stderr = run_zh2en(
+    code, _, stderr = run_l2l(
         tmp_path,
         pytest.MonkeyPatch(),
         [str(tmp_path), "--cache-dir", str(tmp_path), "--cache-prune", "0"],

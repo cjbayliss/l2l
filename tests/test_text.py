@@ -1,9 +1,9 @@
 import pytest
 
-from zh2en.http import build_chat_payload
-from zh2en.messages import usage_line
-from zh2en.monads import NOTHING, Just
-from zh2en.plans import (
+from l2l.http import build_chat_payload
+from l2l.messages import usage_line
+from l2l.monads import NOTHING, Just
+from l2l.plans import (
     build_ascii_fix_user,
     build_ascii_retry_user,
     build_pass_user,
@@ -11,8 +11,8 @@ from zh2en.plans import (
     context_parts,
     unit_output_problem,
 )
-from zh2en.settings import build_settings
-from zh2en.text import (
+from l2l.settings import build_settings
+from l2l.text import (
     AsciiDrop,
     Usage,
     add_usage,
