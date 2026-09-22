@@ -14,6 +14,8 @@ name = "translate"
 mode = "chunk"
 instruction_file = "translate.txt"
 model = "z-ai/glm-5.3-flash"
+# Per-pass overrides; omit to inherit [options] (and --ensure-paragraphs).
+# ensure_paragraphs = false
 [pass.params]
 reasoning_effort = "high"
 

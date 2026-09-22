@@ -511,7 +511,7 @@ def run_text_pass(
             paragraph_plan,
         )
 
-    if not ctx.ensure_paragraphs:
+    if not pass_definition.ensure_paragraphs:
         return attempt(pass_definition, state, started_at)
 
     def mismatch_message(count: int, action: str) -> str:

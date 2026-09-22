@@ -46,12 +46,18 @@ from zh2en.text import AsciiDrop, Usage, unit_separators
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
 
-def chunk_pass(name: str = "translate", ascii_output: bool = False) -> PassDefinition:
-    return PassDefinition(name, "T.", "chunk", {}, None, ascii_output)
+def chunk_pass(
+    name: str = "translate",
+    ascii_output: bool = False,
+    ensure_paragraphs: bool = False,
+) -> PassDefinition:
+    return PassDefinition(
+        name, "T.", "chunk", {}, None, ascii_output, ensure_paragraphs
+    )
 
 
 def paragraph_pass(name: str = "translate") -> PassDefinition:
-    return PassDefinition(name, "T.", "paragraph", {}, None, False)
+    return PassDefinition(name, "T.", "paragraph", {}, None, False, False)
 
 
 def test_fold_io_handles_thousands_of_items() -> None:
@@ -347,9 +353,11 @@ def test_ensure_paragraphs_retries_pass_in_paragraph_mode() -> None:
             FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
         ]
     )
-    ctx = make_context(console, http.open, ensure_paragraphs=True)
+    ctx = make_context(console, http.open)
     stdout = io.StringIO()
-    code = run_pipeline(ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout).run()
+    code = run_pipeline(
+        ctx, (chunk_pass(ensure_paragraphs=True),), "你好。\n\n世界。", 0.0, stdout
+    ).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nWorld.\n"
     logged = stderr.getvalue()
@@ -374,9 +382,11 @@ def test_ensure_paragraphs_warns_when_retry_still_differs() -> None:
             FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
         ]
     )
-    ctx = make_context(console, http.open, ensure_paragraphs=True)
+    ctx = make_context(console, http.open)
     stdout = io.StringIO()
-    code = run_pipeline(ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout).run()
+    code = run_pipeline(
+        ctx, (chunk_pass(ensure_paragraphs=True),), "你好。\n\n世界。", 0.0, stdout
+    ).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nSurprise.\n\nWorld.\n"
     logged = stderr.getvalue()

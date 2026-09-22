@@ -4,8 +4,9 @@ from typing import Any
 from zh2en.config import (
     api_settings_from_arguments,
     api_settings_from_environment,
-    apply_default_ascii,
+    apply_default_options,
     build_config,
+    build_setup,
     document_api_settings,
     document_passes,
     load_instruction_text,
@@ -191,6 +192,19 @@ def test_pass_definition_from() -> None:
     assert result.value.mode == "chunk"
     assert result.value.model is None
     assert result.value.ascii is None
+    assert result.value.ensure_paragraphs is None
+
+    result = pass_definition_from(
+        "f", "p", {"mode": "chunk", "ensure_paragraphs": True}, "inst"
+    )
+    assert isinstance(result, Ok)
+    assert result.value.ensure_paragraphs is True
+
+    result = pass_definition_from(
+        "f", "p", {"mode": "chunk", "ensure_paragraphs": "yes"}, "inst"
+    )
+    assert isinstance(result, Err)
+    assert "ensure_paragraphs must be true or false" in describe(result.error)
 
     result = parse_pass_table(
         "f", {"name": "p", "mode": "chunk", "strict_fidelity": True}, "."
@@ -199,13 +213,53 @@ def test_pass_definition_from() -> None:
     assert "unknown key(s): strict_fidelity" in describe(result.error)
 
 
-def test_apply_default_ascii() -> None:
+def test_apply_default_options() -> None:
     passes = (
-        PassDefinition("a", "i", "chunk", {}, None, None),
-        PassDefinition("b", "i", "chunk", {}, None, True),
+        PassDefinition("a", "i", "chunk", {}, None, None, None),
+        PassDefinition("b", "i", "chunk", {}, None, True, False),
     )
-    applied = apply_default_ascii(passes, {"ascii": True})
-    assert [p.ascii for p in applied] == [True, True]
+    applied = apply_default_options(
+        passes, {"ascii": True, "ensure_paragraphs": True}, False
+    )
+    assert [(p.ascii, p.ensure_paragraphs) for p in applied] == [
+        (True, True),
+        (True, False),
+    ]
+
+    applied = apply_default_options(
+        passes, {"ascii": False, "ensure_paragraphs": False}, True
+    )
+    assert [(p.ascii, p.ensure_paragraphs) for p in applied] == [
+        (False, True),
+        (True, False),
+    ]
+
+
+def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
+    config = Config("u", "k", "m", 1.0, 100, {})
+
+    def setup_with_flag(flag: bool) -> Setup:
+        resolved: Result[tuple[dict[str, bool], tuple[PassDefinition, ...]], Any] = Ok(
+            (
+                {"ascii": False, "ensure_paragraphs": False},
+                (
+                    PassDefinition("unset", "i", "chunk", {}, None, None, None),
+                    PassDefinition("explicit", "i", "chunk", {}, None, None, False),
+                    PassDefinition("forced", "i", "chunk", {}, None, None, True),
+                ),
+            )
+        )
+        result = build_setup(config, resolved, flag)
+        assert isinstance(result, Ok)
+        return result.value
+
+    setup = setup_with_flag(True)
+    assert setup.ensure_paragraphs
+    assert [p.ensure_paragraphs for p in setup.passes] == [True, False, True]
+
+    setup = setup_with_flag(False)
+    assert not setup.ensure_paragraphs
+    assert [p.ensure_paragraphs for p in setup.passes] == [False, False, True]
 
 
 def test_resolve_call_settings() -> None:
@@ -295,7 +349,7 @@ def test_setup_report_lists_api_and_passes() -> None:
         ),
         passes=(
             PassDefinition(
-                "translate", "T.", "chunk", {"reasoning": "high"}, None, True
+                "translate", "T.", "chunk", {"reasoning": "high"}, None, True, False
             ),
         ),
         ensure_paragraphs=False,
@@ -306,8 +360,8 @@ def test_setup_report_lists_api_and_passes() -> None:
     assert "api.api_key: secr...ey" in report
     assert '"temperature": 1' in report
     assert (
-        "pass 1/1 [translate]: mode=chunk ascii=True model=<default>"
-        " instruction=2 chars" in report
+        "pass 1/1 [translate]: mode=chunk ascii=True ensure_paragraphs=False"
+        " model=<default> instruction=2 chars" in report
     )
     assert "options.ensure_paragraphs: True" in report
 
