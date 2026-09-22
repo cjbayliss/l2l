@@ -240,10 +240,7 @@ def drop_non_ascii(
     )
 
 
-def strip_think_tag(content: Any) -> tuple[Any, Maybe[str]]:
-    if not isinstance(content, str):
-        return content, NOTHING
-
+def strip_think_tag(content: str) -> tuple[str, Maybe[str]]:
     match = re.match(r"\s*<think>(.*?)</think>", content, re.DOTALL)
     if not match:
         return content, NOTHING

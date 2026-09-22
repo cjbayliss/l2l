@@ -12,9 +12,17 @@ from typing import TextIO
 from zh2en.monads import (
     IO,
     Ref,
+    io_and_then,
+    io_atomic,
+    io_bind,
+    io_map,
+    io_pair,
+    io_pure,
+    io_when_unit,
     modify_ref,
     modify_ref_with,
     read_ref,
+    repeat_until,
     write_ref,
 )
 
@@ -134,6 +142,17 @@ def finish_render(view: StatusView, text: str) -> tuple[StatusView, str]:
     )
 
 
+def stream_write(stream: TextIO, text: str) -> IO[None]:
+    def thunk() -> None:
+        stream.write(text)
+        stream.flush()
+
+    return IO(thunk)
+
+
+TICK_SECONDS = 0.1
+
+
 @dataclass(frozen=True, eq=False)
 class StatusLine:
     stream: TextIO
@@ -150,147 +169,149 @@ class StatusLine:
         default_factory=lambda: Ref(None), repr=False, compare=False
     )
 
-    def write_partial(self, text: str) -> IO[None]:
-        def thunk() -> None:
-            with self.lock:
-                modify_ref(
-                    self.view,
-                    lambda view: replace(view, prefix=view.prefix + text),
-                ).run()
-                self.stream.write(text)
-                self.stream.flush()
+    def write(self, text: str) -> IO[None]:
+        return stream_write(self.stream, text)
 
-        return IO(thunk)
+    def write_rendered(self, text: str) -> IO[None]:
+        return io_when_unit(bool(text), self.write(text))
+
+    def write_partial(self, text: str) -> IO[None]:
+        def updated(view: StatusView) -> StatusView:
+            return replace(view, prefix=view.prefix + text)
+
+        return io_atomic(
+            self.lock,
+            io_and_then(modify_ref(self.view, updated), self.write(text)),
+        )
+
+    def begin_raw_action(self) -> IO[None]:
+        return io_bind(
+            modify_ref_with(self.view, raw_begin_render),
+            self.write_rendered,
+        )
 
     def begin_raw(self) -> IO[None]:
-        def thunk() -> None:
-            with self.lock:
-                self._begin_raw_locked()
+        return io_atomic(self.lock, self.begin_raw_action())
 
-        return IO(thunk)
-
-    def _begin_raw_locked(self) -> None:
-        text = modify_ref_with(self.view, raw_begin_render).run()
-        if text:
-            self.stream.write(text)
-            self.stream.flush()
+    def write_raw_action(self, text: str) -> IO[None]:
+        return io_and_then(
+            modify_ref(self.view, lambda view: raw_write_render(view, text)),
+            self.write(text),
+        )
 
     def write_raw(self, text: str) -> IO[None]:
-        def thunk() -> None:
-            with self.lock:
-                self._write_raw_locked(text)
+        return io_atomic(self.lock, self.write_raw_action(text))
 
-        return IO(thunk)
-
-    def _write_raw_locked(self, text: str) -> None:
-        modify_ref(self.view, lambda view: raw_write_render(view, text)).run()
-        self.stream.write(text)
-        self.stream.flush()
+    def end_raw_action(self) -> IO[None]:
+        return io_bind(
+            modify_ref_with(self.view, raw_end_render),
+            self.write_rendered,
+        )
 
     def end_raw(self) -> IO[None]:
-        def thunk() -> None:
-            with self.lock:
-                self._end_raw_locked()
-
-        return IO(thunk)
-
-    def _end_raw_locked(self) -> None:
-        text = modify_ref_with(self.view, raw_end_render).run()
-        if text:
-            self.stream.write(text)
-            self.stream.flush()
+        return io_atomic(self.lock, self.end_raw_action())
 
     def start(self, label: str) -> IO[None]:
-        def thunk() -> None:
-            if not self.live:
-                return None
+        def render(view: StatusView) -> tuple[StatusView, str]:
+            return start_render(view, label, self.monotonic())
 
-            with self.lock:
-                text = modify_ref_with(
-                    self.view,
-                    lambda view: start_render(view, label, self.monotonic()),
-                ).run()
-                self.stream.write(text)
-                self.stream.flush()
+        def drawn(_: None) -> IO[None]:
+            return io_atomic(
+                self.lock,
+                io_bind(modify_ref_with(self.view, render), self.write_rendered),
+            )
 
-            self.halt.clear()
-            thread = threading.Thread(target=self._tick, daemon=True)
-            write_ref(self.worker, thread).run()
-            thread.start()
-            return None
+        def launch(_: None) -> IO[None]:
+            thread = threading.Thread(
+                target=repeat_until(self.tick_action(), self.halt, TICK_SECONDS),
+                daemon=True,
+            )
 
-        return IO(thunk)
+            def boot(_: threading.Thread | None) -> IO[None]:
+                def thunk() -> None:
+                    self.halt.clear()
+                    thread.start()
+
+                return IO(thunk)
+
+            return io_bind(write_ref(self.worker, thread), boot)
+
+        return io_when_unit(self.live, io_and_then(drawn(None), launch(None)))
 
     def progress(self, label: str, count: int = 1) -> IO[None]:
-        def thunk() -> None:
-            if not self.live:
-                return None
+        def updated(view: StatusView) -> StatusView:
+            return progress_render(view, label, count)
 
-            modify_ref(
-                self.view, lambda view: progress_render(view, label, count)
-            ).run()
-            return None
+        return io_when_unit(
+            self.live,
+            io_atomic(
+                self.lock,
+                io_map(modify_ref(self.view, updated), lambda _: None),
+            ),
+        )
 
-        return IO(thunk)
+    def stop_worker(self) -> IO[None]:
+        def join_if_running(worker: threading.Thread | None) -> IO[None]:
+            def thunk() -> None:
+                if worker is not None and worker.is_alive():
+                    self.halt.set()
+                    worker.join(timeout=1.0)
+
+            return IO(thunk)
+
+        return io_bind(read_ref(self.worker), join_if_running)
+
+    def stop_action(self) -> IO[None]:
+        return io_bind(
+            modify_ref_with(self.view, stop_render),
+            self.write_rendered,
+        )
 
     def stop(self) -> IO[None]:
-        def thunk() -> None:
-            self._halt()
-            with self.lock:
-                text = modify_ref_with(self.view, stop_render).run()
-                self.stream.write(text)
-                self.stream.flush()
+        return io_and_then(
+            self.stop_worker(),
+            io_atomic(self.lock, self.stop_action()),
+        )
 
-            return None
-
-        return IO(thunk)
+    def interrupt_action(self) -> IO[None]:
+        return io_bind(
+            modify_ref_with(self.view, lambda view: interrupt_render(view, self.live)),
+            self.write_rendered,
+        )
 
     def interrupt(self) -> IO[None]:
-        def thunk() -> None:
-            self._halt()
-            with self.lock:
-                self._interrupt_locked()
+        return io_and_then(
+            self.stop_worker(),
+            io_atomic(self.lock, self.interrupt_action()),
+        )
 
-        return IO(thunk)
-
-    def _interrupt_locked(self) -> None:
-        text = modify_ref_with(
-            self.view, lambda view: interrupt_render(view, self.live)
-        ).run()
-        if text:
-            self.stream.write(text)
-            self.stream.flush()
+    def finish_action(self, text: str) -> IO[None]:
+        return io_bind(
+            modify_ref_with(self.view, lambda view: finish_render(view, text)),
+            self.write_rendered,
+        )
 
     def finish(self, text: str) -> IO[None]:
-        def thunk() -> None:
-            self._halt()
-            with self.lock:
-                self._finish_locked(text)
+        return io_and_then(
+            self.stop_worker(),
+            io_atomic(self.lock, self.finish_action(text)),
+        )
 
-        return IO(thunk)
+    def tick_action(self) -> IO[None]:
+        def redraw(view: StatusView) -> tuple[StatusView, IO[None]]:
+            if view.raw:
+                return view, io_pure(None)
 
-    def _finish_locked(self, text: str) -> None:
-        line = modify_ref_with(self.view, lambda view: finish_render(view, text)).run()
-        self.stream.write(line)
-        self.stream.flush()
+            updated, text = draw_render(view, self.monotonic())
+            return updated, self.write(text)
 
-    def _halt(self) -> None:
-        worker = read_ref(self.worker).run()
-        if worker is not None and worker.is_alive():
-            self.halt.set()
-            worker.join(timeout=1.0)
+        def emit(effect: IO[None]) -> IO[None]:
+            return effect
 
-    def _tick(self) -> None:
-        while not self.halt.wait(0.1):
-            with self.lock:
-                if self.view.value.raw:
-                    continue
-
-                text = modify_ref_with(
-                    self.view, lambda view: draw_render(view, self.monotonic())
-                ).run()
-                self.stream.write(text)
-                self.stream.flush()
+        return io_atomic(
+            self.lock,
+            io_bind(modify_ref_with(self.view, redraw), emit),
+        )
 
 
 @dataclass(frozen=True)
@@ -360,12 +381,10 @@ def erase_rows_render(rows: int, height: int) -> str:
 
 
 def toggle_verbose(console: Console) -> IO[bool]:
-    def thunk() -> bool:
-        flipped = modify_ref(console.verbose, lambda verbose: not verbose).run()
-        console.replay().run()
-        return flipped
-
-    return IO(thunk)
+    return io_bind(
+        modify_ref(console.verbose, lambda verbose: not verbose),
+        lambda flipped: io_map(console.replay(), lambda _: flipped),
+    )
 
 
 @dataclass(frozen=True)
@@ -378,8 +397,8 @@ class Console:
     displayed_rows: Ref[int] = field(default_factory=lambda: Ref(0))
     term_size: Callable[[], tuple[int, int]] = terminal_size
 
-    def record(self, text: str, verbose_only: bool, raw: bool) -> None:
-        """Append an event to the session log; the status lock must be held."""
+    def record(self, text: str, verbose_only: bool, raw: bool) -> IO[None]:
+        """Append a session event; compose inside a status-lock `io_atomic`."""
         width = self.term_size()[0]
         event = LogEvent(
             text=text,
@@ -387,18 +406,37 @@ class Console:
             raw=raw,
             rows=row_count(text, width),
         )
-        modify_ref(self.events, lambda events: events + (event,)).run()
-        if not raw and (not verbose_only or self.verbose.value):
-            modify_ref(self.displayed_rows, lambda rows: rows + event.rows).run()
 
-    def commit_pending_raw(self) -> None:
-        """Seal an open reasoning block into an event; the lock must be held."""
-        pending = self.pending_raw.value
-        if not pending:
-            return
+        def tracked(_: tuple[LogEvent, ...]) -> IO[None]:
+            def counted(verbose: bool) -> IO[None]:
+                if raw or verbose_only and not verbose:
+                    return io_pure(None)
 
-        self.pending_raw.value = ""
-        self.record(pending, verbose_only=True, raw=True)
+                return io_map(
+                    modify_ref(self.displayed_rows, lambda rows: rows + event.rows),
+                    lambda _: None,
+                )
+
+            return io_bind(read_ref(self.verbose), counted)
+
+        return io_bind(
+            modify_ref(self.events, lambda events: events + (event,)),
+            tracked,
+        )
+
+    def commit_pending_raw(self) -> IO[None]:
+        """Seal an open reasoning block; compose inside a locked scope."""
+
+        def sealed(pending: str) -> IO[None]:
+            if not pending:
+                return io_pure(None)
+
+            return io_and_then(
+                io_map(write_ref(self.pending_raw, ""), lambda _: None),
+                self.record(pending, verbose_only=True, raw=True),
+            )
+
+        return io_bind(read_ref(self.pending_raw), sealed)
 
     def log(self, message: str) -> IO[None]:
         return self._log_line(message, verbose_only=False)
@@ -407,101 +445,158 @@ class Console:
         return self._log_line(message, verbose_only=True)
 
     def _log_line(self, message: str, verbose_only: bool) -> IO[None]:
-        def thunk() -> None:
-            shown = not verbose_only or self.verbose.value
-            if shown:
-                self.status._halt()
+        def act(verbose: bool) -> IO[None]:
+            shown = not verbose_only or verbose
 
-            with self.status.lock:
-                if shown:
-                    text = modify_ref_with(
-                        self.status.view,
-                        lambda view: interrupt_render(view, self.status.live),
-                    ).run()
-                    if text:
-                        self.status.stream.write(text)
-                        self.status.stream.flush()
+            def erase(view: StatusView) -> tuple[StatusView, str]:
+                return interrupt_render(view, self.status.live)
 
-                self.commit_pending_raw()
-                if shown:
-                    print(message, file=self.stream, flush=True)
+            def logged(erase_text: str) -> IO[None]:
+                def committed(_: None) -> IO[None]:
+                    def printed(_: None) -> IO[None]:
+                        def recorded(__: None) -> IO[None]:
+                            return self.record(message, verbose_only, raw=False)
 
-                self.record(message, verbose_only, raw=False)
+                        return io_and_then(
+                            io_when_unit(shown, self.status.write(message + "\n")),
+                            recorded(None),
+                        )
 
-        return IO(thunk)
+                    return io_and_then(self.commit_pending_raw(), printed(None))
+
+                return io_and_then(
+                    io_when_unit(
+                        shown and bool(erase_text), self.status.write(erase_text)
+                    ),
+                    committed(None),
+                )
+
+            def section(_: None) -> IO[None]:
+                return io_atomic(
+                    self.status.lock,
+                    io_bind(modify_ref_with(self.status.view, erase), logged),
+                )
+
+            return io_and_then(
+                io_when_unit(shown, self.status.stop_worker()),
+                section(None),
+            )
+
+        return io_bind(read_ref(self.verbose), act)
 
     def stream_reasoning(self, text: str) -> IO[None]:
         """Capture a reasoning delta; display it live only when verbose."""
 
-        def thunk() -> None:
-            with self.status.lock:
-                previous = self.pending_raw.value
+        def act(verbose: bool) -> IO[None]:
+            def extended(previous: str) -> IO[None]:
                 pending = previous + text
-                self.pending_raw.value = pending
-                if self.verbose.value:
-                    self.status._begin_raw_locked()
-                    self.status._write_raw_locked(text)
-                    width = self.term_size()[0]
-                    modify_ref(
-                        self.displayed_rows,
-                        lambda rows: (
-                            rows
-                            + row_count(pending, width)
-                            - row_count(previous, width)
-                        ),
-                    ).run()
 
-        return IO(thunk)
+                def displayed(_: None) -> IO[None]:
+                    if not verbose:
+                        return io_pure(None)
+
+                    width = self.term_size()[0]
+
+                    def counted(_: None) -> IO[None]:
+                        return io_map(
+                            modify_ref(
+                                self.displayed_rows,
+                                lambda rows: (
+                                    rows
+                                    + row_count(pending, width)
+                                    - row_count(previous, width)
+                                ),
+                            ),
+                            lambda _: None,
+                        )
+
+                    return io_and_then(
+                        io_and_then(
+                            self.status.begin_raw_action(),
+                            self.status.write_raw_action(text),
+                        ),
+                        counted(None),
+                    )
+
+                return io_and_then(
+                    io_map(write_ref(self.pending_raw, pending), lambda _: None),
+                    displayed(None),
+                )
+
+            return io_bind(read_ref(self.pending_raw), extended)
+
+        return io_atomic(self.status.lock, io_bind(read_ref(self.verbose), act))
 
     def end_raw(self) -> IO[None]:
-        def thunk() -> None:
-            with self.status.lock:
-                self.status._end_raw_locked()
-                self.commit_pending_raw()
-
-        return IO(thunk)
+        return io_atomic(
+            self.status.lock,
+            io_and_then(self.status.end_raw_action(), self.commit_pending_raw()),
+        )
 
     def replay(self) -> IO[None]:
         """Erase this session's output and re-render it for the current mode."""
 
-        def thunk() -> None:
-            if not self.status.live:
-                return None
+        def snapshot() -> IO[
+            tuple[
+                tuple[bool, tuple[tuple[LogEvent, ...], str]],
+                tuple[int, StatusView],
+            ]
+        ]:
+            return io_pair(
+                io_pair(
+                    read_ref(self.verbose),
+                    io_pair(read_ref(self.events), read_ref(self.pending_raw)),
+                ),
+                io_pair(read_ref(self.displayed_rows), read_ref(self.status.view)),
+            )
 
-            with self.status.lock:
-                verbose = self.verbose.value
-                events = self.events.value
-                pending = self.pending_raw.value
-                width, height = self.term_size()
-                view = self.status.view.value
-                inside = view.raw and view.raw_open
-                erase = status_erase_text(view)
-                if inside:
-                    erase += "\r"
-                    erase += erase_rows_render(self.displayed_rows.value - 1, height)
-                elif self.displayed_rows.value > 0:
-                    erase += erase_rows_render(self.displayed_rows.value, height)
+        def render(
+            inputs: tuple[
+                tuple[bool, tuple[tuple[LogEvent, ...], str]],
+                tuple[int, StatusView],
+            ],
+        ) -> IO[None]:
+            (verbose, (events, pending)), (shown_rows, view) = inputs
+            width, height = self.term_size()
+            inside = view.raw and view.raw_open
+            erase = status_erase_text(view)
+            if inside:
+                erase += "\r"
+                erase += erase_rows_render(shown_rows - 1, height)
+            elif shown_rows > 0:
+                erase += erase_rows_render(shown_rows, height)
 
-                text = replay_text(events, pending, verbose)
-                if erase or text:
-                    self.status.stream.write(erase + text)
-                    self.status.stream.flush()
+            text = replay_text(events, pending, verbose)
 
+            def written(_: None) -> IO[None]:
                 shown_pending = verbose and bool(pending)
                 rows = replay_rows(events, pending, verbose, width)
-                write_ref(self.displayed_rows, rows).run()
-                modify_ref(
-                    self.status.view,
-                    lambda current: replace(
-                        current,
-                        drawn="",
-                        raw=shown_pending,
-                        raw_open=shown_pending and not pending.endswith("\n"),
-                        prefix="" if shown_pending else current.prefix,
+                return io_and_then(
+                    write_ref(self.displayed_rows, rows),
+                    io_map(
+                        modify_ref(
+                            self.status.view,
+                            lambda current: replace(
+                                current,
+                                drawn="",
+                                raw=shown_pending,
+                                raw_open=shown_pending and not pending.endswith("\n"),
+                                prefix="" if shown_pending else current.prefix,
+                            ),
+                        ),
+                        lambda _: None,
                     ),
-                ).run()
+                )
 
-        return IO(thunk)
+            return io_and_then(
+                io_when_unit(bool(erase or text), self.status.write(erase + text)),
+                written(None),
+            )
+
+        def act(_: None) -> IO[None]:
+            return io_atomic(self.status.lock, io_bind(snapshot(), render))
+
+        return io_when_unit(self.status.live, act(None))
 
     def write_partial(self, text: str) -> IO[None]:
         return self.status.write_partial(text)
@@ -519,11 +614,21 @@ class Console:
         return self.status.interrupt()
 
     def finish(self, text: str) -> IO[None]:
-        def thunk() -> None:
-            self.status._halt()
-            with self.status.lock:
-                prefix = self.status.view.value.prefix
-                self.status._finish_locked(text)
-                self.record(prefix + text, verbose_only=False, raw=False)
+        def render(view: StatusView) -> tuple[StatusView, IO[None]]:
+            prefix = view.prefix
+            updated, line = finish_render(view, text)
+            return updated, io_and_then(
+                self.status.write(line),
+                self.record(prefix + text, verbose_only=False, raw=False),
+            )
 
-        return IO(thunk)
+        def emit(effect: IO[None]) -> IO[None]:
+            return effect
+
+        return io_and_then(
+            self.status.stop_worker(),
+            io_atomic(
+                self.status.lock,
+                io_bind(modify_ref_with(self.status.view, render), emit),
+            ),
+        )

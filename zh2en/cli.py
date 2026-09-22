@@ -8,11 +8,12 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import TextIO
 
 from zh2en import __version__
-from zh2en.config import load_setup, setup_report
-from zh2en.console import Console, StatusLine
+from zh2en.config import load_setup
+from zh2en.console import Console, StatusLine, toggle_verbose
 from zh2en.effects import (
     RunLog,
     cache_entry_paths,
+    close_run_log,
     file_age,
     io_isatty,
     now,
@@ -38,12 +39,12 @@ from zh2en.monads import (
     io_map,
     io_pure,
     io_result,
-    io_when,
+    io_when_unit,
     maybe_either,
     result_or_else,
 )
 from zh2en.pipeline import run_pipeline
-from zh2en.plans import plan_report
+from zh2en.plans import plan_report, setup_report
 from zh2en.settings import Arguments, Context, Setup, build_settings
 
 
@@ -331,7 +332,7 @@ def run_main_program(
                     def with_log(log: RunLog) -> IO[int]:
                         announced: IO[None] = maybe_either(
                             log.path,
-                            lambda path: io_when(
+                            lambda path: io_when_unit(
                                 parsed.show_log_path,
                                 console.log(f"zh2en: log: {path}"),
                             ),
@@ -361,11 +362,15 @@ def run_main_program(
                             )
 
                             def execute() -> int:
-                                stop_listener = start_tab_listener(console)
+                                def toggle() -> None:
+                                    toggle_verbose(console).run()
+
+                                stop_listener = start_tab_listener(console, toggle)
                                 try:
                                     return pipeline.run()
                                 finally:
                                     stop_listener()
+                                    close_run_log(log).run()
 
                             return IO(execute)
 

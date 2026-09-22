@@ -212,9 +212,6 @@ def test_strip_think_tag() -> None:
     content, think = strip_think_tag("Body")
     assert content == "Body"
     assert think == NOTHING
-    content, think = strip_think_tag(42)
-    assert content == 42
-    assert think == NOTHING
 
 
 def test_plain_reply() -> None:
@@ -236,6 +233,13 @@ def test_plain_reply_bad_shape() -> None:
     result = plain_reply({"nope": True})
     assert isinstance(result, Err)
     assert "unexpected response shape" in describe(result.error)
+
+
+def test_plain_reply_rejects_non_string_content() -> None:
+    body = {"choices": [{"message": {"role": "assistant", "content": 42}}]}
+    result = plain_reply(body)
+    assert isinstance(result, Err)
+    assert "unexpected content type" in describe(result.error)
 
 
 def test_flatten_content_parts_with_thinking() -> None:

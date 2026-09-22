@@ -26,9 +26,11 @@ from zh2en.monads import (
     fold_io_lazy,
     io_and_then,
     io_bind,
+    io_catch_result,
     io_map,
     io_pure,
     io_result,
+    io_using,
     maybe_either,
     maybe_or,
     read_ref,
@@ -240,7 +242,7 @@ def step_stream(
 
 @dataclass(frozen=True)
 class ChatReply:
-    content: Any
+    content: str
     reasoning: tuple[str, ...] = ()
     reported: Mapping[str, Any] | None = None
     counted: int = 0
@@ -254,6 +256,9 @@ def plain_reply(body: Any) -> Result[ChatReply, TranslationError]:
 
     message, content = message_result.value
     texts, thoughts = flatten_content_parts(content)
+    if not isinstance(texts, str):
+        return fail_http("protocol", f"unexpected content type: {type(texts).__name__}")
+
     usage_report = body.get("usage")
     reported = (
         MappingProxyType(usage_report) if isinstance(usage_report, dict) else None
@@ -357,24 +362,44 @@ def with_retries[T](
 def http_post_json(
     ctx: Context, payload: Mapping[str, Any]
 ) -> IO[Result[dict[str, Any], TranslationError]]:
-    def thunk() -> Result[dict[str, Any], TranslationError]:
-        log_request(ctx.log, payload).run()
-        opened = ctx.open_http(http_request(ctx.config, payload), ctx.config.timeout)
-        if isinstance(opened, Err):
-            log_error(ctx.log, describe(opened.error)).run()
-            return opened
+    def opened() -> Result[Any, TranslationError]:
+        return ctx.open_http(http_request(ctx.config, payload), ctx.config.timeout)
 
-        with opened.value as response:
+    def read(
+        outcome: Result[Any, TranslationError],
+    ) -> Result[tuple[str, Any], TranslationError]:
+        if isinstance(outcome, Err):
+            return outcome
+
+        with outcome.value as response:
             try:
                 body = response.read().decode("utf-8")
-                log_entry(ctx.log, "RESPONSE", body).run()
-                return Ok(json.loads(body))
+                return Ok((body, json.loads(body)))
             except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                failure = fail_http("protocol", f"invalid JSON response: {error}")
-                log_error(ctx.log, describe(failure.error)).run()
-                return failure
+                return fail_http("protocol", f"invalid JSON response: {error}")
 
-    return IO(thunk)
+    def attempt() -> IO[Result[tuple[str, Any], TranslationError]]:
+        def thunk() -> Result[tuple[str, Any], TranslationError]:
+            return read(opened())
+
+        return IO(thunk)
+
+    def record(
+        outcome: Result[tuple[str, Any], TranslationError],
+    ) -> IO[Result[dict[str, Any], TranslationError]]:
+        if isinstance(outcome, Err):
+            return io_map(
+                log_error(ctx.log, describe(outcome.error)),
+                lambda _: Err(outcome.error),
+            )
+
+        body, loaded = outcome.value
+        return io_map(log_entry(ctx.log, "RESPONSE", body), lambda _: Ok(loaded))
+
+    return io_bind(
+        io_and_then(log_request(ctx.log, payload), attempt()),
+        record,
+    )
 
 
 def http_open_stream(
@@ -382,19 +407,31 @@ def http_open_stream(
 ) -> IO[Result[Any, TranslationError]]:
     def open_stream(
         body: Mapping[str, Any], label: str
-    ) -> Result[Any, TranslationError]:
-        log_request(ctx.log, body, label).run()
-        opened = ctx.open_http(
-            http_request(ctx.config, body, accept="text/event-stream"),
-            ctx.config.timeout,
+    ) -> IO[Result[Any, TranslationError]]:
+        return io_and_then(
+            log_request(ctx.log, body, label),
+            IO(
+                lambda: ctx.open_http(
+                    http_request(ctx.config, body, accept="text/event-stream"),
+                    ctx.config.timeout,
+                )
+            ),
         )
-        if isinstance(opened, Err):
-            log_error(ctx.log, describe(opened.error)).run()
 
-        return opened
+    def logged(
+        opened: Result[Any, TranslationError],
+    ) -> IO[Result[Any, TranslationError]]:
+        if isinstance(opened, Ok):
+            return io_result(opened)
 
-    def thunk() -> Result[Any, TranslationError]:
-        opened = open_stream(payload, "REQUEST (stream)")
+        return io_map(
+            log_error(ctx.log, describe(opened.error)),
+            lambda _: opened,
+        )
+
+    def decide(
+        opened: Result[Any, TranslationError],
+    ) -> IO[Result[Any, TranslationError]]:
         if (
             isinstance(opened, Ok)
             or "stream_options" not in payload
@@ -403,14 +440,21 @@ def http_open_stream(
                 and "stream_options" in opened.error.detail
             )
         ):
-            return opened
+            return io_result(opened)
 
-        return open_stream(
-            {key: value for key, value in payload.items() if key != "stream_options"},
-            "REQUEST (stream, retry)",
+        return io_bind(
+            open_stream(
+                {
+                    key: value
+                    for key, value in payload.items()
+                    if key != "stream_options"
+                },
+                "REQUEST (stream, retry)",
+            ),
+            logged,
         )
 
-    return IO(thunk)
+    return io_bind(io_bind(open_stream(payload, "REQUEST (stream)"), logged), decide)
 
 
 def drive_stream(
@@ -460,16 +504,37 @@ def collect_stream(
         return ctx.console.stream_reasoning(text)
 
     def note_progress(label: str, count: int) -> IO[None]:
-        def thunk() -> None:
-            if label == "Working":
-                ctx.console.end_raw().run()
+        def continued(_: None) -> IO[None]:
+            return ctx.console.progress(label, count)
 
-            ctx.console.progress(label, count).run()
-
-        return IO(thunk)
+        return (
+            io_and_then(ctx.console.end_raw(), continued(None))
+            if label == "Working"
+            else ctx.console.progress(label, count)
+        )
 
     def on_raw_line(raw_line: bytes) -> IO[None]:
         return run_log_write(ctx.log, raw_line.decode("utf-8", "replace"))
+
+    def conclude(
+        outcome: Result[StreamState, TranslationError],
+    ) -> IO[Result[StreamState, TranslationError]]:
+        def recorded(_: None) -> IO[Result[StreamState, TranslationError]]:
+            if isinstance(outcome, Err):
+                return io_map(
+                    log_error(ctx.log, describe(outcome.error)),
+                    lambda _: outcome,
+                )
+
+            return io_map(run_log_write(ctx.log, "\n"), lambda _: outcome)
+
+        return io_and_then(ctx.console.end_raw(), recorded(None))
+
+    def handle(error: Exception) -> Result[StreamState, TranslationError]:
+        if isinstance(error, (urllib.error.URLError, TimeoutError, OSError)):
+            return fail_http("interrupted", str(error))
+
+        raise error
 
     def respond(
         opened: Result[Any, TranslationError],
@@ -477,26 +542,16 @@ def collect_stream(
         if isinstance(opened, Err):
             return io_result(opened)
 
-        def thunk() -> Result[StreamState, TranslationError]:
-            try:
-                with opened.value as response:
-                    outcome = drive_stream(
-                        response, note_progress, on_raw_line, on_reasoning
-                    ).run()
-                    ctx.console.end_raw().run()
-                    if isinstance(outcome, Err):
-                        log_error(ctx.log, describe(outcome.error)).run()
-                    else:
-                        run_log_write(ctx.log, "\n").run()
-
-                    return outcome
-            except (urllib.error.URLError, TimeoutError, OSError) as error:
-                ctx.console.end_raw().run()
-                failure = fail_http("interrupted", str(error))
-                log_error(ctx.log, describe(failure.error)).run()
-                return failure
-
-        return IO(thunk)
+        return io_catch_result(
+            io_using(
+                opened.value,
+                lambda response: io_bind(
+                    drive_stream(response, note_progress, on_raw_line, on_reasoning),
+                    conclude,
+                ),
+            ),
+            handle,
+        )
 
     return io_bind(http_open_stream(ctx, payload), respond)
 
@@ -605,11 +660,6 @@ def conclude_chat(
 
     reply = reply_result.value
     content, think_text = strip_think_tag(reply.content)
-    if not isinstance(content, str):
-        return io_result(
-            fail_http("protocol", f"unexpected content type: {type(content).__name__}")
-        )
-
     think_texts: tuple[str, ...] = maybe_either(
         think_text, lambda text: (text,), lambda: ()
     )

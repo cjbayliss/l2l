@@ -3,13 +3,20 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import TypeVar
+from typing import Protocol
 
-T = TypeVar("T")
-E = TypeVar("E")
-R = TypeVar("R")
-A = TypeVar("A")
-S = TypeVar("S")
+
+class Managed[T](Protocol):
+    """A re-entrant context manager returning a resource of type `T`."""
+
+    def __enter__(self) -> T: ...
+
+    def __exit__(
+        self,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
+    ) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -222,15 +229,55 @@ def io_and_then[T, R](io_value: IO[T], next_value: IO[R]) -> IO[R]:
     return IO(thunk)
 
 
-def io_when[T](condition: bool, io_value: IO[T]) -> IO[T | None]:
-    def thunk() -> T | None:
-        return io_value.run() if condition else None
+def io_when[T](condition: bool, io_value: IO[T]) -> IO[Maybe[T]]:
+    def thunk() -> Maybe[T]:
+        return Just(io_value.run()) if condition else NOTHING
 
     return IO(thunk)
 
 
-def io_unless[T](condition: bool, io_value: IO[T]) -> IO[T | None]:
+def io_unless[T](condition: bool, io_value: IO[T]) -> IO[Maybe[T]]:
     return io_when(not condition, io_value)
+
+
+def io_when_unit(condition: bool, action: IO[None]) -> IO[None]:
+    def thunk() -> None:
+        if condition:
+            action.run()
+
+    return IO(thunk)
+
+
+def io_atomic[T](lock: threading.Lock, action: IO[T]) -> IO[T]:
+    """Run `action` while holding `lock` (the sanctioned nested runner)."""
+
+    def thunk() -> T:
+        with lock:
+            return action.run()
+
+    return IO(thunk)
+
+
+def io_using[R, T](resource: Managed[R], body: Callable[[R], IO[T]]) -> IO[T]:
+    """Enter `resource` as a context manager, run `body`, always exit."""
+
+    def thunk() -> T:
+        with resource as entered:
+            return body(entered).run()
+
+    return IO(thunk)
+
+
+def repeat_until(
+    action: IO[None], until: threading.Event, interval: float
+) -> Callable[[], None]:
+    """Runner for daemon threads: perform `action` every `interval` seconds."""
+
+    def loop() -> None:
+        while not until.wait(interval):
+            action.run()
+
+    return loop
 
 
 def io_catch[T, E](
@@ -239,6 +286,18 @@ def io_catch[T, E](
     def thunk() -> Result[T, E]:
         try:
             return Ok(io_value.run())
+        except Exception as error:
+            return handler(error)
+
+    return IO(thunk)
+
+
+def io_catch_result[T, E](
+    io_value: IO[Result[T, E]], handler: Callable[[Exception], Result[T, E]]
+) -> IO[Result[T, E]]:
+    def thunk() -> Result[T, E]:
+        try:
+            return io_value.run()
         except Exception as error:
             return handler(error)
 

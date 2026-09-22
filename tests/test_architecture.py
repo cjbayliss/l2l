@@ -31,11 +31,9 @@ LEVELS: dict[str, int] = {
 }
 
 # Where `IO.run` may appear: `cli` is the single program entry point and
-# `monads` hosts the combinator runners. The executor modules listed in
-# `INTERIM_RUNNERS` still run composed IOs inline; they are scheduled to
-# shrink onto `IO_EDGES`.
+# `monads` hosts the combinator runners (`io_atomic`, `io_using`,
+# `repeat_until`). Every other module only composes IO values.
 IO_EDGES = frozenset({"cli.py", "monads.py"})
-INTERIM_RUNNERS = frozenset({"console.py", "keys.py", "http.py", "effects.py"})
 
 
 def module_names() -> frozenset[str]:
@@ -95,7 +93,7 @@ def test_dependencies_point_strictly_downward() -> None:
 
 def test_io_runs_only_at_sanctioned_edges() -> None:
     for path in sorted(PACKAGE.glob("*.py")):
-        if path.name in IO_EDGES | INTERIM_RUNNERS:
+        if path.name in IO_EDGES:
             continue
 
         assert ".run(" not in path.read_text(encoding="utf-8"), (

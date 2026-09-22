@@ -43,6 +43,11 @@ zh2en [CONFIG] [options] < input.txt > output.txt
 Precedence: defaults < user config < selected config < environment <
 command line.
 
+Exit codes: `0` success (including empty input), `1` a pipeline error
+(endpoint, budget, or pass failure), `2` a configuration or argument
+error, `130` on Ctrl-C, and `141` when stdout is closed early
+(SIGPIPE).
+
 See `example.toml` for a starting point.
 
 ## Interactive verbose toggle
@@ -144,7 +149,14 @@ idioms (PEP 695 generics, comprehensions over accumulation).
   channel is a typed ADT (`TranslationError`) built through `fail_*`
   constructors and rendered exactly once by `describe()`. `IO[T]` thunks
   keep the whole program a composed value that runs exactly once at the
-  entry point; `Ref[T]` is the sanctioned single-cell mutation primitive.
+  entry point; `Ref[T]` is the sanctioned single-cell mutation primitive
+  and is only ever read or written through its combinators
+  (`read_ref`/`write_ref`/`modify_ref`).
+- `IO.run` may appear only in `cli.py` (the program edge) and `monads.py`
+  (the combinator runners: `io_atomic`, `io_using`, `repeat_until`,
+  `fold_io`, ...). Every other module only composes IO values; an AST
+  test (`tests/test_architecture.py`) enforces this, along with the
+  strictly-downward dependency layering.
 - Pure text machinery (paragraph splitting, token-budget chunking, cache
   keys, SSE and `<think>` tag state machines) is fully separated from
   effects, which live in the console/status line and the injected HTTP
@@ -177,10 +189,12 @@ idioms (PEP 695 generics, comprehensions over accumulation).
     data in `settings`.
   - `plans` — pure pass planning: `UnitCall`/`plan_unit_calls`, prompt
     builders, validation (`unit_output_problem`), retry policies
-    (`transient`, `plan_backoff`), and the `--dry-run` report; data in,
-    data out.
-  - `cache` — the cache algebra: `cache_lookup`, `cache_store`, and
-    `cached_translation` (read, else compute, then store if acceptable).
+    (`transient`, `plan_backoff`), and the report builders
+    (`plan_report`, `setup_report`); data in, data out.
+  - `cache` — the cache algebra: `cache_lookup` (with an
+    `acceptable` filter, so stale or empty entries are recomputed),
+    `cache_store`, and `cached_translation` (read, else compute, then
+    store if acceptable).
   - `http` — request payloads, reply parsing, the SSE stream fold,
     retries, and `chat`; effects are IO values, never executed inline.
   - `ascii` — ASCII enforcement: mechanical folding, LLM repair with

@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 from zh2en.config import (
@@ -6,23 +7,24 @@ from zh2en.config import (
     apply_default_ascii,
     build_config,
     document_api_settings,
+    document_passes,
     load_instruction_text,
-    mask_api_key,
     max_tokens_api_setting,
     merge_api_settings,
     merged_api_settings,
     parse_options_table,
     parse_pass_table,
     pass_definition_from,
+    read_document,
     resolve_config_path,
     resolve_passes,
-    setup_report,
     string_api_setting,
     timeout_api_setting,
     validate_document,
 )
 from zh2en.errors import TranslationError, describe
 from zh2en.monads import Err, Ok, Result
+from zh2en.plans import mask_api_key, setup_report
 from zh2en.settings import (
     DEFAULT_API_SETTINGS,
     Arguments,
@@ -306,3 +308,94 @@ def test_setup_report_lists_api_and_passes() -> None:
         " instruction=2 chars" in report
     )
     assert "options.ensure_paragraphs: True" in report
+
+
+def test_document_api_settings_requires_a_table() -> None:
+    result = document_api_settings("f", {"api": "nope"})
+    assert isinstance(result, Err)
+    assert "[api] must be a table" in describe(result.error)
+
+
+def test_document_api_settings_rejects_non_table_params() -> None:
+    result = document_api_settings("f", {"api": {"params": ["x"]}})
+    assert isinstance(result, Err)
+    assert "[api] params must be a table" in describe(result.error)
+
+
+def test_timeout_api_setting_rejects_negative() -> None:
+    result = timeout_api_setting("f", PartialApiSettings(), {"timeout": -3})
+    assert isinstance(result, Err)
+    assert "timeout must be a positive number" in describe(result.error)
+
+
+def test_max_tokens_api_setting_rejects_float_with_message() -> None:
+    result = max_tokens_api_setting("f", PartialApiSettings(), {"max_tokens": 2.5})
+    assert isinstance(result, Err)
+    assert "max_tokens must be a positive integer" in describe(result.error)
+
+
+def test_environment_rejects_bogus_and_negative_numbers() -> None:
+    result = api_settings_from_environment({"TRANSLATE_MAX_TOKENS": "bogus"})
+    assert isinstance(result, Err)
+    assert "TRANSLATE_MAX_TOKENS must be an integer" in describe(result.error)
+
+    result = api_settings_from_environment({"TRANSLATE_TIMEOUT": "-1"})
+    assert isinstance(result, Err)
+    assert "TRANSLATE_TIMEOUT must be positive" in describe(result.error)
+
+    result = api_settings_from_environment({"TRANSLATE_TIMEOUT": "1.5"})
+    assert isinstance(result, Ok)
+    assert result.value.timeout == 1.5
+
+
+def test_pass_definition_from_rejects_bad_fields() -> None:
+    result = pass_definition_from("f", "p", {"mode": "chunk", "ascii": "yes"}, "i")
+    assert isinstance(result, Err)
+    assert "ascii must be true or false" in describe(result.error)
+
+    result = pass_definition_from("f", "p", {"mode": "chunk", "model": "  "}, "i")
+    assert isinstance(result, Err)
+    assert "model must be a non-empty string" in describe(result.error)
+
+    result = pass_definition_from("f", "p", {"mode": "chunk", "params": 3}, "i")
+    assert isinstance(result, Err)
+    assert "params must be a table" in describe(result.error)
+
+
+def test_parse_pass_table_rejects_non_table_and_empty_name() -> None:
+    result = parse_pass_table("f", "chunk", ".").run()
+    assert isinstance(result, Err)
+    assert "entries must be tables" in describe(result.error)
+
+    result = parse_pass_table("f", {"name": "  ", "instruction": "i"}, ".").run()
+    assert isinstance(result, Err)
+    assert "name must be a non-empty string" in describe(result.error)
+
+
+def test_document_passes_rejects_bad_entry_lists() -> None:
+    for entries in ("nope", [], [{"name": "p", "instruction": "i"}, 3]):
+        result = document_passes("f", {"pass": entries}).run()
+        assert isinstance(result, Err)
+        assert "[[pass]]" in describe(result.error)
+
+
+def test_load_instruction_text_rejects_bad_file_settings(
+    tmp_path: Path,
+) -> None:
+    result = load_instruction_text(
+        "f", "p", {"instruction_file": 3}, str(tmp_path)
+    ).run()
+    assert isinstance(result, Err)
+    assert "instruction_file must be a path" in describe(result.error)
+
+    result = load_instruction_text(
+        "f", "p", {"instruction_file": "missing.txt"}, str(tmp_path)
+    ).run()
+    assert isinstance(result, Err)
+    assert "cannot read instruction file" in describe(result.error)
+
+
+def test_read_document_without_a_file_is_empty() -> None:
+    result = read_document("f", "config file", exists=False).run()
+    assert isinstance(result, Ok)
+    assert result.value == {}

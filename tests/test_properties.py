@@ -1,13 +1,22 @@
-from itertools import chain
+import json
+from itertools import chain, zip_longest
+from typing import Any
 
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
+from zh2en.http import StreamState, step_stream
+from zh2en.monads import Ok
+from zh2en.plans import plan_backoff
+from zh2en.settings import PartialApiSettings
 from zh2en.text import (
     ThinkState,
     cache_key,
+    count_paragraphs,
+    ensure_blank_line_separators,
     estimate_tokens,
     make_chunks,
+    split_paragraphs,
     split_to_budget,
     think_step,
 )
@@ -93,3 +102,180 @@ def test_cache_key_is_deterministic_and_content_sensitive(
     assert key == cache_key(chunk_text, model)
     assert key != cache_key(chunk_text, model + "x")
     assert key != cache_key(chunk_text + "x", model)
+
+
+# --- split_paragraphs -------------------------------------------------------
+# Paragraphs exclude all whitespace characters: whitespace-only runs adjacent
+# to blank lines are absorbed into separators by `split_paragraphs`, so they
+# are outside the contract these properties cover.
+PARAGRAPH = st.text(
+    alphabet=st.characters(min_codepoint=32, max_codepoint=0x4DBF).filter(
+        lambda char: not char.isspace()
+    ),
+    min_size=1,
+    max_size=20,
+)
+SEPARATOR = st.sampled_from(["\n\n", "\n\n\n", "\n \n", "\n\t\n"])
+
+
+@st.composite
+def paragraph_documents(draw: st.DrawFn) -> tuple[str, tuple[str, ...]]:
+    count = draw(st.integers(min_value=1, max_value=6))
+    paragraphs = tuple(draw(PARAGRAPH) for _ in range(count))
+    separators = [draw(SEPARATOR) for _ in range(count - 1)]
+    pieces: list[str] = []
+    for index, paragraph in enumerate(paragraphs):
+        pieces.append(paragraph)
+        if index < count - 1:
+            pieces.append(separators[index])
+
+    return "".join(pieces), paragraphs
+
+
+@given(paragraph_documents())
+def test_split_paragraphs_reconstructs_the_document(
+    document: tuple[str, tuple[str, ...]],
+) -> None:
+    text, expected = document
+    paragraphs, separators = split_paragraphs(text)
+    rebuilt = "".join(
+        part + sep for part, sep in zip_longest(paragraphs, separators, fillvalue="")
+    )
+    assert paragraphs == expected
+    assert rebuilt == text
+
+
+@given(paragraph_documents())
+def test_ensure_blank_line_separators_preserves_paragraph_count(
+    document: tuple[str, tuple[str, ...]],
+) -> None:
+    text, expected = document
+    joined = ensure_blank_line_separators(text)
+    assert count_paragraphs(joined) == len(expected)
+
+
+# --- SSE stream fold -------------------------------------------------------
+CONTENT_CHUNKS = st.fixed_dictionaries(
+    {
+        "choices": st.lists(
+            st.fixed_dictionaries(
+                {"delta": st.fixed_dictionaries({"content": st.text(max_size=12)})}
+            ),
+            min_size=1,
+            max_size=1,
+        )
+    }
+)
+USAGE_CHUNKS = st.fixed_dictionaries(
+    {
+        "usage": st.fixed_dictionaries(
+            {
+                "prompt_tokens": st.integers(min_value=0, max_value=999),
+                "completion_tokens": st.integers(min_value=0, max_value=999),
+            }
+        )
+    }
+)
+STREAM_CHUNKS = st.lists(
+    st.one_of(CONTENT_CHUNKS, USAGE_CHUNKS, st.just({})),
+    max_size=15,
+)
+
+
+def sse_bytes(chunks: list[dict[str, Any]]) -> list[bytes]:
+    lines: list[bytes] = []
+    for chunk in chunks:
+        lines.append(b"data: " + json.dumps(chunk).encode("utf-8") + b"\n")
+        lines.append(b"\n")
+
+    return lines
+
+
+@given(STREAM_CHUNKS)
+def test_stream_fold_concatenates_deltas_and_keeps_last_usage(
+    chunks: list[dict[str, Any]],
+) -> None:
+    state: StreamState = StreamState()
+    for line in sse_bytes(chunks):
+        outcome = step_stream(state, line)
+        assert isinstance(outcome, Ok)
+        state = outcome.value
+
+    expected = "".join(
+        chunk["choices"][0]["delta"]["content"]
+        for chunk in chunks
+        if "choices" in chunk
+    )
+    assert "".join(state.contents) == expected
+
+    usages = [chunk["usage"] for chunk in chunks if "usage" in chunk]
+    if usages:
+        assert state.reported is not None
+        assert dict(state.reported) == usages[-1]
+    else:
+        assert state.reported is None
+
+
+# --- PartialApiSettings.merge ----------------------------------------------
+OPTIONAL_TEXT = st.one_of(st.none(), st.text(min_size=1, max_size=4))
+OPTIONAL_NUMBER = st.one_of(
+    st.none(), st.integers(min_value=1, max_value=99).map(float)
+)
+
+
+@st.composite
+def partial_settings(draw: st.DrawFn) -> PartialApiSettings:
+    return PartialApiSettings(
+        base_url=draw(OPTIONAL_TEXT),
+        api_key=draw(OPTIONAL_TEXT),
+        model=draw(OPTIONAL_TEXT),
+        timeout=draw(OPTIONAL_NUMBER),
+        max_tokens=draw(st.one_of(st.none(), st.integers(min_value=1, max_value=99))),
+        params=draw(
+            st.one_of(
+                st.none(),
+                st.dictionaries(
+                    st.text(min_size=1, max_size=2, alphabet="xyz"),
+                    st.integers(min_value=0, max_value=9),
+                ),
+            )
+        ),
+    )
+
+
+@given(partial_settings(), partial_settings(), partial_settings())
+def test_partial_merge_is_associative(
+    first: PartialApiSettings,
+    second: PartialApiSettings,
+    third: PartialApiSettings,
+) -> None:
+    assert first.merge(second).merge(third) == first.merge(second.merge(third))
+
+
+@given(partial_settings())
+def test_partial_merge_has_identity(settings: PartialApiSettings) -> None:
+    assert settings.merge(PartialApiSettings()) == settings
+
+
+@given(partial_settings(), partial_settings())
+def test_partial_merge_params_deep_merges(
+    base: PartialApiSettings, extra: PartialApiSettings
+) -> None:
+    merged = base.merge(extra)
+    if base.params is not None and extra.params is not None:
+        assert merged.params == {**base.params, **extra.params}
+
+
+# --- plan_backoff ----------------------------------------------------------
+@given(
+    st.floats(min_value=0.1, max_value=10.0),
+    st.floats(min_value=0.1, max_value=50.0),
+    st.integers(min_value=0, max_value=8),
+)
+def test_plan_backoff_is_monotone_and_capped(
+    base: float, cap: float, attempts: int
+) -> None:
+    delays = plan_backoff(base, cap, attempts)
+    assert len(delays) == attempts
+    assert tuple(delays) == tuple(sorted(delays))
+    assert all(delay <= cap for delay in delays)

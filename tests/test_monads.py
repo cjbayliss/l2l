@@ -1,12 +1,16 @@
+import threading
 from collections.abc import Iterator
 
 from zh2en.monads import (
     IO,
+    NOTHING,
     Err,
+    Just,
     Ok,
     Result,
     fold_io_lazy,
     io_and_then,
+    io_atomic,
     io_bind,
     io_catch,
     io_map,
@@ -17,7 +21,10 @@ from zh2en.monads import (
     io_result_map,
     io_traverse,
     io_unless,
+    io_using,
     io_when,
+    io_when_unit,
+    repeat_until,
     result_bind,
     result_either,
     result_map,
@@ -100,10 +107,71 @@ def test_io_and_then_runs_in_order_and_keeps_second() -> None:
 
 def test_io_when_and_unless_gate_execution() -> None:
     ran: IO[str] = io_pure("ran")
-    assert io_when(True, ran).run() == "ran"
-    assert io_when(False, ran).run() is None
-    assert io_unless(False, ran).run() == "ran"
-    assert io_unless(True, ran).run() is None
+    assert io_when(True, ran).run() == Just("ran")
+    assert io_when(False, ran).run() is NOTHING
+    assert io_unless(False, ran).run() == Just("ran")
+    assert io_unless(True, ran).run() is NOTHING
+
+
+def test_io_when_unit_gates_execution() -> None:
+    log: list[str] = []
+
+    def action() -> IO[None]:
+        def thunk() -> None:
+            log.append("ran")
+
+        return IO(thunk)
+
+    assert io_when_unit(True, action()).run() is None
+    assert log == ["ran"]
+    assert io_when_unit(False, action()).run() is None
+    assert log == ["ran"]
+
+
+def test_io_atomic_holds_lock_while_running() -> None:
+    lock = threading.Lock()
+    log: list[str] = []
+
+    def action() -> IO[str]:
+        def thunk() -> str:
+            log.append("inside")
+            return "value"
+
+        return IO(thunk)
+
+    assert io_atomic(lock, action()).run() == "value"
+    assert log == ["inside"]
+
+
+def test_io_using_enters_and_exits_resource() -> None:
+    log: list[str] = []
+
+    class Resource:
+        def __enter__(self) -> str:
+            log.append("enter")
+            return "resource"
+
+        def __exit__(self, *args: object) -> None:
+            log.append("exit")
+
+    program = io_using(Resource(), lambda entered: io_pure(len(entered)))
+    assert program.run() == 8
+    assert log == ["enter", "exit"]
+
+
+def test_repeat_until_runs_until_event_set() -> None:
+    until = threading.Event()
+    log: list[str] = []
+
+    def action() -> IO[None]:
+        def thunk() -> None:
+            log.append("tick")
+            until.set()
+
+        return IO(thunk)
+
+    repeat_until(action(), until, 0.001)()
+    assert log == ["tick"]
 
 
 def test_io_catch_converts_exceptions_to_result() -> None:

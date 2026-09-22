@@ -15,7 +15,7 @@ from zh2en.monads import (
     io_map,
     io_pure,
     io_result,
-    io_when,
+    io_when_unit,
 )
 from zh2en.settings import Context
 from zh2en.text import Translated, Usage
@@ -25,15 +25,28 @@ def const_acceptable(_: str) -> bool:
     return True
 
 
-def cache_lookup(ctx: Context, key: str) -> IO[Maybe[str]]:
+def non_empty(text: str) -> bool:
+    return bool(text.strip())
+
+
+def cache_lookup(
+    ctx: Context,
+    key: str,
+    acceptable: Callable[[str], bool] = const_acceptable,
+) -> IO[Maybe[str]]:
+    def checked(cached: Maybe[str]) -> Maybe[str]:
+        return (
+            cached if isinstance(cached, Just) and acceptable(cached.value) else NOTHING
+        )
+
     if not ctx.use_cache:
         return io_pure(NOTHING)
 
-    return cache_read(ctx.cache_directory, key)
+    return io_map(cache_read(ctx.cache_directory, key), checked)
 
 
 def cache_store(ctx: Context, key: str, value: str, condition: bool) -> IO[None]:
-    return io_when(
+    return io_when_unit(
         ctx.use_cache and condition, cache_write(ctx.cache_directory, key, value)
     )
 

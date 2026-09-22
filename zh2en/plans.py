@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import accumulate, chain
+from typing import Any
 
 from zh2en.errors import HttpError, TranslationError
 from zh2en.monads import NOTHING, Just, Maybe
@@ -9,6 +12,7 @@ from zh2en.settings import (
     Context,
     PassDefinition,
     Settings,
+    Setup,
     pass_salt,
     resolve_call_settings,
 )
@@ -317,3 +321,54 @@ def plan_report(
         ),
     )
     return "\n".join(lines)
+
+
+def mask_api_key(api_key: str) -> str:
+    if len(api_key) <= 8:
+        return "***"
+
+    return api_key[:4] + "..." + api_key[-2:]
+
+
+def params_text(params: Mapping[str, Any]) -> str:
+    return json.dumps(params, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def setup_report(setup: Setup, effective_ensure_paragraphs: bool) -> str:
+    config = setup.config
+    api_lines: tuple[str, ...] = (
+        f"api.base_url: {config.base_url}",
+        f"api.model: {config.model}",
+        f"api.timeout: {config.timeout:g}",
+        "api.max_tokens: %d" % config.max_tokens,
+        f"api.api_key: {mask_api_key(config.api_key)}",
+        *((f"api.params: {params_text(config.params)}",) if config.params else ()),
+    )
+    pass_lines = tuple(
+        line
+        for number, pass_definition in enumerate(setup.passes, 1)
+        for line in (
+            (
+                "pass %d/%d [%s]: mode=%s ascii=%s model=%s instruction=%d chars"
+                % (
+                    number,
+                    len(setup.passes),
+                    pass_definition.name,
+                    pass_definition.mode,
+                    pass_definition.ascii,
+                    pass_definition.model or "<default>",
+                    len(pass_definition.instruction),
+                ),
+                *(
+                    (f"  params: {params_text(pass_definition.params)}",)
+                    if pass_definition.params
+                    else ()
+                ),
+            )
+        )
+    )
+    return "\n".join(
+        api_lines
+        + pass_lines
+        + (f"options.ensure_paragraphs: {effective_ensure_paragraphs}",)
+    )
