@@ -1,110 +1,125 @@
 # l2l
 
-Translate text from stdin to a target language on stdout — any source
-language, any target language — using any OpenAI-compatible chat
-completions endpoint (including OpenRouter). The name is historical:
-the language pair is defined entirely by the translation instructions
-you configure, so the same tool handles Chinese to English, Japanese to
-English, English to German, or any other combination.
+l2l is a command-line translator: it reads text from stdin, translates
+it, and writes the result to stdout, using any OpenAI-compatible chat
+completions endpoint.
 
-Standard-library-only Python (3.14+), organised as a small layered
-package: pure machinery in the middle, effects only at the edges.
+Your config's instruction defines the translation direction — there
+are no built-in language pairs, so one tool handles Chinese to English,
+Japanese to English, English to German, or any other combination.
+
+l2l splits text into paragraphs and processes units through one or
+more *passes*, each a call type with its own instruction, model, and
+parameters. It validates replies and re-asks with corrective feedback
+when malformed, and caches every result on disk so interrupted runs
+resume cheaply.
 
 ## Install
 
+l2l is standard-library-only Python and requires **Python 3.14 or
+newer**.
+
 ```sh
-pip install .
+uv tool install .
 ```
 
-This provides the `l2l` console script. You can also run it directly with
-`python3 -m l2l`.
+This installs the `l2l` command. To run it without installing:
+
+```sh
+python3 -m l2l
+```
 
 ## Usage
 
 ```sh
-l2l [CONFIG] [options] < input.txt > output.txt
+l2l [options] [CONFIG] < input.txt > output.txt
 ```
 
-- `CONFIG` is a TOML file. Resolution order: the positional argument, then
-  `$TRANSLATE_CONFIG`, then `./l2l.toml`, then
-  `~/.config/l2l/config.toml`. A user config at
-  `~/.config/l2l/config.toml` (or `$XDG_CONFIG_HOME`) is always merged in
-  first when it exists; the selected config overrides it.
-- Options: `--base-url`, `--api-key`, `--model`, `--timeout`, `--max-tokens`
-  override the corresponding `[api]` setting and its `TRANSLATE_*`
-  environment variable. `--cache-dir` overrides the cache location
-  (default `$XDG_CACHE_HOME/l2l`). `--no-cache` bypasses the cache.
-  `--cache-prune DAYS` deletes cache entries (including orphaned
-  `.txt.tmp` files) older than DAYS days and exits. `--log-keep DAYS`
-  deletes run logs older than DAYS days at startup (default 30; `0`
-  keeps every log). `--ensure-paragraphs` turns on the paragraph-count
-  check described below.
-  `--verbose` prints chunking, cache, timing, and reasoning diagnostics.
-  `--show-log-path` prints the run log's path to stderr at startup.
-  `--stream` / `--no-stream` force streamed or plain responses (default
-  follows `api.params.stream`). `--check-config` prints the resolved
-  configuration and exits without translating. `--dry-run` prints the
-  per-pass call plan (units, token estimates, cache keys) and exits without
-  calling the endpoint. `--version` prints the version.
+For example:
 
-Precedence: defaults < user config < selected config < environment <
-command line.
-
-Exit codes: `0` success (including empty input), `1` a pipeline error
-(endpoint, budget, or pass failure), `2` a configuration or argument
-error, `130` on Ctrl-C, and `141` when stdout is closed early
-(SIGPIPE).
-
-See `example.toml` for a Chinese-to-English starting point and
-`examples/` for other language pairs.
-
-## Language pairs
-
-The tool has no built-in notion of source or target language: a
-language pair is whatever your pass instructions ask for. Write an
-instruction file naming the source language and the desired target
-style, point an `[[pass]]` entry at it, and the whole pipeline —
-chunking, caching, validation, repair — works unchanged. For example,
-to translate Japanese fiction to English:
-
-```toml
-[[pass]]
-name = "translate"
-mode = "chunk"
-instruction_file = "examples/ja2en.txt"
+```sh
+l2l zh2en.toml < chapter1.txt > chapter1.en.txt
 ```
 
-`translate.txt` (Chinese fiction to English) and `examples/ja2en.txt`
-(Japanese fiction to English) are complete instruction files you can
-copy and adapt. Note that `[options] ascii = true` assumes a
-Latin-script target language (it enforces pure ASCII output); leave it
-off for targets such as Russian, Greek, Japanese, or Chinese.
+Empty input succeeds without calling the endpoint.
 
-## Interactive verbose toggle
+Getting started:
 
-When stderr is a terminal, l2l listens for key presses on the
-controlling TTY while the pipeline runs (stdin stays reserved for the
-input text). Pressing **Tab** toggles verbose mode: the session's output
-on stderr is erased (only the rows this run printed — your scrollback is
-untouched) and re-rendered for the new mode, so `--verbose` diagnostics
-and LLM reasoning traces can be switched on or off mid-run. History is
-kept in memory, including reasoning captured while hidden; a toggle
-reveals it retroactively. Taller-than-screen history scrolls into
-scrollback and cannot be erased by the re-render. The listener is off
-when stderr is not a TTY (pipes, CI).
+1. Copy `examples/zh2en.toml` (Chinese → English) or
+   `examples/ja2en.toml` (Japanese → English) and the matching
+   `.txt` instruction file.
+2. Put your API key in the config — or better, in the
+   `TRANSLATE_API_KEY` environment variable.
+3. Run `l2l --check-config` to verify your setup, then translate.
 
-## Logging
+### Command-line options
 
-Every run writes a log to `<cache-dir>/logs/<timestamp>-<pid>.log`
-regardless of `--no-cache`. Logs older than 30 days are deleted at
-startup; `--log-keep DAYS` changes the horizon (`--log-keep 0` keeps
-every log). The log records each request payload sent to
-the endpoint and everything received in reply: raw SSE lines for streamed
-calls, response bodies for plain calls, and any transport or protocol
-errors. Request headers (and therefore API keys) are never logged. With
-`--show-log-path` (or `-l`) the log's path is printed to stderr at startup.
+| Option | Effect |
+| --- | --- |
+| `CONFIG` | Optional path to a TOML config file. See [Config file resolution](#config-file-resolution). |
+| `--base-url URL` | API endpoint. Overrides `[api] base_url` and `TRANSLATE_BASE_URL`. |
+| `--api-key KEY` | API key. Overrides `[api] api_key` and `TRANSLATE_API_KEY`. |
+| `--model MODEL` | Default model. Overrides `[api] model` and `TRANSLATE_MODEL`. |
+| `--timeout SECONDS` | Per-request timeout. Overrides `[api] timeout` and `TRANSLATE_TIMEOUT`. |
+| `--max-tokens N` | Per-request token budget. Overrides `[api] max_tokens` and `TRANSLATE_MAX_TOKENS`. |
+| `--cache-dir DIR` | Translation cache directory (default: `$XDG_CACHE_HOME/l2l`, falling back to `~/.cache/l2l`). |
+| `--no-cache` | Bypass the translation cache for this run. |
+| `--cache-prune DAYS` | Delete cache entries older than DAYS days and exit. |
+| `--log-keep DAYS` | Delete run logs older than DAYS days at startup (default 30; `0` keeps every log). |
+| `--ensure-paragraphs` | After each pass, check output paragraph count against the source; re-run mismatching passes with one call per paragraph. |
+| `--verbose`, `-v` | Print chunking, cache, timing, and reasoning diagnostics to stderr. |
+| `--show-log-path`, `-l` | Print the run log's path to stderr at startup. |
+| `--stream` / `--no-stream` | Force streamed or plain responses. Default follows `api.params.stream`. |
+| `--check-config` | Print the resolved configuration and exit without translating. |
+| `--dry-run` | Print the per-pass call plan (units, token estimates, cache keys) and exit without calling the endpoint. |
+| `--version` | Print the version and exit. |
+
+Precedence, from weakest to strongest:
+
+```
+defaults < user config < selected config < environment < command line
+```
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success (including empty input). |
+| `1` | Pipeline error (endpoint, budget, or pass failure). |
+| `2` | Configuration or argument error. |
+| `130` | Interrupted with Ctrl-C. |
+| `141` | stdout closed early (SIGPIPE), e.g. piping into `head`. |
+
+### Interactive verbose toggle
+
+When stderr is a terminal, press **Tab** during a run to toggle verbose
+output. l2l re-renders the session's stderr for the new mode and
+reveals reasoning captured while hidden. stdin stays reserved for the
+input text; the listener is off when stderr is not a terminal (pipes,
+CI).
+
+### Logging
+
+Every run writes a log to `<cache-dir>/logs/<timestamp>-<pid>.log`,
+even with `--no-cache`. The log records each request payload and
+everything received in reply: raw SSE lines for streamed calls,
+response bodies for plain calls, and any transport or protocol errors.
+Request headers — and therefore API keys — are never logged. Pass
+`--show-log-path` (or `-l`) to print the log's path at startup, e.g.
+when attaching a log to a bug report.
 
 ## Configuration
+
+Configuration lives in a TOML file with up to three kinds of table:
+
+```toml
+[api]          # endpoint, key, model, limits, extra request parameters
+[[pass]]       # one or more passes, run in order
+[options]      # global toggles
+```
+
+A complete example (Chinese fiction to English — see `examples/` for
+working copies):
 
 ```toml
 [api]
@@ -130,131 +145,79 @@ ascii = true
 ensure_paragraphs = true
 ```
 
-- `[[pass]]` entries run in order. Each defines `name`, exactly one of
-  `instruction` (inline text) or `instruction_file` (path relative to the
-  config file), and `mode`:
-  - `analysis`: reads the whole document and stores a preparation brief
-    (outline, names, hard-to-translate items) used by later passes. The
-    document must fit in one call; otherwise raise `max_tokens`.
-  - `chunk`: translates paragraphs grouped into token-budgeted chunks.
-  - `paragraph`: translates each paragraph with its own call.
-- `model` and `params` on a pass override the API-level values per call.
-- `ascii = true` and `ensure_paragraphs = true` may also be set on a pass;
-  an explicit per-pass value overrides `[options]` and the
-  `--ensure-paragraphs` flag for that pass, otherwise the global setting
-  applies.
-- `[options] ascii = true` (or `ascii = true` on a pass) enforces pure
-  ASCII output: mechanical Unicode folding first, then LLM repair with
-  retries, then character dropping as a last resort.
-- `[options] ensure_paragraphs = true` (or the `--ensure-paragraphs` flag,
-  or `ensure_paragraphs = true` on a pass) checks each pass's output
-  paragraph count against the source after the pass runs. On a mismatch the
-  pass is re-run with one call per paragraph, which preserves the source's
-  paragraph count; a warning is printed if the count still differs, and the
-  output is emitted either way.
-- Every pass reply is validated before it is used: it must be non-empty,
-  contain exactly as many paragraphs as the source unit it was given, and
-  stay within a plausible length of that source. A failed reply is
-  re-requested with corrective feedback (two repairs by default); if it
-  still fails, a warning is printed, the last reply is used, and it is not
-  written to the cache. Paragraph-mode calls also include the neighbouring
-  source paragraphs as read-only context, which anchors short or ambiguous
-  units such as title-only or ellipsis-only lines.
-- Passes are cached by content hash (source text, working text, model,
-  params, instruction) under the cache directory, so re-runs after
-  interruption are cheap.
+### Config file resolution
 
-## Development
+l2l selects the config providing your passes in this order:
 
-```sh
-pip install -e ".[dev]"
-ruff format .
-ruff check .
-mypy
-pytest
-```
+1. The positional `CONFIG` argument, if given.
+2. The `$TRANSLATE_CONFIG` environment variable.
+3. `./l2l.toml` in the current directory.
+4. `~/.config/l2l/config.toml` (or `$XDG_CONFIG_HOME/l2l/config.toml`).
 
-`pytest` reports branch coverage per module by default
-(`pytest-cov`) and enforces a 90% floor. Lint groups include `C4`,
-`PERF`, `FURB`, `SIM`, `RET`, and `UP`, which nudge toward functional
-idioms (PEP 695 generics, comprehensions over accumulation).
+Separately, l2l always merges the user config at
+`~/.config/l2l/config.toml` (or `$XDG_CONFIG_HOME/l2l/config.toml`) in
+as a base layer when it exists; the selected config overrides it. Put
+your `base_url` and `api_key` there, so per-project configs only need
+the passes.
 
-## Design notes
+### `[api]` — endpoint settings
 
-- `Result[T, E]` (`Ok`/`Err`) and `Maybe[T]` (`Just`/`Nothing`) for error
-  handling and optional values without exceptions in the core; the error
-  channel is a typed ADT (`TranslationError`) built through `fail_*`
-  constructors and rendered exactly once by `describe()`. Numeric parsing
-  is algebraic too (`parse_float` matches with a grammar instead of
-  catching `ValueError`). `IO[T]` thunks
-  keep the whole program a composed value that runs exactly once at the
-  entry point; `Ref[T]` is the sanctioned single-cell mutation primitive
-  and is only ever read or written through its combinators
-  (`read_ref`/`write_ref`/`modify_ref`), and `Cons[T]` gives O(1)-prepend
-  accumulations for stream deltas and the session event log.
-- `IO.run` may appear only in `cli.py` (the program edge) and `monads.py`
-  (the combinator runners: `io_atomic`, `io_using`, `repeat_until`,
-  `fold_io`, ...). Every other module only composes IO values; an AST
-  test (`tests/test_architecture.py`) enforces this, along with the
-  strictly-downward dependency layering.
-- Exception handling follows one convention: small edge adapters that ARE
-  the process boundary (`urllib_open`, `load_toml`, `read_text_file`,
-  `open_tty`, the `io_catch*` combinators) may catch and translate into
-  the error ADT; composing modules never try/except. `http.py` maps
-  transport failures (`URLError`, timeouts, `OSError`,
-  `http.client.HTTPException` — including mid-body and mid-stream
-  disconnects) to `HttpError` so a broken connection surfaces as a
-  pipeline error, never a traceback. An SSE data frame left unterminated
-  at EOF is flushed and decoded rather than dropped.
-- Pure text machinery (paragraph splitting, token-budget chunking, cache
-  keys, SSE and `<think>` tag state machines) is fully separated from
-  effects, which live in the console/status line and the injected HTTP
-  opener (`Context.open_http`). Time is injected the same way: clocks
-  (`Context.clock`) and sleeps (`Context.sleep`) both come from the caller,
-  as does the HTTP opener, so retries and status lines are testable.
-- Unit validation repair and ASCII LLM repair share one executor:
-  `http.repaired_call` runs the chat-validate-rebuild-retry loop (counting
-  repairs after the initial call) while callers supply the validator,
-  retry-prompt builder, and loggers.
-- Module map (dependencies point downward only):
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `base_url` | string | — | Chat completions endpoint, e.g. `https://openrouter.ai/api/v1`. A trailing `/` is stripped. |
+| `api_key` | string | — | Sent as `Authorization: Bearer …`. |
+| `model` | string | — | Default model for calls (can be overridden per pass). |
+| `timeout` | number | `120.0` | Request timeout in seconds. |
+| `max_tokens` | integer | `100000` | Token budget for requests. |
+| `params` | table | `{}` | Extra keys merged into every request body, e.g. `stop = ["END"]` or provider routing options. Must contain only JSON values. |
 
-  - `monads` — `Result`, `Maybe`, `IO`, `Ref`, the immutable `Cons` list,
-    and their combinators (`fold_io`, lazy `fold_while`, `fold_io_lazy`,
-    `io_traverse`, `io_when`, `io_pair`, `io_memoize`,
-    `modify_ref_with`); no imports from the rest of the package.
-  - `messages` — pure user-facing string builders; no imports.
-  - `errors` — the error ADT (`ConfigError`, `HttpError`, `BudgetError`,
-    pass/unit wrappers) with `fail_*` constructors and the single
-    `describe()` renderer; depends only on `monads`.
-  - `text` — pure string machinery, token estimates, ASCII folding,
-    cache keys, usage arithmetic.
-  - `effects` — the IO vocabulary: stdin/stdout, TOML and cache files
-    (including pruning), the run log (with an injected clock).
-  - `console` — the status line as a `Ref[StatusView]` plus pure render
-    transitions, the session event log with verbose replay, and stderr
-    reporting.
-  - `keys` — the Tab-key listener on the controlling TTY (cbreak mode,
-    restored on exit) that toggles verbose mode. Like `console`, it is a
-    frozen dataclass over `Ref`s whose effects are IO values; the program
-    edge runs the composed attach IO to obtain the shutdown IO.
-  - `settings` — the frozen data vocabulary (`Config`, `Settings`,
-    `PassDefinition`, `Arguments`, `Context`) with defaults and small
-    pure accessors.
-  - `config` — TOML/config/argument parsing and merging that builds the
-    data in `settings`.
-  - `plans` — pure pass planning: `UnitCall`/`plan_unit_calls`, prompt
-    builders, validation (`unit_output_problem`), retry policies
-    (`transient`, `plan_backoff`), and the report builders
-    (`plan_report`, `setup_report`); data in, data out.
-  - `cache` — the cache algebra: `cache_lookup` (with an
-    `acceptable` filter, so stale or empty entries are recomputed),
-    `cache_store`, and `cached_translation` (read, else compute, then
-    store if acceptable).
-  - `http` — request payloads, reply parsing, the SSE stream fold,
-    retries, and `chat`; effects are IO values, never executed inline.
-  - `ascii` — ASCII enforcement: mechanical folding, LLM repair with
-    retries, and per-pass output checks.
-  - `pipeline` — pass execution: IO executors (`run_units`, `run_pass`)
-    that run the plans produced by `plans`.
-  - `cli` — argument parsing, wiring, and the single entry point that
-    runs the composed program.
+`base_url`, `api_key`, and `model` have no built-in default but only
+need to be set in one place: this table, the user config, the
+environment, or the matching command-line option, which always wins
+(the table above names each setting's environment variable).
+
+### `[[pass]]` — pipeline passes
+
+`[[pass]]` entries run in order; each pass's output is the next's
+input. Each pass requires:
+
+| Key | Meaning |
+| --- | --- |
+| `name` | Non-empty string, used in logs and cache keys. |
+| `instruction` *or* `instruction_file` | Exactly one: the instruction as inline text, or a path to a text file (relative to the config file). The instruction defines the language pair and target style. |
+
+Optional per-pass keys:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `mode` | `"chunk"` | How the document is processed (see below). |
+| `model` | `[api] model` | Model override for this pass's calls. |
+| `params` | `{}` | Extra request-body keys for this pass's calls, merged over `[api] params`. |
+| `ascii` | `[options] ascii` | Per-pass ASCII enforcement override. |
+| `ensure_paragraphs` | `[options] ensure_paragraphs` | Per-pass paragraph-count check override. |
+
+Modes:
+
+- **`chunk`** — translates paragraphs grouped into token-budgeted
+  chunks. The default, and cheapest for long documents.
+- **`paragraph`** — translates each paragraph with its own call,
+  including neighbouring source paragraphs as read-only context to
+  anchor short or ambiguous units (title-only lines, ellipses, …).
+- **`analysis`** — reads the whole document and stores a preparation
+  brief (outline, names, hard-to-translate items) that later passes
+  include for context. The document must fit in one call; otherwise
+  increase `max_tokens`.
+
+A typical multi-pass setup pairs an `analysis` pass with a `chunk`
+pass.
+
+### `[options]` — global toggles
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `ascii` | `false` | Enforce pure ASCII output. Assumes a Latin-script target language; leave it off for targets such as Russian, Greek, Japanese, or Chinese. |
+| `ensure_paragraphs` | `false` | After each pass, check output paragraph count against the source; on a mismatch, re-run the pass with one call per paragraph to preserve the count. |
+
+Both toggles can be overridden per pass (`ascii` / `ensure_paragraphs`
+on a `[[pass]]` entry).
+
