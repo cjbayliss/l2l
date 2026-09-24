@@ -66,7 +66,7 @@ Getting started:
 | `--no-cache` | Bypass the translation cache for this run. |
 | `--cache-prune DAYS` | Delete cache entries older than DAYS days and exit. |
 | `--log-keep DAYS` | Delete run logs older than DAYS days at startup (default 30; `0` keeps every log). |
-| `--ensure-paragraphs` | After each pass, check output paragraph count against the source; re-run mismatching passes with one call per paragraph. |
+| `--ensure-paragraphs` | Enforce the paragraph count after each pass (strict). Equivalent to `ensure_paragraphs = true`; see `[options]` below. |
 | `--verbose`, `-v` | Print chunking, cache, timing, and reasoning diagnostics to stderr. |
 | `--show-log-path`, `-l` | Print the run log's path to stderr at startup. |
 | `--stream` / `--no-stream` | Force streamed or plain responses. Default follows `api.params.stream`. |
@@ -194,7 +194,7 @@ Optional per-pass keys:
 | `model` | `[api] model` | Model override for this pass's calls. |
 | `params` | `{}` | Extra request-body keys for this pass's calls, merged over `[api] params`. |
 | `ascii` | `[options] ascii` | Per-pass ASCII enforcement override. |
-| `ensure_paragraphs` | `[options] ensure_paragraphs` | Per-pass paragraph-count check override. |
+| `ensure_paragraphs` | `[options] ensure_paragraphs` | Per-pass paragraph-count check override: `true` (strict), `false` (off), or a positive integer tolerance. |
 
 Modes:
 
@@ -216,7 +216,7 @@ pass.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `ascii` | `false` | Enforce pure ASCII output. Assumes a Latin-script target language; leave it off for targets such as Russian, Greek, Japanese, or Chinese. |
-| `ensure_paragraphs` | `false` | After each pass, check output paragraph count against the source; on a mismatch, re-run the pass with one call per paragraph to preserve the count. |
+| `ensure_paragraphs` | `false` | Paragraph-count enforcement. `true` requires each pass's output to match the source paragraph count exactly, re-running a mismatching chunk-mode pass with one call per paragraph. A positive integer sets a tolerance: `ensure_paragraphs = 2` accepts outputs within ±2 paragraphs of the source and only re-runs beyond that. `false` disables the check entirely. While a pass runs, each chunk reply is also rejected (and re-asked with corrective feedback) when its paragraph count drifts beyond the tolerance; `paragraph`-mode passes always require exactly one paragraph per call. |
 
 Both toggles can be overridden per pass (`ascii` / `ensure_paragraphs`
 on a `[[pass]]` entry).

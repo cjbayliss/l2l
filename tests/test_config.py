@@ -175,8 +175,17 @@ def test_parse_options_table() -> None:
     assert parse_options_table("f", {"ensure_paragraphs": True}) == Ok(
         {"ascii": False, "ensure_paragraphs": True}
     )
+    assert parse_options_table("f", {"ensure_paragraphs": 2}) == Ok(
+        {"ascii": False, "ensure_paragraphs": 2}
+    )
     assert isinstance(parse_options_table("f", {"ascii": "yes"}), Err)
-    assert isinstance(parse_options_table("f", {"ensure_paragraphs": "yes"}), Err)
+    for bad in ("yes", 0, -1, 1.5, None):
+        result = parse_options_table("f", {"ensure_paragraphs": bad})
+        assert isinstance(result, Err)
+        assert (
+            "ensure_paragraphs must be true, false, or a positive integer"
+            in describe(result.error)
+        )
     assert isinstance(parse_options_table("f", {"other": 1}), Err)
     assert isinstance(parse_options_table("f", "x"), Err)
 
@@ -201,10 +210,20 @@ def test_pass_definition_from() -> None:
     assert result.value.ensure_paragraphs is True
 
     result = pass_definition_from(
-        "f", "p", {"mode": "chunk", "ensure_paragraphs": "yes"}, "inst"
+        "f", "p", {"mode": "chunk", "ensure_paragraphs": 3}, "inst"
     )
-    assert isinstance(result, Err)
-    assert "ensure_paragraphs must be true or false" in describe(result.error)
+    assert isinstance(result, Ok)
+    assert result.value.ensure_paragraphs == 3
+
+    for bad in ("yes", 0, -1, 1.5):
+        result = pass_definition_from(
+            "f", "p", {"mode": "chunk", "ensure_paragraphs": bad}, "inst"
+        )
+        assert isinstance(result, Err)
+        assert (
+            "ensure_paragraphs must be true, false, or a positive integer"
+            in describe(result.error)
+        )
 
     result = parse_pass_table(
         "f", {"name": "p", "mode": "chunk", "strict_fidelity": True}, "."
@@ -238,10 +257,12 @@ def test_apply_default_options() -> None:
 def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
     config = Config("u", "k", "m", 1.0, 100, {})
 
-    def setup_with_flag(flag: bool) -> Setup:
-        resolved: Result[tuple[dict[str, bool], tuple[PassDefinition, ...]], Any] = Ok(
+    def setup_with(options: dict[str, bool | int], flag: bool) -> Setup:
+        resolved: Result[
+            tuple[dict[str, bool | int], tuple[PassDefinition, ...]], Any
+        ] = Ok(
             (
-                {"ascii": False, "ensure_paragraphs": False},
+                {"ascii": False, "ensure_paragraphs": False} | options,
                 (
                     PassDefinition("unset", "i", "chunk", {}, None, None, None),
                     PassDefinition("explicit", "i", "chunk", {}, None, None, False),
@@ -253,13 +274,21 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
         assert isinstance(result, Ok)
         return result.value
 
-    setup = setup_with_flag(True)
+    setup = setup_with({}, True)
     assert setup.ensure_paragraphs
     assert [p.ensure_paragraphs for p in setup.passes] == [True, False, True]
 
-    setup = setup_with_flag(False)
+    setup = setup_with({}, False)
     assert not setup.ensure_paragraphs
     assert [p.ensure_paragraphs for p in setup.passes] == [False, False, True]
+
+    setup = setup_with({"ensure_paragraphs": 2}, False)
+    assert setup.ensure_paragraphs == 2
+    assert [p.ensure_paragraphs for p in setup.passes] == [2, False, True]
+
+    setup = setup_with({"ensure_paragraphs": 2}, True)
+    assert setup.ensure_paragraphs == 2
+    assert [p.ensure_paragraphs for p in setup.passes] == [2, False, True]
 
 
 def test_resolve_call_settings() -> None:

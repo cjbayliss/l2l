@@ -335,6 +335,19 @@ def is_json_value(value: Any) -> bool:
             return False
 
 
+def is_paragraph_tri_state(value: Any) -> bool:
+    """True for `true`, `false`, or a positive integer paragraph tolerance."""
+    match value:
+        case bool():
+            return True
+
+        case int():
+            return value > 0
+
+        case _:
+            return False
+
+
 def merged_api_settings(
     arguments: Arguments,
     environment: Mapping[str, str],
@@ -391,7 +404,7 @@ def merged_api_settings(
 
 def parse_options_table(
     path: str, table: Any
-) -> Result[dict[str, bool], TranslationError]:
+) -> Result[dict[str, bool | int], TranslationError]:
     if not isinstance(table, dict):
         return fail_config(f"{path}: [options] must be a table")
 
@@ -406,8 +419,11 @@ def parse_options_table(
         return fail_config(f"{path}: [options] ascii must be true or false")
 
     ensure_paragraphs = table.get("ensure_paragraphs", False)
-    if not isinstance(ensure_paragraphs, bool):
-        return fail_config(f"{path}: [options] ensure_paragraphs must be true or false")
+    if not is_paragraph_tri_state(ensure_paragraphs):
+        return fail_config(
+            f"{path}: [options] ensure_paragraphs must be true, false, "
+            "or a positive integer"
+        )
 
     return Ok({"ascii": ascii_value, "ensure_paragraphs": ensure_paragraphs})
 
@@ -426,11 +442,12 @@ def pass_definition_from(
         return fail_config(f"{path}: [[pass]] {name}: ascii must be true or false")
 
     ensure_paragraphs_value = table.get("ensure_paragraphs")
-    if ensure_paragraphs_value is not None and not isinstance(
-        ensure_paragraphs_value, bool
+    if ensure_paragraphs_value is not None and not is_paragraph_tri_state(
+        ensure_paragraphs_value
     ):
         return fail_config(
-            f"{path}: [[pass]] {name}: ensure_paragraphs must be true or false"
+            f"{path}: [[pass]] {name}: ensure_paragraphs must be true, false, "
+            "or a positive integer"
         )
 
     model = table.get("model")
@@ -461,10 +478,11 @@ def pass_definition_from(
 
 def apply_default_options(
     pass_definitions: tuple[PassDefinition, ...],
-    options: Mapping[str, bool],
-    ensure_paragraphs_flag: bool,
+    options: Mapping[str, bool | int],
+    ensure_paragraphs_flag: bool | int,
 ) -> tuple[PassDefinition, ...]:
-    ascii_default = options.get("ascii", False)
+    ascii_option = options.get("ascii", False)
+    ascii_default = ascii_option if isinstance(ascii_option, bool) else False
     ensure_default = options.get("ensure_paragraphs", False) or ensure_paragraphs_flag
     return tuple(
         replace(
@@ -608,8 +626,10 @@ def resolve_passes(
     user_document_result: Result[dict[str, Any], TranslationError],
     selected_path: str | None,
     selected_document_result: Result[dict[str, Any], TranslationError],
-) -> IO[Result[tuple[dict[str, bool], tuple[PassDefinition, ...]], TranslationError]]:
-    pair_type = tuple[dict[str, bool], tuple[PassDefinition, ...]]
+) -> IO[
+    Result[tuple[dict[str, bool | int], tuple[PassDefinition, ...]], TranslationError]
+]:
+    pair_type = tuple[dict[str, bool | int], tuple[PassDefinition, ...]]
 
     def resolve(
         documents: tuple[dict[str, Any], dict[str, Any]],
@@ -625,7 +645,7 @@ def resolve_passes(
             )
 
         option_sources = tuple(layer for layer in layers if "options" in layer[1])
-        options: Result[dict[str, bool], TranslationError]
+        options: Result[dict[str, bool | int], TranslationError]
         if option_sources:
             option_path, option_document = option_sources[0]
             options = parse_options_table(option_path or "", option_document["options"])
@@ -702,7 +722,7 @@ def resolve_config_path(
 
 
 DocumentResult = Result[dict[str, Any], TranslationError]
-ResolvedPasses = tuple[dict[str, bool], tuple[PassDefinition, ...]]
+ResolvedPasses = tuple[dict[str, bool | int], tuple[PassDefinition, ...]]
 SetupResult = Result[Setup, TranslationError]
 
 

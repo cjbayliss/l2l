@@ -60,6 +60,7 @@ from l2l.plans import (
 from l2l.settings import (
     Context,
     PassDefinition,
+    paragraph_tolerance,
     pass_salt,
     resolve_call_settings,
 )
@@ -274,8 +275,18 @@ def run_unit(
     analysis: str | None,
     usage: Usage,
 ) -> IO[Result[UnitResult, TranslationError]]:
+    def unit_tolerance() -> int | None:
+        match pass_definition.mode:
+            case "paragraph":
+                return 0
+
+            case _:
+                return paragraph_tolerance(pass_definition.ensure_paragraphs)
+
     def validate(output: str) -> Maybe[str]:
-        return unit_output_problem(call.source_chunk, output, ctx.settings)
+        return unit_output_problem(
+            call.source_chunk, output, ctx.settings, unit_tolerance()
+        )
 
     def build_retry_user(bad_output: str, problem: str) -> str:
         return build_unit_retry_user(
@@ -511,20 +522,25 @@ def run_text_pass(
             paragraph_plan,
         )
 
-    if not pass_definition.ensure_paragraphs:
+    tolerance = paragraph_tolerance(pass_definition.ensure_paragraphs)
+
+    if tolerance is None:
         return attempt(pass_definition, state, started_at)
 
     def mismatch_message(count: int, action: str) -> str:
         return paragraph_mismatch_message(
-            pass_definition.name, count, len(source_paragraphs), action
+            pass_definition.name, count, len(source_paragraphs), tolerance, action
         )
+
+    def accepted(count: int) -> bool:
+        return abs(count - len(source_paragraphs)) <= tolerance
 
     def after_retry(result: StateResult) -> IO[StateResult]:
         if isinstance(result, Err):
             return io_result(result)
 
         count = count_paragraphs(result.value.text)
-        if count == len(source_paragraphs):
+        if accepted(count):
             return io_result(result)
 
         return io_map(
@@ -541,7 +557,7 @@ def run_text_pass(
             return io_result(result)
 
         count = count_paragraphs(result.value.text)
-        if count == len(source_paragraphs):
+        if accepted(count):
             return io_result(result)
 
         match pass_definition.mode:

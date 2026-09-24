@@ -85,12 +85,14 @@ def pass_started_message(number: int, total: int, pass_name: str) -> str:
 
 
 def paragraph_mismatch_message(
-    pass_name: str, count: int, source: int, action: str
+    pass_name: str, count: int, source: int, tolerance: int, action: str
 ) -> str:
-    return "l2l: [%s] output has %d paragraph(s), source has %d; %s" % (
+    allowed = "" if tolerance <= 0 else " (allowed ±%d)" % tolerance
+    return "l2l: [%s] output has %d paragraph(s), source has %d%s; %s" % (
         pass_name,
         count,
         source,
+        allowed,
         action,
     )
 

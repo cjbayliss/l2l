@@ -49,7 +49,7 @@ USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 def chunk_pass(
     name: str = "translate",
     ascii_output: bool = False,
-    ensure_paragraphs: bool = False,
+    ensure_paragraphs: bool | int = False,
 ) -> PassDefinition:
     return PassDefinition(
         name, "T.", "chunk", {}, None, ascii_output, ensure_paragraphs
@@ -473,12 +473,86 @@ def test_unit_validation_repairs_dropped_chunk_paragraph() -> None:
     )
     ctx = make_context(console, http.open)
     stdout = io.StringIO()
-    code = run_pipeline(ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout).run()
+    code = run_pipeline(
+        ctx, (chunk_pass(ensure_paragraphs=True),), "你好。\n\n世界。", 0.0, stdout
+    ).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nWorld.\n"
     assert len(http.requests) == 2
     retry_user = json.loads(http.requests[1].data)["messages"][1]["content"]
     assert "has 1 paragraph(s) but the source has 2" in retry_user
+
+
+def test_paragraph_check_disabled_without_ensure_paragraphs() -> None:
+    console, stderr = make_console()
+    http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n"
+    assert len(http.requests) == 1
+    assert "paragraph(s), source has" not in stderr.getvalue()
+
+
+def test_ensure_paragraphs_tolerance_accepts_small_drift() -> None:
+    console, stderr = make_console()
+    drifting = "One.\n\nTwo.\n\nThree."
+    http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks(drifting), USAGE))])
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx, (chunk_pass(ensure_paragraphs=1),), "你好。\n\n世界。", 0.0, stdout
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == drifting + "\n"
+    assert len(http.requests) == 1
+    assert "output has" not in stderr.getvalue()
+
+
+def test_ensure_paragraphs_tolerance_exceeded_retries_in_paragraph_mode() -> None:
+    console, stderr = make_console()
+    wild = "One.\n\nTwo.\n\nThree.\n\nFour."
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks(wild), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(wild), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(wild), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx, (chunk_pass(ensure_paragraphs=1),), "你好。\n\n世界。", 0.0, stdout
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\nWorld.\n"
+    logged = stderr.getvalue()
+    assert "output has 4 paragraph(s), source has 2 (allowed ±1)" in logged
+    assert "re-running the pass with one call per paragraph" in logged
+    assert len(http.requests) == 5
+
+
+def test_paragraph_mode_stays_strict_despite_tolerance() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("One.\n\nTwo."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("One."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    merged = PassDefinition("translate", "T.", "paragraph", {}, None, False, 2)
+    code = run_pipeline(ctx, (merged,), "你好。", 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "One.\n"
+    assert len(http.requests) == 2
+    retry_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    assert "has 2 paragraph(s) but the source has 1" in retry_user
+    assert "(allowed" not in retry_user
 
 
 def test_unit_validation_rejects_implausible_length() -> None:
