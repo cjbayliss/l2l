@@ -9,7 +9,7 @@ from typing import Any, Literal
 from l2l.console import Console, StatusLine
 from l2l.effects import RunLog
 from l2l.errors import TranslationError
-from l2l.monads import NOTHING, Ok, Result, write_ref
+from l2l.monads import IO, NOTHING, Ok, Result, write_ref
 from l2l.settings import Config, Context, build_settings
 
 SLEEPS: list[float] = []
@@ -74,8 +74,16 @@ def make_console(
     term_size: Callable[[], tuple[int, int]] | None = None,
 ) -> tuple[Console, io.StringIO]:
     stream = io.StringIO()
-    size = term_size if term_size is not None else lambda: (80, 24)
-    console = Console(stream, StatusLine(stream, live=live), term_size=size)
+
+    def default_size() -> tuple[int, int]:
+        return 80, 24
+
+    size = term_size if term_size is not None else default_size
+    console = Console(
+        stream,
+        StatusLine(stream, live=live),
+        term_size=lambda: IO(lambda: size()),
+    )
     return console, stream
 
 

@@ -28,7 +28,7 @@ from l2l.console import (
     terminal_size,
     toggle_verbose,
 )
-from l2l.monads import cons_to_tuple, write_ref
+from l2l.monads import IO, cons_to_tuple, write_ref
 
 
 def test_status_line_text_renders_prefix_and_values() -> None:
@@ -242,7 +242,11 @@ def test_status_line_raw_without_live_still_writes() -> None:
 
 def make_live_console() -> tuple[Console, io.StringIO]:
     stream = io.StringIO()
-    console = Console(stream, StatusLine(stream, live=True), term_size=lambda: (80, 24))
+    console = Console(
+        stream,
+        StatusLine(stream, live=True),
+        term_size=lambda: IO(lambda: (80, 24)),
+    )
     return console, stream
 
 
@@ -474,6 +478,6 @@ def test_status_line_interrupt_erases_and_never_loops() -> None:
 
 
 def test_terminal_size_reports_positive_dimensions() -> None:
-    width, height = terminal_size()
+    width, height = terminal_size().run()
     assert width >= 1
     assert height >= 1
