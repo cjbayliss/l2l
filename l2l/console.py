@@ -325,15 +325,20 @@ class LogEvent:
     rows: int
 
 
-def terminal_size() -> tuple[int, int]:
-    try:
-        size = os.get_terminal_size(sys.stderr.fileno())
-    except OSError, ValueError, AttributeError:
-        size = shutil.get_terminal_size()
+def terminal_size() -> IO[tuple[int, int]]:
+    """Probe the controlling terminal's dimensions as an IO value."""
 
-    columns = size.columns if size.columns > 0 else 80
-    lines = size.lines if size.lines > 0 else 24
-    return columns, lines
+    def probe() -> tuple[int, int]:
+        try:
+            size = os.get_terminal_size(sys.stderr.fileno())
+        except OSError, ValueError, AttributeError:
+            size = shutil.get_terminal_size()
+
+        columns = size.columns if size.columns > 0 else 80
+        lines = size.lines if size.lines > 0 else 24
+        return columns, lines
+
+    return IO(probe)
 
 
 def display_width(text: str) -> int:
@@ -414,7 +419,7 @@ class Console:
     events: Ref[Cons[LogEvent] | None] = field(default_factory=lambda: Ref(None))
     pending_raw: Ref[str] = field(default_factory=lambda: Ref(""))
     displayed_rows: Ref[int] = field(default_factory=lambda: Ref(0))
-    term_size: Callable[[], tuple[int, int]] = terminal_size
+    term_size: Callable[[], IO[tuple[int, int]]] = terminal_size
 
     def session_events(self) -> tuple[LogEvent, ...]:
         """Snapshot the recorded events in chronological order."""
@@ -424,30 +429,38 @@ class Console:
         """Append a session event; compose inside a status-lock `io_atomic`."""
 
         def tracked(
-            events: Cons[LogEvent] | None,
-        ) -> tuple[Cons[LogEvent] | None, IO[None]]:
-            event = LogEvent(
-                text=text,
-                verbose_only=verbose_only,
-                raw=raw,
-                rows=row_count(text, self.term_size()[0]),
-            )
-
-            def counted(verbose: bool) -> IO[None]:
-                if raw or verbose_only and not verbose:
-                    return io_pure(None)
-
-                return io_map(
-                    modify_ref(self.displayed_rows, lambda rows: rows + event.rows),
-                    lambda _: None,
+            width: int,
+        ) -> Callable[[Cons[LogEvent] | None], tuple[Cons[LogEvent] | None, IO[None]]]:
+            def step(
+                events: Cons[LogEvent] | None,
+            ) -> tuple[Cons[LogEvent] | None, IO[None]]:
+                event = LogEvent(
+                    text=text,
+                    verbose_only=verbose_only,
+                    raw=raw,
+                    rows=row_count(text, width),
                 )
 
-            return Cons(event, events), io_bind(read_ref(self.verbose), counted)
+                def counted(verbose: bool) -> IO[None]:
+                    if raw or verbose_only and not verbose:
+                        return io_pure(None)
+
+                    return io_map(
+                        modify_ref(self.displayed_rows, lambda rows: rows + event.rows),
+                        lambda _: None,
+                    )
+
+                return Cons(event, events), io_bind(read_ref(self.verbose), counted)
+
+            return step
 
         def emit(effect: IO[None]) -> IO[None]:
             return effect
 
-        return io_bind(modify_ref_with(self.events, tracked), emit)
+        return io_bind(
+            io_map(self.term_size(), lambda size: size[0]),
+            lambda width: io_bind(modify_ref_with(self.events, tracked(width)), emit),
+        )
 
     def commit_pending_raw(self) -> IO[None]:
         """Seal an open reasoning block; compose inside a locked scope."""
@@ -520,9 +533,7 @@ class Console:
                     if not verbose:
                         return io_pure(None)
 
-                    width = self.term_size()[0]
-
-                    def counted(_: None) -> IO[None]:
+                    def counted(width: int) -> IO[None]:
                         return io_map(
                             modify_ref(
                                 self.displayed_rows,
@@ -535,12 +546,15 @@ class Console:
                             lambda _: None,
                         )
 
-                    return io_and_then(
-                        io_and_then(
-                            self.status.begin_raw_action(),
-                            self.status.write_raw_action(text),
+                    return io_bind(
+                        io_map(self.term_size(), lambda size: size[0]),
+                        lambda width: io_and_then(
+                            io_and_then(
+                                self.status.begin_raw_action(),
+                                self.status.write_raw_action(text),
+                            ),
+                            counted(width),
                         ),
-                        counted(None),
                     )
 
                 return io_and_then(
@@ -586,9 +600,10 @@ class Console:
                 tuple[bool, tuple[tuple[LogEvent, ...], str]],
                 tuple[int, StatusView],
             ],
+            size: tuple[int, int],
         ) -> IO[None]:
             (verbose, (events, pending)), (shown_rows, view) = inputs
-            width, height = self.term_size()
+            width, height = size
             inside = view.raw and view.raw_open
             erase = status_erase_text(view) + (
                 "\r" + erase_rows_render(shown_rows - 1, height)
@@ -625,7 +640,15 @@ class Console:
             )
 
         def act(_: None) -> IO[None]:
-            return io_atomic(self.status.lock, io_bind(snapshot(), render))
+            def sized(
+                inputs: tuple[
+                    tuple[bool, tuple[tuple[LogEvent, ...], str]],
+                    tuple[int, StatusView],
+                ],
+            ) -> IO[None]:
+                return io_bind(self.term_size(), lambda size: render(inputs, size))
+
+            return io_atomic(self.status.lock, io_bind(snapshot(), sized))
 
         return io_when_unit(self.status.live, act(None))
 

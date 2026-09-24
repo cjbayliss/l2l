@@ -102,6 +102,19 @@ EFFECT_IMPORT_ALLOWLIST: dict[str, frozenset[str]] = {
     "text": frozenset({"os"}),
 }
 
+# Builtin calls that need no import, so the import allowlist cannot see
+# them: `open` lives only in `effects`, `print` only in `cli` (the
+# program edge); the rest are banned everywhere.
+BUILTIN_CALL_EDGES: dict[str, frozenset[str]] = {
+    "__import__": frozenset(),
+    "breakpoint": frozenset(),
+    "eval": frozenset(),
+    "exec": frozenset(),
+    "input": frozenset(),
+    "open": frozenset({"effects"}),
+    "print": frozenset({"cli"}),
+}
+
 # Container methods that mutate their receiver.
 MUTATING_METHODS = frozenset(
     {
@@ -398,4 +411,27 @@ def test_effect_import_allowlist_stays_current() -> None:
     assert frozenset(EFFECT_IMPORT_ALLOWLIST) <= module_names()
     assert all(
         effects <= EFFECT_MODULES for effects in EFFECT_IMPORT_ALLOWLIST.values()
+    )
+
+
+def banned_builtin_calls(tree: ast.Module) -> list[tuple[int, str]]:
+    """Bare calls to effectful builtins, with their locations."""
+    return [
+        (node.lineno, node.func.id)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in BUILTIN_CALL_EDGES
+    ]
+
+
+def test_builtin_effect_calls_stay_at_the_edges() -> None:
+    problems = [
+        f"{name}:{lineno} calls {call!r}"
+        for name in sorted(module_names())
+        for lineno, call in banned_builtin_calls(parse_module(name))
+        if name not in BUILTIN_CALL_EDGES[call]
+    ]
+    assert not problems, (
+        f"builtin effect calls outside sanctioned edges: {'; '.join(problems)}"
     )

@@ -15,7 +15,11 @@ code that passes them the first time.
    (`IO(lambda: ...)`) from `l2l.monads`, compose with `io_bind`,
    `io_map`, `io_and_then`, `fold_io`, `io_traverse`, ... and never call
    `.run()` outside `l2l/cli.py` (the program edge) and `l2l/monads.py`
-   (the combinator runners).
+   (the combinator runners). Raw effect *sources* (`Clock`, `Sleep`,
+   terminal probes) are capability callables: inject them as parameters
+   or frozen-field defaults, call them only inside IO thunks, and give
+   any new source an `IO`-returning wrapper (see `terminal_size` in
+   `l2l/console.py`).
 
 3. **Errors are values.** Return `Result` (`Ok`/`Err`) or `Maybe`
    (`Just`/`Nothing`) instead of raising. Build errors with the
@@ -57,8 +61,12 @@ code that passes them the first time.
 - IO composition: fake effects (`tests/fakes.py`), run the composed
   `IO` once at the end, assert on captured outputs.
 - Architecture: `tests/test_architecture.py` enforces the rules above
-  via AST. If you add a sanctioned exception, extend the allowlist
-  tables there deliberately — never weaken the checks.
+  via AST — layering, `IO.run` edges, frozen dataclasses, no
+  `global`/`nonlocal`, no mutation outside `Ref`, no `raise`, and
+  effectful imports and builtin calls (`open`, `print`, `eval`, ...)
+  confined to their sanctioned edges. If you add a sanctioned
+  exception, extend the allowlist tables there deliberately — never
+  weaken the checks.
 
 ## Before you finish
 
