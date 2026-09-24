@@ -76,16 +76,21 @@ def test_start_tab_listener_toggles_and_restores(
     saved = termios.tcgetattr(slave)
     stop = start_tab_listener(console, toggler(console)).run()
     try:
-        assert console.verbose.value is False
+        # Assert through locals: the listener thread mutates the Ref, and
+        # mypy's narrowing of the attribute chain cannot see that.
+        start_verbose: bool = console.verbose.value
+        assert start_verbose is False
         os.write(master, b"\t")
         deadline = time.monotonic() + 5.0
         while console.verbose.value is False and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert console.verbose.value is True
+        toggled_verbose: bool = console.verbose.value
+        assert toggled_verbose is True
 
         os.write(master, b"x")
         time.sleep(0.2)
-        assert console.verbose.value is True
+        still_verbose: bool = console.verbose.value
+        assert still_verbose is True
         assert stream.getvalue() == ""
     finally:
         stop.run()

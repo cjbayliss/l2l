@@ -1,6 +1,6 @@
 # l2l
 
-IMPORTANT: This project is created using an LLM (mostly GLM 5.3 Flash)
+**NOTE:** This project is created using an LLM (mostly GLM 5.3 Flash)
 
 l2l is a command-line translator: it reads text from stdin, translates
 it, and writes the result to stdout, using any OpenAI-compatible chat
