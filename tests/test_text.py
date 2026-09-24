@@ -21,6 +21,8 @@ from l2l.text import (
     drop_non_ascii,
     ensure_blank_line_separators,
     estimate_tokens,
+    excerpt,
+    has_letters,
     is_cjk_char,
     make_chunks,
     non_ascii_sample,
@@ -32,6 +34,7 @@ from l2l.text import (
     split_units_to_budget,
     to_ascii_mechanical,
     unit_separators,
+    untranslated_paragraph,
     usage_add,
     usage_delta,
 )
@@ -281,3 +284,38 @@ def test_build_ascii_retry_user_is_language_agnostic() -> None:
     assert "é" in user
     assert "原文" in user
     assert "output" in user
+
+
+def test_has_letters() -> None:
+    assert has_letters("你好。")
+    assert has_letters("Hello.")
+    assert not has_letters("12.3")
+    assert not has_letters("--- ……")
+
+
+def test_untranslated_paragraph_flags_echo_with_punctuation_drift() -> None:
+    character_map = build_settings().ascii_character_map
+    source = "你好，世界！"
+    assert untranslated_paragraph(source, "你好，世界！", character_map)
+    assert untranslated_paragraph(source, "你好,世界!  ", character_map)
+    assert not untranslated_paragraph(source, "Hello, world!", character_map)
+    assert not untranslated_paragraph(source, "Hi. World.", character_map)
+
+
+def test_untranslated_paragraph_flags_output_without_ascii_letters() -> None:
+    character_map = build_settings().ascii_character_map
+    assert untranslated_paragraph("你好。", "。", character_map)
+    assert untranslated_paragraph("你好。", "……", character_map)
+    assert untranslated_paragraph("你好。", "", character_map)
+
+
+def test_untranslated_paragraph_ignores_letterless_sources() -> None:
+    character_map = build_settings().ascii_character_map
+    for source in ("12", "---", "……", "...!"):
+        assert not untranslated_paragraph(source, source, character_map)
+
+
+def test_excerpt_collapses_and_truncates() -> None:
+    assert excerpt("a\n\n b\tc") == "a b c"
+    assert excerpt("x" * 80) == "x" * 60 + "..."
+    assert excerpt("short") == "short"

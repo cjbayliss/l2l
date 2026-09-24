@@ -37,6 +37,7 @@ from l2l.pipeline import analyze_document, run_pipeline
 from l2l.plans import (
     ascii_drop_warning,
     plan_report,
+    plan_retranslation_calls,
     plan_unit_calls,
     resolve_work_groups,
 )
@@ -50,9 +51,17 @@ def chunk_pass(
     name: str = "translate",
     ascii_output: bool = False,
     ensure_paragraphs: bool | int = False,
+    retranslate_untranslated: bool = False,
 ) -> PassDefinition:
     return PassDefinition(
-        name, "T.", "chunk", {}, None, ascii_output, ensure_paragraphs
+        name,
+        "T.",
+        "chunk",
+        {},
+        None,
+        ascii_output,
+        ensure_paragraphs,
+        retranslate_untranslated,
     )
 
 
@@ -102,6 +111,22 @@ def test_plan_unit_calls_builds_keys_and_context() -> None:
     assert [call.context for call in calls] == [("二。",), ("一。", "三。"), ("二。",)]
     assert [call.trailing_separator for call in calls] == ["s1", "s2", ""]
     assert len({call.key for call in calls}) == 3
+
+
+def test_plan_retranslation_calls_targets_flagged_paragraphs() -> None:
+    console, _ = make_console()
+    ctx = make_context(console, FakeHttp([]).open)
+    sources = ("一。", "二。", "三。")
+    calls = plan_retranslation_calls(
+        ctx, paragraph_pass(), sources, sources, (0, 2), ("s1", "s2", "s3")
+    )
+    assert [call.source_chunk for call in calls] == ["一。", "三。"]
+    assert [call.work_chunk for call in calls] == ["一。", "三。"]
+    assert [call.index for call in calls] == [0, 1]
+    assert [call.total for call in calls] == [2, 2]
+    assert [call.trailing_separator for call in calls] == ["s1", "s3"]
+    assert [call.context for call in calls] == [("二。",), ("二。",)]
+    assert len({call.key for call in calls}) == 2
 
 
 def test_fold_io_short_circuits_on_error() -> None:
@@ -233,6 +258,214 @@ def test_run_pipeline_drops_non_ascii_after_failed_repairs() -> None:
     logged = stderr.getvalue()
     assert "still contained non-ASCII characters (中) after 3 LLM attempts" in logged
     assert len(http.requests) == 4
+
+
+def test_retranslation_retranslates_echoed_paragraphs() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("你好。\n\n世界。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(retranslate_untranslated=True),),
+        "你好。\n\n世界。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\nWorld.\n"
+    assert len(http.requests) == 3
+    logged = stderr.getvalue()
+    assert "2 of 2 paragraph(s) look untranslated" in logged
+    first_retry = json.loads(http.requests[1].data)
+    assert first_retry["messages"][0]["content"] == "T."
+    retry_user = first_retry["messages"][1]["content"]
+    assert retry_user.startswith("Context paragraphs (reference only")
+    assert "世界。" in retry_user
+    assert retry_user.endswith("你好。")
+
+
+def test_retranslation_retranslates_only_flagged_paragraphs() -> None:
+    console, _ = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("Hello.\n\n世界。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(retranslate_untranslated=True),),
+        "你好。\n\n世界。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\nWorld.\n"
+    assert len(http.requests) == 2
+
+
+def test_retranslation_fails_when_paragraph_still_untranslated() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("你好。\n\n世界。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("你好。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("世界。"), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(retranslate_untranslated=True),),
+        "你好。\n\n世界。",
+        0.0,
+        io.StringIO(),
+    ).run()
+    assert code == 1
+    logged = stderr.getvalue()
+    assert "still untranslated after retranslation" in logged
+    assert "你好。" in logged
+
+
+def test_retranslation_disabled_by_default() -> None:
+    console, _ = make_console()
+    http = FakeHttp(
+        [FakeStreamResponse(with_usage(stream_chunks("你好。\n\n世界。"), USAGE))]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(ctx, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "你好。\n\n世界。\n"
+    assert len(http.requests) == 1
+
+
+def test_retranslation_skipped_when_paragraph_count_differs() -> None:
+    console, _ = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(
+                with_usage(stream_chunks("Hello.\n\n世界。\n\n世界。"), USAGE)
+            )
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(retranslate_untranslated=True),),
+        "你好。\n\n世界。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert len(http.requests) == 1
+
+
+def test_retranslation_ignores_letterless_paragraphs() -> None:
+    console, _ = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("你好。\n\n123"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(retranslate_untranslated=True),),
+        "你好。\n\n123",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\n123\n"
+    assert len(http.requests) == 2
+
+
+def test_retranslation_runs_before_ascii_enforcement() -> None:
+    console, _ = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("你好，世界。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks('Hello, "world".'), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(ascii_output=True, retranslate_untranslated=True),),
+        "你好，世界。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == 'Hello, "world".\n'
+    assert len(http.requests) == 2
+
+
+def test_retranslation_results_are_cached(tmp_path: Path) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+
+    def run() -> tuple[int, str, int]:
+        console, _ = make_console()
+        http = FakeHttp(
+            [
+                FakeStreamResponse(
+                    with_usage(stream_chunks("你好。\n\n世界。"), USAGE)
+                ),
+                FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+                FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
+            ]
+        )
+        ctx = make_context(
+            console,
+            http.open,
+            cache_directory=str(cache_directory),
+            use_cache=True,
+        )
+        stdout = io.StringIO()
+        code = run_pipeline(
+            ctx,
+            (chunk_pass(retranslate_untranslated=True),),
+            "你好。\n\n世界。",
+            0.0,
+            stdout,
+        ).run()
+        return code, stdout.getvalue(), len(http.requests)
+
+    first_code, first_output, first_calls = run()
+    second_code, second_output, second_calls = run()
+    assert (first_code, second_code) == (0, 0)
+    assert (first_calls, second_calls) == (3, 0)
+    assert first_output == second_output == "Hello.\n\nWorld.\n"
+
+
+def test_retranslation_skips_analysis_passes() -> None:
+    console, _ = make_console()
+    brief = with_usage(stream_chunks("Brief."), USAGE)
+    http = FakeHttp([FakeStreamResponse(brief)])
+    ctx = make_context(console, http.open)
+    analysis = PassDefinition(
+        "prep", "Summarise.", "analysis", {}, None, False, None, True
+    )
+    stdout = io.StringIO()
+    code = run_pipeline(ctx, (analysis,), "你好。", 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "你好。\n"
+    assert len(http.requests) == 1
 
 
 def test_run_pipeline_translates() -> None:

@@ -67,9 +67,24 @@ class AsciiError:
     inner: TranslationError
 
 
+@dataclass(frozen=True)
+class UntranslatedError:
+    """A paragraph is still untranslated after retranslation."""
+
+    pass_name: str
+    index: int
+    sample: str
+
+
 type SetupError = ConfigError | MissingSettings
 type TranslationError = (
-    SetupError | HttpError | BudgetError | PassError | UnitError | AsciiError
+    SetupError
+    | HttpError
+    | BudgetError
+    | PassError
+    | UnitError
+    | AsciiError
+    | UntranslatedError
 )
 
 
@@ -108,6 +123,10 @@ def fail_unit(
 
 def fail_ascii(pass_name: str, inner: TranslationError) -> Err[TranslationError]:
     return Err(AsciiError(pass_name, inner))
+
+
+def fail_untranslated(pass_name: str, index: int, sample: str) -> Err[TranslationError]:
+    return Err(UntranslatedError(pass_name, index, sample))
 
 
 def describe_http(error: HttpError) -> str:
@@ -172,6 +191,12 @@ def describe(error: TranslationError) -> str:
             return (
                 f"l2l: pass [{error.pass_name}] ascii enforcement failed: "
                 f"{describe(error.inner)}"
+            )
+
+        case UntranslatedError():
+            return (
+                "l2l: pass [%s] paragraph %d is still untranslated after "
+                "retranslation: %r" % (error.pass_name, error.index + 1, error.sample)
             )
 
         case other:

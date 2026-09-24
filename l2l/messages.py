@@ -127,5 +127,28 @@ def ascii_llm_message(index: int, total: int) -> str:
     )
 
 
+def retranslate_info_message(pass_name: str, flagged: int, total: int) -> str:
+    return "l2l: [%s] %d of %d paragraph(s) look untranslated; retranslating them" % (
+        pass_name,
+        flagged,
+        total,
+    )
+
+
+def retranslate_skipped_message(pass_name: str, found: int, source: int) -> str:
+    return (
+        "l2l: [%s] output has %d paragraph(s) but the source has %d; "
+        "skipping the untranslated-paragraph check" % (pass_name, found, source)
+    )
+
+
+def retranslate_unit_message(pass_name: str, index: int, total: int) -> str:
+    return "l2l: [%s] retranslating flagged paragraph %d/%d" % (
+        pass_name,
+        index + 1,
+        total,
+    )
+
+
 def done_in_message(elapsed: float) -> str:
     return f"l2l: done in {elapsed:.1f}s"
