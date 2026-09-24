@@ -212,11 +212,18 @@ def parse_cost(value: Any) -> float:
     return maybe_or_else_get(parse_float(value), lambda: 0.0)
 
 
+def parse_tokens(value: Any) -> int:
+    """Token reports get the same defensive parse as costs: endpoints
+    occasionally report numeric strings or floats, and an uncoerced value
+    would crash usage accumulation mid-run."""
+    return int(maybe_or_else_get(parse_float(value), lambda: 0.0))
+
+
 def add_usage(usage: Usage, reported: Mapping[str, Any]) -> Usage:
     return Usage(
-        prompt_tokens=usage.prompt_tokens + (reported.get("prompt_tokens") or 0),
+        prompt_tokens=usage.prompt_tokens + parse_tokens(reported.get("prompt_tokens")),
         completion_tokens=usage.completion_tokens
-        + (reported.get("completion_tokens") or 0),
+        + parse_tokens(reported.get("completion_tokens")),
         cost=usage.cost + parse_cost(reported.get("cost")),
     )
 
