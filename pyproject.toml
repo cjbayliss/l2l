@@ -40,7 +40,7 @@ line-length = 88
 target-version = "py314"
 
 [tool.ruff.lint]
-select = ["C4", "E", "F", "PERF", "FURB", "W", "I", "B", "SIM", "RET", "UP"]
+select = ["C4", "E", "F", "PERF", "FURB", "W", "I", "B", "SIM", "RET", "UP", "PLW0602", "PLW0603"]
 ignore = [
     # The package standardises on printf-style formatting.
     "UP031",
@@ -50,6 +50,7 @@ ignore = [
 
 [tool.mypy]
 strict = true
+warn_unreachable = true
 python_version = "3.14"
 mypy_path = [".", "tests"]
 files = ["l2l", "tests"]

@@ -393,8 +393,12 @@ def test_toggle_off_mid_raw_clears_only_the_open_row() -> None:
 
     toggle_verbose(console).run()
     assert stream.getvalue() == "thinking" + "\r" + "\x1b[J" + "thinking"
-    assert console.status.view.value.raw is True
-    assert console.status.view.value.raw_open is True
+    # Read through locals: the Ref was mutated by the IO action, and mypy's
+    # narrowing of the attribute chain cannot see that.
+    raw_now: bool = console.status.view.value.raw
+    raw_open_now: bool = console.status.view.value.raw_open
+    assert raw_now is True
+    assert raw_open_now is True
 
 
 def test_toggle_off_erases_shown_reasoning_and_replays_from_events() -> None:
