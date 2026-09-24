@@ -421,10 +421,6 @@ class Console:
     displayed_rows: Ref[int] = field(default_factory=lambda: Ref(0))
     term_size: Callable[[], IO[tuple[int, int]]] = terminal_size
 
-    def session_events(self) -> tuple[LogEvent, ...]:
-        """Snapshot the recorded events in chronological order."""
-        return cons_to_tuple(self.events.value)
-
     def record(self, text: str, verbose_only: bool, raw: bool) -> IO[None]:
         """Append a session event; compose inside a status-lock `io_atomic`."""
 

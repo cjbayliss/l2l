@@ -28,6 +28,7 @@ from l2l.text import cache_path
 
 Clock = Callable[[], float]
 Sleep = Callable[[float], None]
+PidGetter = Callable[[], int]
 
 
 def now(clock: Clock) -> IO[float]:
@@ -170,18 +171,18 @@ class RunLog:
     close: Callable[[], None] = _no_close
 
 
-def run_log_path(cache_directory: str, now_value: float) -> str:
+def run_log_path(cache_directory: str, now_value: float, pid_getter: PidGetter) -> str:
     return os.path.join(
         cache_directory,
         "logs",
         "%s-%d.log"
-        % (time.strftime("%Y%m%d-%H%M%S", time.gmtime(now_value)), os.getpid()),
+        % (time.strftime("%Y%m%d-%H%M%S", time.gmtime(now_value)), pid_getter()),
     )
 
 
 def open_run_log(cache_directory: str, clock: Clock) -> IO[RunLog]:
     def thunk() -> RunLog:
-        path = run_log_path(cache_directory, clock())
+        path = run_log_path(cache_directory, clock(), os.getpid)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         # The handle intentionally outlives this scope; `close_run_log` closes it.
         handle = open(path, "a", encoding="utf-8")  # noqa: SIM115
