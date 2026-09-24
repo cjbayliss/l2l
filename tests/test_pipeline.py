@@ -468,6 +468,19 @@ def test_retranslation_skips_analysis_passes() -> None:
     assert len(http.requests) == 1
 
 
+def test_ascii_enforcement_skips_analysis_passes() -> None:
+    console, _ = make_console()
+    brief = with_usage(stream_chunks("Brief."), USAGE)
+    http = FakeHttp([FakeStreamResponse(brief)])
+    ctx = make_context(console, http.open)
+    analysis = PassDefinition("prep", "Summarise.", "analysis", {}, None, True)
+    stdout = io.StringIO()
+    code = run_pipeline(ctx, (analysis,), "你好。\n\n世界。", 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "你好。\n\n世界。\n"
+    assert len(http.requests) == 1
+
+
 def test_run_pipeline_translates() -> None:
     console, stderr = make_console()
     chunks = with_usage(stream_chunks("Hello.\n\nWorld."), USAGE)
