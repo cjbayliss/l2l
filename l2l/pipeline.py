@@ -216,6 +216,12 @@ def conclude_state(
     state: State,
     source_paragraphs: tuple[str, ...],
 ) -> IO[StateResult]:
+    # An analysis pass only fills `state.analysis`; its `text` is still the
+    # untouched working document, so post-pass enforcement must not run
+    # over it (ascii would fold or rewrite the untranslated source).
+    if pass_definition.mode == "analysis":
+        return io_result(Ok(state))
+
     def ascii_stage(current: State) -> IO[StateResult]:
         if not pass_definition.ascii:
             return io_result(Ok(current))
@@ -240,10 +246,7 @@ def conclude_state(
 
         return io_bind(now(ctx.clock), enforce)
 
-    if (
-        not pass_definition.retranslate_untranslated
-        or pass_definition.mode == "analysis"
-    ):
+    if not pass_definition.retranslate_untranslated:
         return ascii_stage(state)
 
     def after_retranslation(
