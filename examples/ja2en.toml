@@ -20,3 +20,4 @@ reasoning_effort = "high"
 [options]
 ascii = true
 ensure_paragraphs = true
+retranslate_untranslated = true

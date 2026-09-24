@@ -408,7 +408,9 @@ def parse_options_table(
     if not isinstance(table, dict):
         return fail_config(f"{path}: [options] must be a table")
 
-    unknown = sorted(set(table) - {"ascii", "ensure_paragraphs"})
+    unknown = sorted(
+        set(table) - {"ascii", "ensure_paragraphs", "retranslate_untranslated"}
+    )
     if unknown:
         return fail_config(
             "{}: [options]: unknown key(s): {}".format(path, ", ".join(unknown))
@@ -425,7 +427,19 @@ def parse_options_table(
             "or a positive integer"
         )
 
-    return Ok({"ascii": ascii_value, "ensure_paragraphs": ensure_paragraphs})
+    retranslate_untranslated = table.get("retranslate_untranslated", False)
+    if not isinstance(retranslate_untranslated, bool):
+        return fail_config(
+            f"{path}: [options] retranslate_untranslated must be true or false"
+        )
+
+    return Ok(
+        {
+            "ascii": ascii_value,
+            "ensure_paragraphs": ensure_paragraphs,
+            "retranslate_untranslated": retranslate_untranslated,
+        }
+    )
 
 
 def pass_definition_from(
@@ -450,6 +464,12 @@ def pass_definition_from(
             "or a positive integer"
         )
 
+    retranslate_value = table.get("retranslate_untranslated")
+    if retranslate_value is not None and not isinstance(retranslate_value, bool):
+        return fail_config(
+            f"{path}: [[pass]] {name}: retranslate_untranslated must be true or false"
+        )
+
     model = table.get("model")
     if model is not None and (not isinstance(model, str) or not model.strip()):
         return fail_config(f"{path}: [[pass]] {name}: model must be a non-empty string")
@@ -472,6 +492,7 @@ def pass_definition_from(
             model=model.strip() if model else None,
             ascii=ascii_value,
             ensure_paragraphs=ensure_paragraphs_value,
+            retranslate_untranslated=retranslate_value,
         )
     )
 
@@ -483,6 +504,10 @@ def apply_default_options(
 ) -> tuple[PassDefinition, ...]:
     ascii_option = options.get("ascii", False)
     ascii_default = ascii_option if isinstance(ascii_option, bool) else False
+    retranslate_option = options.get("retranslate_untranslated", False)
+    retranslate_default = (
+        retranslate_option if isinstance(retranslate_option, bool) else False
+    )
     ensure_default = options.get("ensure_paragraphs", False) or ensure_paragraphs_flag
     return tuple(
         replace(
@@ -496,6 +521,11 @@ def apply_default_options(
                 ensure_default
                 if pass_definition.ensure_paragraphs is None
                 else pass_definition.ensure_paragraphs
+            ),
+            retranslate_untranslated=(
+                retranslate_default
+                if pass_definition.retranslate_untranslated is None
+                else pass_definition.retranslate_untranslated
             ),
         )
         for pass_definition in pass_definitions

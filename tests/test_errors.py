@@ -7,6 +7,7 @@ from l2l.errors import (
     PassError,
     TranslationError,
     UnitError,
+    UntranslatedError,
     describe,
     fail_ascii,
     fail_budget,
@@ -15,6 +16,7 @@ from l2l.errors import (
     fail_missing_settings,
     fail_pass,
     fail_unit,
+    fail_untranslated,
 )
 from l2l.monads import Err
 
@@ -93,6 +95,16 @@ def test_describe_ascii_error() -> None:
     assert isinstance(failure.error, AsciiError)
     assert describe(failure.error).startswith(
         "l2l: pass [translate] ascii enforcement failed: request is ~500"
+    )
+
+
+def test_describe_untranslated_error() -> None:
+    failure = fail_untranslated("translate", 2, "你好。")
+    assert isinstance(failure, Err)
+    assert isinstance(failure.error, UntranslatedError)
+    assert describe(failure.error) == (
+        "l2l: pass [translate] paragraph 3 is still untranslated after "
+        "retranslation: '你好。'"
     )
 
 

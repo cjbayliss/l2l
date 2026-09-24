@@ -40,6 +40,7 @@ class PassDefinition:
     model: str | None
     ascii: bool | None
     ensure_paragraphs: bool | int | None = None
+    retranslate_untranslated: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -200,6 +201,7 @@ PASS_KEYS = (
     "mode",
     "ascii",
     "ensure_paragraphs",
+    "retranslate_untranslated",
     "model",
     "params",
 )

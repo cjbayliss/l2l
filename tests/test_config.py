@@ -170,13 +170,16 @@ def test_validate_document() -> None:
 
 def test_parse_options_table() -> None:
     assert parse_options_table("f", {"ascii": True}) == Ok(
-        {"ascii": True, "ensure_paragraphs": False}
+        {"ascii": True, "ensure_paragraphs": False, "retranslate_untranslated": False}
     )
     assert parse_options_table("f", {"ensure_paragraphs": True}) == Ok(
-        {"ascii": False, "ensure_paragraphs": True}
+        {"ascii": False, "ensure_paragraphs": True, "retranslate_untranslated": False}
     )
     assert parse_options_table("f", {"ensure_paragraphs": 2}) == Ok(
-        {"ascii": False, "ensure_paragraphs": 2}
+        {"ascii": False, "ensure_paragraphs": 2, "retranslate_untranslated": False}
+    )
+    assert parse_options_table("f", {"retranslate_untranslated": True}) == Ok(
+        {"ascii": False, "ensure_paragraphs": False, "retranslate_untranslated": True}
     )
     assert isinstance(parse_options_table("f", {"ascii": "yes"}), Err)
     for bad in ("yes", 0, -1, 1.5, None):
@@ -185,6 +188,11 @@ def test_parse_options_table() -> None:
         assert (
             "ensure_paragraphs must be true, false, or a positive integer"
             in describe(result.error)
+        )
+        result = parse_options_table("f", {"retranslate_untranslated": bad})
+        assert isinstance(result, Err)
+        assert "retranslate_untranslated must be true or false" in describe(
+            result.error
         )
     assert isinstance(parse_options_table("f", {"other": 1}), Err)
     assert isinstance(parse_options_table("f", "x"), Err)
@@ -202,6 +210,22 @@ def test_pass_definition_from() -> None:
     assert result.value.model is None
     assert result.value.ascii is None
     assert result.value.ensure_paragraphs is None
+    assert result.value.retranslate_untranslated is None
+
+    result = pass_definition_from(
+        "f", "p", {"mode": "chunk", "retranslate_untranslated": True}, "inst"
+    )
+    assert isinstance(result, Ok)
+    assert result.value.retranslate_untranslated is True
+
+    for bad in ("yes", 0, -1, 1.5):
+        result = pass_definition_from(
+            "f", "p", {"mode": "chunk", "retranslate_untranslated": bad}, "inst"
+        )
+        assert isinstance(result, Err)
+        assert "retranslate_untranslated must be true or false" in describe(
+            result.error
+        )
 
     result = pass_definition_from(
         "f", "p", {"mode": "chunk", "ensure_paragraphs": True}, "inst"
@@ -234,23 +258,31 @@ def test_pass_definition_from() -> None:
 
 def test_apply_default_options() -> None:
     passes = (
-        PassDefinition("a", "i", "chunk", {}, None, None, None),
-        PassDefinition("b", "i", "chunk", {}, None, True, False),
+        PassDefinition("a", "i", "chunk", {}, None, None, None, None),
+        PassDefinition("b", "i", "chunk", {}, None, True, False, True),
     )
     applied = apply_default_options(
-        passes, {"ascii": True, "ensure_paragraphs": True}, False
+        passes,
+        {"ascii": True, "ensure_paragraphs": True, "retranslate_untranslated": True},
+        False,
     )
-    assert [(p.ascii, p.ensure_paragraphs) for p in applied] == [
-        (True, True),
-        (True, False),
+    assert [
+        (p.ascii, p.ensure_paragraphs, p.retranslate_untranslated) for p in applied
+    ] == [
+        (True, True, True),
+        (True, False, True),
     ]
 
     applied = apply_default_options(
-        passes, {"ascii": False, "ensure_paragraphs": False}, True
+        passes,
+        {"ascii": False, "ensure_paragraphs": False, "retranslate_untranslated": False},
+        True,
     )
-    assert [(p.ascii, p.ensure_paragraphs) for p in applied] == [
-        (False, True),
-        (True, False),
+    assert [
+        (p.ascii, p.ensure_paragraphs, p.retranslate_untranslated) for p in applied
+    ] == [
+        (False, True, False),
+        (True, False, True),
     ]
 
 
@@ -350,7 +382,11 @@ def test_resolve_passes_selection_and_options() -> None:
     result = resolve_passes("user", user, None, Ok({})).run()
     assert isinstance(result, Ok)
     options, passes = result.value
-    assert options == {"ascii": True, "ensure_paragraphs": False}
+    assert options == {
+        "ascii": True,
+        "ensure_paragraphs": False,
+        "retranslate_untranslated": False,
+    }
     assert len(passes) == 1
 
 
@@ -390,7 +426,7 @@ def test_setup_report_lists_api_and_passes() -> None:
     assert '"temperature": 1' in report
     assert (
         "pass 1/1 [translate]: mode=chunk ascii=True ensure_paragraphs=False"
-        " model=<default> instruction=2 chars" in report
+        " retranslate_untranslated=None model=<default> instruction=2 chars" in report
     )
     assert "options.ensure_paragraphs: True" in report
 

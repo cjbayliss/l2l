@@ -197,6 +197,7 @@ Optional per-pass keys:
 | `params` | `{}` | Extra request-body keys for this pass's calls, merged over `[api] params`. |
 | `ascii` | `[options] ascii` | Per-pass ASCII enforcement override. |
 | `ensure_paragraphs` | `[options] ensure_paragraphs` | Per-pass paragraph-count check override: `true` (strict), `false` (off), or a positive integer tolerance. |
+| `retranslate_untranslated` | `[options] retranslate_untranslated` | Per-pass untranslated-paragraph check override (see below). |
 
 Modes:
 
@@ -219,7 +220,8 @@ pass.
 | --- | --- | --- |
 | `ascii` | `false` | Enforce pure ASCII output. Assumes a Latin-script target language; leave it off for targets such as Russian, Greek, Japanese, or Chinese. |
 | `ensure_paragraphs` | `false` | Paragraph-count enforcement. `true` requires each pass's output to match the source paragraph count exactly, re-running a mismatching chunk-mode pass with one call per paragraph. A positive integer sets a tolerance: `ensure_paragraphs = 2` accepts outputs within ±2 paragraphs of the source and only re-runs beyond that. `false` disables the check entirely. While a pass runs, each chunk reply is also rejected (and re-asked with corrective feedback) when its paragraph count drifts beyond the tolerance; `paragraph`-mode passes always require exactly one paragraph per call. |
+| `retranslate_untranslated` | `false` | After each pass, compare every output paragraph against its source paragraph (by index). A paragraph counts as untranslated when it matches the source after mechanical ASCII folding (echoes often differ only in punctuation and whitespace) or when it contains no ASCII letters at all; sources without letters (rules, numbers) are never flagged. Flagged paragraphs are re-asked with one call each, using the pass's own instruction plus neighbouring source paragraphs as context, and retranslation results are cached like any unit. A paragraph that is still untranslated after retranslation fails the run with exit code 1. |
 
-Both toggles can be overridden per pass (`ascii` / `ensure_paragraphs`
-on a `[[pass]]` entry).
+All toggles can be overridden per pass (`ascii` / `ensure_paragraphs` /
+`retranslate_untranslated` on a `[[pass]]` entry).
 

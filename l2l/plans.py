@@ -290,6 +290,56 @@ def plan_unit_calls(
     return tuple(call(index, group) for index, group in enumerate(work_groups))
 
 
+def plan_retranslation_calls(
+    ctx: Context,
+    pass_definition: PassDefinition,
+    source_paragraphs: tuple[str, ...],
+    work_paragraphs: tuple[str, ...],
+    flagged: tuple[int, ...],
+    separators: tuple[str, ...],
+) -> tuple[UnitCall, ...]:
+    """Build one paragraph-mode call per flagged paragraph, so echoed or
+    untranslated units are re-asked with the pass's own instruction and
+    neighbouring source paragraphs as read-only context. Keys follow the
+    same shape as paragraph-mode units, so results stay cache-compatible."""
+    model, params = resolve_call_settings(ctx.config, pass_definition)
+
+    def neighbour_context(index: int) -> tuple[str, ...]:
+        context: tuple[str, ...] = ()
+        if index > 0:
+            context += (source_paragraphs[index - 1],)
+
+        if index + 1 < len(source_paragraphs):
+            context += (source_paragraphs[index + 1],)
+
+        return context
+
+    def call(position: int, index: int) -> UnitCall:
+        source_chunk = source_paragraphs[index]
+        work_chunk = work_paragraphs[index]
+        context = neighbour_context(index)
+        return UnitCall(
+            index=position,
+            total=len(flagged),
+            source_chunk=source_chunk,
+            work_chunk=work_chunk,
+            context=context,
+            key=cache_key(
+                source_chunk,
+                model,
+                pass_salt(pass_definition),
+                work_chunk,
+                overrides=params,
+                context="\n\n".join(context),
+            ),
+            trailing_separator=(separators[index] if index < len(separators) else ""),
+            model=model,
+            params=params,
+        )
+
+    return tuple(call(position, index) for position, index in enumerate(flagged))
+
+
 def plan_report(
     ctx: Context,
     pass_definitions: tuple[PassDefinition, ...],
@@ -389,7 +439,7 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
         for line in (
             (
                 "pass %d/%d [%s]: mode=%s ascii=%s ensure_paragraphs=%s "
-                "model=%s instruction=%d chars"
+                "retranslate_untranslated=%s model=%s instruction=%d chars"
                 % (
                     number,
                     len(setup.passes),
@@ -397,6 +447,7 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
                     pass_definition.mode,
                     pass_definition.ascii,
                     pass_definition.ensure_paragraphs,
+                    pass_definition.retranslate_untranslated,
                     pass_definition.model or "<default>",
                     len(pass_definition.instruction),
                 ),

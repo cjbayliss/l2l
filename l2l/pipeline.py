@@ -14,6 +14,7 @@ from l2l.errors import (
     fail_budget,
     fail_pass,
     fail_unit,
+    fail_untranslated,
 )
 from l2l.http import RepairOutcome, chat, repaired_call
 from l2l.messages import (
@@ -23,6 +24,10 @@ from l2l.messages import (
     paragraph_still_differs_message,
     pass_cache_hit_message,
     pass_started_message,
+    retranslate_info_message,
+    retranslate_skipped_message,
+    retranslate_unit_message,
+    stage_done_line,
     unit_cache_hit_message,
     unit_done_message,
     unit_failed_validation_attempt,
@@ -45,6 +50,7 @@ from l2l.monads import (
     io_result,
     io_traverse,
     maybe_either,
+    result_bind,
     result_map,
 )
 from l2l.plans import (
@@ -52,6 +58,7 @@ from l2l.plans import (
     build_pass_user,
     build_unit_retry_user,
     plan_info_message,
+    plan_retranslation_calls,
     plan_unit_calls,
     resolve_work_groups,
     unit_output_problem,
@@ -71,10 +78,12 @@ from l2l.text import (
     count_paragraphs,
     ensure_blank_line_separators,
     estimate_tokens,
+    excerpt,
     make_chunks,
     split_paragraphs,
     split_units_to_budget,
     unit_separators,
+    untranslated_paragraph,
     usage_add,
     usage_delta,
 )
@@ -207,28 +216,179 @@ def conclude_state(
     state: State,
     source_paragraphs: tuple[str, ...],
 ) -> IO[StateResult]:
-    if not pass_definition.ascii:
-        return io_result(Ok(state))
+    def ascii_stage(current: State) -> IO[StateResult]:
+        if not pass_definition.ascii:
+            return io_result(Ok(current))
 
-    def enforce(ascii_started: float) -> IO[StateResult]:
-        return io_map(
-            enforce_pass_ascii(
+        def enforce(ascii_started: float) -> IO[StateResult]:
+            return io_map(
+                enforce_pass_ascii(
+                    ctx,
+                    pass_definition,
+                    current.text,
+                    source_paragraphs,
+                    current.usage,
+                    ascii_started,
+                ),
+                lambda result: result_map(
+                    result,
+                    lambda translated: State(
+                        translated.text, state.analysis, translated.usage
+                    ),
+                ),
+            )
+
+        return io_bind(now(ctx.clock), enforce)
+
+    if (
+        not pass_definition.retranslate_untranslated
+        or pass_definition.mode == "analysis"
+    ):
+        return ascii_stage(state)
+
+    def after_retranslation(
+        result: Result[Translated, TranslationError],
+    ) -> IO[StateResult]:
+        if isinstance(result, Err):
+            return io_result(Err(result.error))
+
+        return ascii_stage(State(result.value.text, state.analysis, result.value.usage))
+
+    def retranslation_stage(retranslation_started: float) -> IO[StateResult]:
+        return io_bind(
+            retranslate_untranslated(
                 ctx,
                 pass_definition,
                 state.text,
                 source_paragraphs,
+                state.analysis,
                 state.usage,
-                ascii_started,
+                retranslation_started,
             ),
-            lambda result: result_map(
-                result,
-                lambda translated: State(
-                    translated.text, state.analysis, translated.usage
-                ),
-            ),
+            after_retranslation,
         )
 
-    return io_bind(now(ctx.clock), enforce)
+    return io_bind(now(ctx.clock), retranslation_stage)
+
+
+def retranslate_untranslated(
+    ctx: Context,
+    pass_definition: PassDefinition,
+    text: str,
+    source_paragraphs: tuple[str, ...],
+    analysis: str | None,
+    usage: Usage,
+    started_at: float,
+) -> IO[Result[Translated, TranslationError]]:
+    """Post-pass untranslated-paragraph check. Paragraphs that came back
+    untranslated (echo or no ASCII letters) are re-asked with one call
+    each, using the pass's own instruction; a paragraph that survives
+    retranslation unchanged fails the run."""
+
+    paragraphs, separators = split_paragraphs(text)
+    if len(paragraphs) != len(source_paragraphs):
+        return io_bind(
+            verbose_log(
+                ctx,
+                retranslate_skipped_message(
+                    pass_definition.name, len(paragraphs), len(source_paragraphs)
+                ),
+            ),
+            lambda _: io_result(Ok(Translated(text, usage))),
+        )
+
+    flagged = tuple(
+        index
+        for index, (source, output) in enumerate(
+            zip(source_paragraphs, paragraphs, strict=True)
+        )
+        if untranslated_paragraph(source, output, ctx.settings.ascii_character_map)
+    )
+    if not flagged:
+        return io_result(Ok(Translated(text, usage)))
+
+    calls = plan_retranslation_calls(
+        ctx,
+        pass_definition,
+        source_paragraphs,
+        paragraphs,
+        flagged,
+        separators,
+    )
+    call_for = dict(zip(flagged, calls, strict=True))
+
+    def part(
+        indexed: tuple[int, str],
+    ) -> IO[Result[tuple[str, Usage], TranslationError]]:
+        index, paragraph = indexed
+        call = call_for.get(index)
+        if call is None:
+            separator = separators[index] if index < len(separators) else ""
+            return io_result(Ok((paragraph + separator, Usage())))
+
+        return io_and_then(
+            verbose_log(
+                ctx,
+                retranslate_unit_message(
+                    pass_definition.name, call.index + 1, call.total
+                ),
+            ),
+            run_single_call(ctx, pass_definition, call, analysis, usage),
+        )
+
+    def collect(
+        parts: tuple[tuple[str, Usage], ...],
+    ) -> Result[Translated, TranslationError]:
+        texts = tuple(text for text, _ in parts)
+        for index in flagged:
+            separator = separators[index] if index < len(separators) else ""
+            body = texts[index].removesuffix(separator)
+            if untranslated_paragraph(
+                source_paragraphs[index],
+                body,
+                ctx.settings.ascii_character_map,
+            ):
+                return fail_untranslated(pass_definition.name, index, excerpt(body))
+
+        return Ok(
+            Translated(
+                "".join(texts),
+                reduce(usage_add, (delta for _, delta in parts), usage),
+            )
+        )
+
+    def conclude(
+        result: Result[Translated, TranslationError],
+    ) -> IO[Result[Translated, TranslationError]]:
+        if isinstance(result, Err):
+            return io_map(ctx.console.interrupt(), lambda _: result)
+
+        prompt, completion, cost = usage_delta(usage, result.value.usage)
+
+        def report(ended_at: float) -> IO[Result[Translated, TranslationError]]:
+            return io_map(
+                ctx.console.finish(
+                    stage_done_line(ended_at - started_at, prompt, completion, cost)
+                ),
+                lambda _: result,
+            )
+
+        return io_bind(now(ctx.clock), report)
+
+    def start(_: None) -> IO[Result[Translated, TranslationError]]:
+        return io_map(
+            io_traverse(enumerate(paragraphs), part),
+            lambda result: result_bind(result, collect),
+        )
+
+    return io_and_then(
+        ctx.console.log(
+            retranslate_info_message(
+                pass_definition.name, len(flagged), len(paragraphs)
+            )
+        ),
+        io_bind(start(None), conclude),
+    )
 
 
 def run_analysis_pass(
@@ -341,6 +501,63 @@ def run_unit(
     )
 
 
+def run_single_call(
+    ctx: Context,
+    pass_definition: PassDefinition,
+    call: UnitCall,
+    analysis: str | None,
+    usage: Usage,
+) -> IO[Result[tuple[str, Usage], TranslationError]]:
+    """Cache-backed execution of one unit call: lookup, run, store."""
+
+    def store(
+        result: Result[UnitResult, TranslationError],
+    ) -> IO[Result[tuple[str, Usage], TranslationError]]:
+        if isinstance(result, Err):
+            return io_result(
+                fail_unit(pass_definition.name, call.index + 1, result.error)
+            )
+
+        outcome = result.value
+        stored = io_map(
+            cache_store(ctx, call.key, outcome.text, outcome.validated),
+            lambda _: verbose_log(
+                ctx,
+                unit_done_message(pass_definition.name, call.index + 1, call.total),
+            ),
+        )
+        return io_map(
+            stored,
+            lambda _: Ok(
+                (
+                    outcome.text + call.trailing_separator,
+                    Usage(*usage_delta(usage, outcome.usage)),
+                )
+            ),
+        )
+
+    def proceed(
+        cached: Maybe[str],
+    ) -> IO[Result[tuple[str, Usage], TranslationError]]:
+        if isinstance(cached, Just):
+            return io_map(
+                verbose_log(
+                    ctx,
+                    unit_cache_hit_message(
+                        pass_definition.name, call.index + 1, call.total
+                    ),
+                ),
+                lambda _: Ok((cached.value + call.trailing_separator, Usage())),
+            )
+
+        return io_bind(
+            run_unit(ctx, pass_definition, call, analysis, usage),
+            store,
+        )
+
+    return io_bind(cache_lookup(ctx, call.key, acceptable=non_empty), proceed)
+
+
 def run_units(
     ctx: Context,
     pass_definition: PassDefinition,
@@ -368,52 +585,7 @@ def run_units(
                 lambda _: Ok((call.work_chunk + call.trailing_separator, Usage())),
             )
 
-        def store(
-            result: Result[UnitResult, TranslationError],
-        ) -> IO[Result[tuple[str, Usage], TranslationError]]:
-            if isinstance(result, Err):
-                return io_result(
-                    fail_unit(pass_definition.name, call.index + 1, result.error)
-                )
-
-            outcome = result.value
-            stored = io_map(
-                cache_store(ctx, call.key, outcome.text, outcome.validated),
-                lambda _: verbose_log(
-                    ctx,
-                    unit_done_message(pass_definition.name, call.index + 1, call.total),
-                ),
-            )
-            return io_map(
-                stored,
-                lambda _: Ok(
-                    (
-                        outcome.text + call.trailing_separator,
-                        Usage(*usage_delta(usage, outcome.usage)),
-                    )
-                ),
-            )
-
-        def proceed(
-            cached: Maybe[str],
-        ) -> IO[Result[tuple[str, Usage], TranslationError]]:
-            if isinstance(cached, Just):
-                return io_map(
-                    verbose_log(
-                        ctx,
-                        unit_cache_hit_message(
-                            pass_definition.name, call.index + 1, call.total
-                        ),
-                    ),
-                    lambda _: Ok((cached.value + call.trailing_separator, Usage())),
-                )
-
-            return io_bind(
-                run_unit(ctx, pass_definition, call, analysis, usage),
-                store,
-            )
-
-        return io_bind(cache_lookup(ctx, call.key, acceptable=non_empty), proceed)
+        return run_single_call(ctx, pass_definition, call, analysis, usage)
 
     def collect(parts: tuple[tuple[str, Usage], ...]) -> UnitsSoFar:
         return UnitsSoFar(

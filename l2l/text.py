@@ -243,6 +243,37 @@ def non_ascii_sample(text: str, limit: int = 12) -> str:
     )
 
 
+def has_letters(text: str) -> bool:
+    return any(char.isalpha() for char in text)
+
+
+def untranslated_paragraph(
+    source: str, output: str, character_map: Mapping[str, str]
+) -> bool:
+    """Heuristic for a paragraph the pass returned without translating.
+
+    A paragraph is untranslated when the source has letters and either
+    the output matches it after mechanical ASCII folding (echoes often
+    differ only in punctuation and whitespace), or the output carries no
+    ASCII letters at all. Sources without letters (rules, numbers) are
+    never flagged, since they legitimately translate to themselves.
+    """
+    if not has_letters(source):
+        return False
+
+    folded_source = to_ascii_mechanical(source, character_map).split()
+    if folded_source == to_ascii_mechanical(output, character_map).split():
+        return True
+
+    return not any(char.isascii() and char.isalpha() for char in output)
+
+
+def excerpt(text: str, limit: int = 60) -> str:
+    """Collapsed single-line prefix of `text`, for error messages."""
+    collapsed = " ".join(text.split())
+    return collapsed if len(collapsed) <= limit else collapsed[:limit] + "..."
+
+
 def to_ascii_mechanical(text: str, character_map: Mapping[str, str]) -> str:
     return "".join(
         character
