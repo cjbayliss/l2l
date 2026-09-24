@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from itertools import accumulate, chain
+from types import MappingProxyType
 from typing import Any
 
 from l2l.monads import NOTHING, Just, Maybe, maybe_or_else_get
@@ -254,16 +255,85 @@ def has_letters(text: str) -> bool:
     return any(char.isalpha() for char in text)
 
 
+UNKNOWN_SCRIPT = ""
+LATIN_SCRIPT = "latin"
+
+# Unicode names do not give every letter its script as the first word;
+# these buckets fold the aliases into the script that reads best for the
+# untranslated check (halfwidth forms are kana, fullwidth letters Latin).
+SCRIPT_ALIASES: Mapping[str, str] = MappingProxyType(
+    {
+        "hiragana": "kana",
+        "katakana": "kana",
+        "katakana-hiragana": "kana",
+        "halfwidth": "kana",
+        "fullwidth": "latin",
+    }
+)
+
+
+def letter_script(char: str) -> str:
+    """The script family of a letter, taken from the first word of its
+    Unicode name ('LATIN' out of 'LATIN SMALL LETTER A'). CJK ideographs
+    share one family, so Chinese and Japanese kanji cannot be told apart
+    at script level; non-letters have no script."""
+    if not char.isalpha():
+        return UNKNOWN_SCRIPT
+
+    name = unicodedata.name(char, "")
+    if not name:
+        return UNKNOWN_SCRIPT
+
+    script = name.split(" ", 1)[0].lower()
+    return SCRIPT_ALIASES.get(script, script)
+
+
+def dominant_script(text: str) -> str:
+    """The most frequent letter script in `text`, or '' when it has none."""
+    scripts = tuple(script for script in map(letter_script, text) if script)
+    tally = ((scripts.count(script), script) for script in frozenset(scripts))
+    return max(tally, default=(0, UNKNOWN_SCRIPT))[1]
+
+
+def detect_language_pair(
+    source_paragraphs: tuple[str, ...], output_paragraphs: tuple[str, ...]
+) -> tuple[str, str]:
+    """Best-effort (source, target) script guess from the letters alone,
+    so the untranslated check can serve any language pair without a
+    model call.
+
+    The source script is the document's dominant letter script; the
+    target script is the most common dominant script among output
+    paragraphs that no longer read as the source (echoed paragraphs are
+    excluded, so they cannot skew the vote). When nothing distinguishes
+    itself — only echoes, letterless output, or output in the source's
+    own script, which covers Chinese↔Japanese kanji — the target is ''
+    and callers fall back to the historical ASCII-letter rule.
+    """
+    source_script = dominant_script("".join(source_paragraphs))
+    candidates = tuple(dominant_script(paragraph) for paragraph in output_paragraphs)
+    votes = tuple(script for script in candidates if script != source_script)
+    tally = ((votes.count(vote), vote) for vote in frozenset(votes))
+    target_script = max(tally, default=(0, UNKNOWN_SCRIPT))[1]
+    return source_script, target_script
+
+
 def untranslated_paragraph(
-    source: str, output: str, character_map: Mapping[str, str]
+    source: str,
+    output: str,
+    pair: tuple[str, str],
+    character_map: Mapping[str, str],
 ) -> bool:
     """Heuristic for a paragraph the pass returned without translating.
 
     A paragraph is untranslated when the source has letters and either
     the output matches it after mechanical ASCII folding (echoes often
     differ only in punctuation and whitespace), or the output carries no
-    ASCII letters at all. Sources without letters (rules, numbers) are
-    never flagged, since they legitimately translate to themselves.
+    letters of the detected target script. With the target unknown (''),
+    that degenerates to the historical rule of no ASCII letters, which
+    keeps letterless replies flagged. Sources without letters (rules,
+    numbers) are never flagged, since they legitimately translate to
+    themselves.
     """
     if not has_letters(source):
         return False
@@ -272,7 +342,11 @@ def untranslated_paragraph(
     if folded_source == to_ascii_mechanical(output, character_map).split():
         return True
 
-    return not any(char.isascii() and char.isalpha() for char in output)
+    target_script = pair[1]
+    if not target_script:
+        return not any(char.isascii() and char.isalpha() for char in output)
+
+    return not any(letter_script(char) == target_script for char in output)
 
 
 def excerpt(text: str, limit: int = 60) -> str:

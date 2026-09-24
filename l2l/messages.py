@@ -142,6 +142,20 @@ def retranslate_skipped_message(pass_name: str, found: int, source: int) -> str:
     )
 
 
+def retranslate_pair_message(pair: tuple[str, str]) -> str:
+    source, target = pair
+    if not target:
+        return (
+            "l2l: retranslate check: source script %s, target script "
+            "unknown; using the ASCII-letter rule" % (source or "?")
+        )
+
+    return "l2l: retranslate check: source script %s, target script %s" % (
+        source,
+        target,
+    )
+
+
 def retranslate_unit_message(pass_name: str, index: int, total: int) -> str:
     return "l2l: [%s] retranslating flagged paragraph %d/%d" % (
         pass_name,

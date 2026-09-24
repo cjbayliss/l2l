@@ -25,6 +25,7 @@ from l2l.messages import (
     pass_cache_hit_message,
     pass_started_message,
     retranslate_info_message,
+    retranslate_pair_message,
     retranslate_skipped_message,
     retranslate_unit_message,
     stage_done_line,
@@ -76,6 +77,7 @@ from l2l.text import (
     Usage,
     cache_key,
     count_paragraphs,
+    detect_language_pair,
     ensure_blank_line_separators,
     estimate_tokens,
     excerpt,
@@ -284,9 +286,9 @@ def retranslate_untranslated(
     started_at: float,
 ) -> IO[Result[Translated, TranslationError]]:
     """Post-pass untranslated-paragraph check. Paragraphs that came back
-    untranslated (echo or no ASCII letters) are re-asked with one call
-    each, using the pass's own instruction; a paragraph that survives
-    retranslation unchanged fails the run."""
+    untranslated (echo, or no letters of the target script) are re-asked
+    with one call each, using the pass's own instruction; a paragraph
+    that survives retranslation unchanged fails the run."""
 
     paragraphs, separators = split_paragraphs(text)
     if len(paragraphs) != len(source_paragraphs):
@@ -300,12 +302,15 @@ def retranslate_untranslated(
             lambda _: io_result(Ok(Translated(text, usage))),
         )
 
+    pair = detect_language_pair(source_paragraphs, paragraphs)
     flagged = tuple(
         index
         for index, (source, output) in enumerate(
             zip(source_paragraphs, paragraphs, strict=True)
         )
-        if untranslated_paragraph(source, output, ctx.settings.ascii_character_map)
+        if untranslated_paragraph(
+            source, output, pair, ctx.settings.ascii_character_map
+        )
     )
     if not flagged:
         return io_result(Ok(Translated(text, usage)))
@@ -349,6 +354,7 @@ def retranslate_untranslated(
             if untranslated_paragraph(
                 source_paragraphs[index],
                 body,
+                pair,
                 ctx.settings.ascii_character_map,
             ):
                 return fail_untranslated(pass_definition.name, index, excerpt(body))
@@ -390,7 +396,10 @@ def retranslate_untranslated(
                 pass_definition.name, len(flagged), len(paragraphs)
             )
         ),
-        io_bind(start(None), conclude),
+        io_bind(
+            ctx.console.log(retranslate_pair_message(pair)),
+            lambda _: io_bind(start(None), conclude),
+        ),
     )
 
 

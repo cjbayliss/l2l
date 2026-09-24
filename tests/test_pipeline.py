@@ -283,12 +283,36 @@ def test_retranslation_retranslates_echoed_paragraphs() -> None:
     assert len(http.requests) == 3
     logged = stderr.getvalue()
     assert "2 of 2 paragraph(s) look untranslated" in logged
+    assert (
+        "source script cjk, target script unknown; using the ASCII-letter rule"
+        in logged
+    )
     first_retry = json.loads(http.requests[1].data)
     assert first_retry["messages"][0]["content"] == "T."
     retry_user = first_retry["messages"][1]["content"]
     assert retry_user.startswith("Context paragraphs (reference only")
     assert "世界。" in retry_user
     assert retry_user.endswith("你好。")
+
+
+def test_retranslation_accepts_non_latin_targets() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [FakeStreamResponse(with_usage(stream_chunks("Привет.\n\nМир."), USAGE))]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(retranslate_untranslated=True),),
+        "你好。\n\n世界。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Привет.\n\nМир.\n"
+    assert len(http.requests) == 1
+    assert "look untranslated" not in stderr.getvalue()
 
 
 def test_retranslation_retranslates_only_flagged_paragraphs() -> None:
