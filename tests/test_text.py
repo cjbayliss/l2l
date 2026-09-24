@@ -27,6 +27,7 @@ from l2l.text import (
     make_chunks,
     non_ascii_sample,
     parse_cost,
+    parse_tokens,
     regroup_by_plan,
     split_paragraphs,
     split_sentences,
@@ -173,11 +174,27 @@ def test_parse_cost_falls_back_to_zero() -> None:
     assert parse_cost([]) == 0.0
 
 
+def test_parse_tokens_coerces_and_falls_back_to_zero() -> None:
+    assert parse_tokens(5) == 5
+    assert parse_tokens("12") == 12
+    assert parse_tokens(2.9) == 2
+    assert parse_tokens(True) == 0
+    assert parse_tokens(None) == 0
+    assert parse_tokens("nope") == 0
+
+
 def test_add_usage_accumulates() -> None:
     total = add_usage(Usage(10, 5, 0.5), {"prompt_tokens": 4, "cost": 0.25})
     assert total == Usage(14, 5, 0.75)
     tolerated = add_usage(Usage(), {"cost": "bad"})
     assert tolerated == Usage(0, 0, 0.0)
+
+
+def test_add_usage_tolerates_non_integer_token_reports() -> None:
+    total = add_usage(
+        Usage(1, 1, 0.0), {"prompt_tokens": "7", "completion_tokens": 2.5}
+    )
+    assert total == Usage(8, 3, 0.0)
 
 
 def test_build_chat_payload() -> None:
