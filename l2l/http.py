@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from types import MappingProxyType
-from typing import Any, TypedDict, TypeVar
+from typing import Any, TypedDict
 
 from l2l import __version__
 from l2l.console import Console
@@ -64,8 +64,6 @@ from l2l.text import (
     strip_think_tag,
     think_step,
 )
-
-T = TypeVar("T")
 
 ProgressCallback = Callable[[str, int], IO[None]]
 RawLineLogger = Callable[[bytes], IO[None]]
