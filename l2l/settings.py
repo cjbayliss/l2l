@@ -39,7 +39,7 @@ class PassDefinition:
     params: Mapping[str, Any]
     model: str | None
     ascii: bool | None
-    ensure_paragraphs: bool | None = None
+    ensure_paragraphs: bool | int | None = None
 
 
 @dataclass(frozen=True)
@@ -81,7 +81,7 @@ class Arguments:
 class Setup:
     config: Config
     passes: tuple[PassDefinition, ...]
-    ensure_paragraphs: bool
+    ensure_paragraphs: bool | int
 
 
 class HttpResponse(Protocol):
@@ -255,6 +255,22 @@ def resolve_call_settings(
         **dict(config.params),
         **dict(pass_definition.params),
     }
+
+
+def paragraph_tolerance(value: bool | int | None) -> int | None:
+    """Collapse the tri-state `ensure_paragraphs` value to a tolerance.
+
+    `True` demands an exact paragraph count (tolerance 0), a non-negative
+    integer allows that many paragraphs of drift, and `False`/`None`
+    disables the paragraph-count check.
+    """
+    if value is True:
+        return 0
+
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+
+    return None
 
 
 def salt(*parts: str) -> str:

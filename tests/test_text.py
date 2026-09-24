@@ -196,30 +196,49 @@ def test_build_pass_user() -> None:
 
 def test_unit_output_problem_accepts_matching_reply() -> None:
     settings = build_settings()
-    problem = unit_output_problem("你好。\n\n世界。", "Hello.\n\nWorld.", settings)
+    problem = unit_output_problem("你好。\n\n世界。", "Hello.\n\nWorld.", settings, 0)
     assert problem == NOTHING
 
 
 def test_unit_output_problem_flags_empty_reply() -> None:
     settings = build_settings()
-    problem = unit_output_problem("你好。", "   ", settings)
+    problem = unit_output_problem("你好。", "   ", settings, 0)
     assert isinstance(problem, Just)
     assert "empty" in problem.value
 
 
 def test_unit_output_problem_flags_paragraph_mismatch() -> None:
     settings = build_settings()
-    extra = unit_output_problem("你好。", "Hello.\n\nWorld.", settings)
+    extra = unit_output_problem("你好。", "Hello.\n\nWorld.", settings, 0)
     assert isinstance(extra, Just)
     assert "has 2 paragraph(s) but the source has 1" in extra.value
-    missing = unit_output_problem("你好。\n\n世界。", "Hello.", settings)
+    missing = unit_output_problem("你好。\n\n世界。", "Hello.", settings, 0)
     assert isinstance(missing, Just)
     assert "has 1 paragraph(s) but the source has 2" in missing.value
 
 
+def test_unit_output_problem_skips_count_when_disabled() -> None:
+    settings = build_settings()
+    problem = unit_output_problem("你好。", "Hello.\n\nWorld.", settings, None)
+    assert problem == NOTHING
+
+
+def test_unit_output_problem_applies_tolerance() -> None:
+    settings = build_settings()
+    within = unit_output_problem(
+        "你好。\n\n世界。", "One.\n\nTwo.\n\nThree.", settings, 1
+    )
+    assert within == NOTHING
+    beyond = unit_output_problem(
+        "你好。\n\n世界。", "One.\n\nTwo.\n\nThree.\n\nFour.", settings, 1
+    )
+    assert isinstance(beyond, Just)
+    assert "has 4 paragraph(s) but the source has 2 (allowed ±1)" in beyond.value
+
+
 def test_unit_output_problem_flags_implausible_length() -> None:
     settings = build_settings()
-    problem = unit_output_problem("嗯。", "word " * 40, settings)
+    problem = unit_output_problem("嗯。", "word " * 40, settings, 0)
     assert isinstance(problem, Just)
     assert "tokens" in problem.value
 

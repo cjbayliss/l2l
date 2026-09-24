@@ -64,17 +64,20 @@ def retry_delay(error: TranslationError, planned: float) -> float:
 
 
 def unit_output_problem(
-    source_text: str, output: str, settings: Settings
+    source_text: str, output: str, settings: Settings, tolerance: int | None
 ) -> Maybe[str]:
     if not output.strip():
         return Just("the reply was empty")
 
-    expected = count_paragraphs(source_text)
-    found = count_paragraphs(output)
-    if found != expected:
-        return Just(
-            "the reply has %d paragraph(s) but the source has %d" % (found, expected)
-        )
+    if tolerance is not None:
+        expected = count_paragraphs(source_text)
+        found = count_paragraphs(output)
+        if abs(found - expected) > tolerance:
+            allowed = "" if tolerance <= 0 else " (allowed ±%d)" % tolerance
+            return Just(
+                "the reply has %d paragraph(s) but the source has %d%s"
+                % (found, expected, allowed)
+            )
 
     source_estimate = estimate_tokens(source_text)
     output_estimate = estimate_tokens(output)
@@ -370,7 +373,7 @@ def params_text(params: Mapping[str, Any]) -> str:
     return json.dumps(params, sort_keys=True, ensure_ascii=False, default=str)
 
 
-def setup_report(setup: Setup, effective_ensure_paragraphs: bool) -> str:
+def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
     config = setup.config
     api_lines: tuple[str, ...] = (
         f"api.base_url: {config.base_url}",
