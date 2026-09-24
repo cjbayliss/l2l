@@ -18,12 +18,15 @@ from l2l.text import (
     add_usage,
     cache_key,
     chars_per_token,
+    detect_language_pair,
+    dominant_script,
     drop_non_ascii,
     ensure_blank_line_separators,
     estimate_tokens,
     excerpt,
     has_letters,
     is_cjk_char,
+    letter_script,
     make_chunks,
     non_ascii_sample,
     parse_cost,
@@ -310,26 +313,79 @@ def test_has_letters() -> None:
     assert not has_letters("--- ……")
 
 
+def test_letter_script_buckets_letters_by_family() -> None:
+    assert letter_script("A") == "latin"
+    assert letter_script("а") == "cyrillic"
+    assert letter_script("α") == "greek"
+    assert letter_script("あ") == "kana"
+    assert letter_script("ア") == "kana"
+    assert letter_script("ｱ") == "kana"
+    assert letter_script("中") == "cjk"
+    assert letter_script("م") == "arabic"
+    assert letter_script("א") == "hebrew"
+    assert letter_script("ก") == "thai"
+    assert letter_script("ह") == "devanagari"
+    assert letter_script("7") == ""
+    assert letter_script("!") == ""
+
+
+def test_dominant_script_picks_the_most_frequent_family() -> None:
+    assert dominant_script("Hello, world!") == "latin"
+    assert dominant_script("你好，世界！") == "cjk"
+    assert dominant_script("café") == "latin"
+    assert dominant_script("12.3 ---") == ""
+
+
+def test_detect_language_pair_votes_per_paragraph() -> None:
+    assert detect_language_pair(("你好。", "世界。"), ("Hello.", "World.")) == (
+        "cjk",
+        "latin",
+    )
+    assert detect_language_pair(("你好。", "世界。"), ("Привет.", "Мир.")) == (
+        "cjk",
+        "cyrillic",
+    )
+    assert detect_language_pair(("Hello.", "World."), ("Ciao.", "Mondo.")) == (
+        "latin",
+        "",
+    )
+
+
 def test_untranslated_paragraph_flags_echo_with_punctuation_drift() -> None:
     character_map = build_settings().ascii_character_map
+    pair = ("cjk", "latin")
     source = "你好，世界！"
-    assert untranslated_paragraph(source, "你好，世界！", character_map)
-    assert untranslated_paragraph(source, "你好,世界!  ", character_map)
-    assert not untranslated_paragraph(source, "Hello, world!", character_map)
-    assert not untranslated_paragraph(source, "Hi. World.", character_map)
+    assert untranslated_paragraph(source, "你好，世界！", pair, character_map)
+    assert untranslated_paragraph(source, "你好,世界!  ", pair, character_map)
+    assert not untranslated_paragraph(source, "Hello, world!", pair, character_map)
+    assert not untranslated_paragraph(source, "Hi. World.", pair, character_map)
 
 
-def test_untranslated_paragraph_flags_output_without_ascii_letters() -> None:
+def test_untranslated_paragraph_flags_output_without_target_script() -> None:
     character_map = build_settings().ascii_character_map
-    assert untranslated_paragraph("你好。", "。", character_map)
-    assert untranslated_paragraph("你好。", "……", character_map)
-    assert untranslated_paragraph("你好。", "", character_map)
+    assert untranslated_paragraph("你好。", "。", ("cjk", "latin"), character_map)
+    assert untranslated_paragraph("你好。", "……", ("cjk", "latin"), character_map)
+    assert untranslated_paragraph("你好。", "", ("cjk", "latin"), character_map)
+    assert untranslated_paragraph("你好。", "。", ("cjk", ""), character_map)
+    assert not untranslated_paragraph("你好。", "世界。", ("cjk", "cjk"), character_map)
+
+
+def test_untranslated_paragraph_accepts_non_latin_targets() -> None:
+    character_map = build_settings().ascii_character_map
+    pair = ("cjk", "cyrillic")
+    assert not untranslated_paragraph("你好。", "Привет.", pair, character_map)
+    assert not untranslated_paragraph("你好。", "Привет!", pair, character_map)
+    assert untranslated_paragraph("你好。", "Hello.", pair, character_map)
+    assert untranslated_paragraph("你好。", "……", pair, character_map)
+    assert untranslated_paragraph("你好。", "你好！", pair, character_map)
 
 
 def test_untranslated_paragraph_ignores_letterless_sources() -> None:
     character_map = build_settings().ascii_character_map
     for source in ("12", "---", "……", "...!"):
-        assert not untranslated_paragraph(source, source, character_map)
+        assert not untranslated_paragraph(
+            source, source, ("cjk", "latin"), character_map
+        )
 
 
 def test_excerpt_collapses_and_truncates() -> None:
