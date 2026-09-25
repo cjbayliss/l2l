@@ -242,6 +242,7 @@ def plan_unit_calls(
     plan: tuple[tuple[str, ...], ...],
     work_groups: tuple[tuple[str, ...], ...],
     trailing_separators: tuple[str, ...],
+    retry_attempt: int = 0,
 ) -> tuple[UnitCall, ...]:
     model, params = resolve_call_settings(ctx.config, pass_definition)
     flat_plan = tuple(chain.from_iterable(plan))
@@ -275,7 +276,7 @@ def plan_unit_calls(
             key=cache_key(
                 source_chunk,
                 model,
-                pass_salt(pass_definition),
+                pass_salt(pass_definition, retry_attempt),
                 work_chunk,
                 overrides=params,
                 context="\n\n".join(context),

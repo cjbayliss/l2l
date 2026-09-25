@@ -135,6 +135,13 @@ def retranslate_info_message(pass_name: str, flagged: int, total: int) -> str:
     )
 
 
+def retranslate_majority_message(pass_name: str, flagged: int, total: int) -> str:
+    return (
+        "l2l: [%s] %d of %d paragraph(s) look untranslated (more than half); "
+        "re-running the pass" % (pass_name, flagged, total)
+    )
+
+
 def retranslate_skipped_message(pass_name: str, found: int, source: int) -> str:
     return (
         "l2l: [%s] output has %d paragraph(s) but the source has %d; "

@@ -65,8 +65,19 @@ def chunk_pass(
     )
 
 
-def paragraph_pass(name: str = "translate") -> PassDefinition:
-    return PassDefinition(name, "T.", "paragraph", {}, None, False, False)
+def paragraph_pass(
+    name: str = "translate", retranslate_untranslated: bool = False
+) -> PassDefinition:
+    return PassDefinition(
+        name,
+        "T.",
+        "paragraph",
+        {},
+        None,
+        False,
+        False,
+        retranslate_untranslated,
+    )
 
 
 def test_fold_io_handles_thousands_of_items() -> None:
@@ -260,12 +271,13 @@ def test_run_pipeline_drops_non_ascii_after_failed_repairs() -> None:
     assert len(http.requests) == 4
 
 
-def test_retranslation_retranslates_echoed_paragraphs() -> None:
+def test_retranslation_retranslates_an_echoed_paragraph() -> None:
     console, stderr = make_console()
     http = FakeHttp(
         [
-            FakeStreamResponse(with_usage(stream_chunks("你好。\n\n世界。"), USAGE)),
-            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+            FakeStreamResponse(
+                with_usage(stream_chunks("Hello.\n\n世界。\n\nThree."), USAGE)
+            ),
             FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
         ]
     )
@@ -274,25 +286,23 @@ def test_retranslation_retranslates_echoed_paragraphs() -> None:
     code = run_pipeline(
         ctx,
         (chunk_pass(retranslate_untranslated=True),),
-        "你好。\n\n世界。",
+        "你好。\n\n世界。\n\n三。",
         0.0,
         stdout,
     ).run()
     assert code == 0
-    assert stdout.getvalue() == "Hello.\n\nWorld.\n"
-    assert len(http.requests) == 3
+    assert stdout.getvalue() == "Hello.\n\nWorld.\n\nThree.\n"
+    assert len(http.requests) == 2
     logged = stderr.getvalue()
-    assert "2 of 2 paragraph(s) look untranslated" in logged
-    assert (
-        "source script cjk, target script unknown; using the ASCII-letter rule"
-        in logged
-    )
-    first_retry = json.loads(http.requests[1].data)
-    assert first_retry["messages"][0]["content"] == "T."
-    retry_user = first_retry["messages"][1]["content"]
+    assert "1 of 3 paragraph(s) look untranslated" in logged
+    assert "(more than half)" not in logged
+    retry = json.loads(http.requests[1].data)
+    assert retry["messages"][0]["content"] == "T."
+    retry_user = retry["messages"][1]["content"]
     assert retry_user.startswith("Context paragraphs (reference only")
-    assert "世界。" in retry_user
-    assert retry_user.endswith("你好。")
+    assert "你好。" in retry_user
+    assert "三。" in retry_user
+    assert retry_user.endswith("世界。")
 
 
 def test_retranslation_accepts_non_latin_targets() -> None:
@@ -338,10 +348,15 @@ def test_retranslation_retranslates_only_flagged_paragraphs() -> None:
 
 
 def test_retranslation_fails_when_paragraph_still_untranslated() -> None:
+    # Majority-untranslated first attempt: the pass is retried once in its
+    # own mode, the retry is flagged again, and per-paragraph retranslation
+    # of both paragraphs still fails, ending the run with exit code 1.
     console, stderr = make_console()
+    echo = "你好。\n\n世界。"
     http = FakeHttp(
         [
-            FakeStreamResponse(with_usage(stream_chunks("你好。\n\n世界。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(echo), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(echo), USAGE)),
             FakeStreamResponse(with_usage(stream_chunks("你好。"), USAGE)),
             FakeStreamResponse(with_usage(stream_chunks("世界。"), USAGE)),
         ]
@@ -350,12 +365,18 @@ def test_retranslation_fails_when_paragraph_still_untranslated() -> None:
     code = run_pipeline(
         ctx,
         (chunk_pass(retranslate_untranslated=True),),
-        "你好。\n\n世界。",
+        echo,
         0.0,
         io.StringIO(),
     ).run()
     assert code == 1
+    assert len(http.requests) == 4
     logged = stderr.getvalue()
+    assert "2 of 2 paragraph(s) look untranslated (more than half)" in logged
+    assert (
+        "source script cjk, target script unknown; using the ASCII-letter rule"
+        in logged
+    )
     assert "still untranslated after retranslation" in logged
     assert "你好。" in logged
 
@@ -445,11 +466,11 @@ def test_retranslation_results_are_cached(tmp_path: Path) -> None:
 
     def run() -> tuple[int, str, int]:
         console, _ = make_console()
+        echo = "你好。\n\n世界。"
         http = FakeHttp(
             [
-                FakeStreamResponse(
-                    with_usage(stream_chunks("你好。\n\n世界。"), USAGE)
-                ),
+                FakeStreamResponse(with_usage(stream_chunks(echo), USAGE)),
+                FakeStreamResponse(with_usage(stream_chunks(echo), USAGE)),
                 FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
                 FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
             ]
@@ -473,8 +494,177 @@ def test_retranslation_results_are_cached(tmp_path: Path) -> None:
     first_code, first_output, first_calls = run()
     second_code, second_output, second_calls = run()
     assert (first_code, second_code) == (0, 0)
-    assert (first_calls, second_calls) == (3, 0)
+    # First run: bad chunk, same-mode retry, then per-paragraph
+    # retranslation. Second run: everything (including the retry) is cached.
+    assert (first_calls, second_calls) == (4, 0)
     assert first_output == second_output == "Hello.\n\nWorld.\n"
+
+
+def test_retranslation_majority_retries_pass_then_succeeds() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("你好。\n\n世界。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello.\n\nWorld."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(retranslate_untranslated=True),),
+        "你好。\n\n世界。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\nWorld.\n"
+    assert len(http.requests) == 2
+    logged = stderr.getvalue()
+    assert "2 of 2 paragraph(s) look untranslated (more than half)" in logged
+    assert "retranslating them" not in logged
+
+
+def test_retranslation_majority_retries_then_falls_back_per_paragraph() -> None:
+    console, stderr = make_console()
+    echo = "你好。\n\n世界。"
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks(echo), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(echo), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(retranslate_untranslated=True),),
+        echo,
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\nWorld.\n"
+    assert len(http.requests) == 4
+    logged = stderr.getvalue()
+    assert logged.count("(more than half)") == 1
+    assert "2 of 2 paragraph(s) look untranslated; retranslating them" in logged
+
+
+def test_retranslation_majority_retry_uses_fresh_cache_keys(tmp_path: Path) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+    echo = "你好。\n\n世界。"
+
+    def first_run() -> tuple[int, str, int]:
+        console, _ = make_console()
+        http = FakeHttp(
+            [
+                FakeStreamResponse(with_usage(stream_chunks(echo), USAGE)),
+                FakeStreamResponse(
+                    with_usage(stream_chunks("Hello.\n\nWorld."), USAGE)
+                ),
+            ]
+        )
+        ctx = make_context(
+            console,
+            http.open,
+            cache_directory=str(cache_directory),
+            use_cache=True,
+        )
+        stdout = io.StringIO()
+        code = run_pipeline(
+            ctx,
+            (chunk_pass(retranslate_untranslated=True),),
+            echo,
+            0.0,
+            stdout,
+        ).run()
+        return code, stdout.getvalue(), len(http.requests)
+
+    def second_run() -> tuple[int, str, int]:
+        console, _ = make_console()
+        http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("BAD"), USAGE))])
+        ctx = make_context(
+            console,
+            http.open,
+            cache_directory=str(cache_directory),
+            use_cache=True,
+        )
+        stdout = io.StringIO()
+        code = run_pipeline(
+            ctx,
+            (chunk_pass(retranslate_untranslated=True),),
+            echo,
+            0.0,
+            stdout,
+        ).run()
+        return code, stdout.getvalue(), len(http.requests)
+
+    first_code, first_output, first_calls = first_run()
+    second_code, second_output, second_calls = second_run()
+    assert (first_code, second_code) == (0, 0)
+    assert (first_calls, second_calls) == (2, 0)
+    # A retry key that collided with the first attempt's key would replay
+    # the cached echo here, triggering endpoint calls and a bad output.
+    assert first_output == second_output == "Hello.\n\nWorld.\n"
+
+
+def test_retranslation_paragraph_mode_skips_majority_retry() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("你好。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("世界。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx,
+        (paragraph_pass(retranslate_untranslated=True),),
+        "你好。\n\n世界。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\nWorld.\n"
+    assert len(http.requests) == 4
+    logged = stderr.getvalue()
+    assert "(more than half)" not in logged
+    assert "2 of 2 paragraph(s) look untranslated; retranslating them" in logged
+
+
+def test_retranslation_at_exact_half_keeps_per_paragraph_path() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(
+                with_usage(stream_chunks("Hello.\n\n世界。\n\nWarm.\n\n冬天。"), USAGE)
+            ),
+            FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Winter."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(retranslate_untranslated=True),),
+        "你好。\n\n世界。\n\n春天。\n\n冬天。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\nWorld.\n\nWarm.\n\nWinter.\n"
+    assert len(http.requests) == 3
+    logged = stderr.getvalue()
+    assert "2 of 4 paragraph(s) look untranslated; retranslating them" in logged
+    assert "(more than half)" not in logged
 
 
 def test_retranslation_skips_analysis_passes() -> None:
