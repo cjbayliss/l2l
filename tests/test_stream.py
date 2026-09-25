@@ -11,13 +11,13 @@ from fakes import (
 
 from l2l.errors import describe
 from l2l.http import (
-    ProgressRequest,
+    ProgressUpdate,
     StreamState,
     chat,
     drive_stream,
     flatten_content_parts,
+    ingest_raw_line,
     plain_reply,
-    step_stream,
     stream_step,
     to_chat_reply,
 )
@@ -104,7 +104,7 @@ def test_stream_step_accumulates_reasoning_and_usage() -> None:
     assert isinstance(result, Ok)
     state = result.value
     assert cons_to_tuple(state.reasoning) == ("ponder",)
-    assert state.progress_request == ProgressRequest("Thinking", 1, "ponder")
+    assert state.progress_update == ProgressUpdate("Thinking", 1, "ponder")
 
     result = stream_step(
         state,
@@ -116,9 +116,13 @@ def test_stream_step_accumulates_reasoning_and_usage() -> None:
     assert isinstance(result, Ok)
     state = result.value
     assert cons_to_tuple(state.contents) == ("Hi",)
-    assert state.reported == {"prompt_tokens": 3, "completion_tokens": 4, "cost": 0.5}
-    assert state.counted == 2
-    assert state.progress_request == ProgressRequest("Working", 1, "")
+    assert state.reported_usage == {
+        "prompt_tokens": 3,
+        "completion_tokens": 4,
+        "cost": 0.5,
+    }
+    assert state.chunk_count == 2
+    assert state.progress_update == ProgressUpdate("Working", 1, "")
 
 
 def test_stream_step_content_part_list() -> None:
@@ -131,7 +135,7 @@ def test_stream_step_content_part_list() -> None:
     assert cons_to_tuple(result.value.contents) == ("ok",)
 
 
-def test_step_stream_ignores_non_dict_chunks() -> None:
+def test_ingest_raw_line_ignores_non_dict_chunks() -> None:
     state = feed(StreamState(), "keep")
     for raw in (
         b"data: [1,2,3]\n",
@@ -142,21 +146,21 @@ def test_step_stream_ignores_non_dict_chunks() -> None:
         b"data: [DONE]\n",
         b"\n",
     ):
-        result = step_stream(state, raw)
+        result = ingest_raw_line(state, raw)
         assert isinstance(result, Ok)
         state = result.value
 
     assert cons_to_tuple(state.contents) == ("keep",)
-    assert state.counted == 1
+    assert state.chunk_count == 1
 
 
-def test_step_stream_reports_endpoint_error() -> None:
-    result = step_stream(
+def test_ingest_raw_line_reports_endpoint_error() -> None:
+    result = ingest_raw_line(
         StreamState(),
         b'data: {"error": {"message": "overloaded"}}\n',
     )
     assert isinstance(result, Ok)
-    dispatched = step_stream(result.value, b"\n")
+    dispatched = ingest_raw_line(result.value, b"\n")
     assert isinstance(dispatched, Err)
     assert "overloaded" in describe(dispatched.error)
 
@@ -196,12 +200,12 @@ def test_sse_step_holds_back_incomplete_json_frames() -> None:
     assert state == SseState()
 
 
-def test_step_stream_dispatches_completed_frames() -> None:
-    result = step_stream(StreamState(), b'data: {"choices": []}\n')
+def test_ingest_raw_line_dispatches_completed_frames() -> None:
+    result = ingest_raw_line(StreamState(), b'data: {"choices": []}\n')
     assert isinstance(result, Ok)
     assert result.value.sse == SseState(pending=('{"choices": []}',))
 
-    result = step_stream(result.value, b"\n")
+    result = ingest_raw_line(result.value, b"\n")
     assert isinstance(result, Ok)
     assert result.value.sse == SseState()
 
@@ -227,7 +231,7 @@ def test_plain_reply() -> None:
     reply = result.value
     assert reply.content == "Hello"
     assert reply.reasoning == (" why",)
-    assert reply.reported is not None and reply.reported["cost"] == 0.1
+    assert reply.reported_usage is not None and reply.reported_usage["cost"] == 0.1
 
 
 def test_plain_reply_bad_shape() -> None:

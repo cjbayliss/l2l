@@ -6,20 +6,20 @@ from l2l.effects import (
     cache_entry_paths,
     cache_read,
     cache_write,
-    io_isatty,
     prune_old_logs,
     resolve_cache_dir,
+    stream_isatty,
     user_config_path,
 )
 from l2l.monads import NOTHING, Just
 
 
-def test_io_isatty_handles_errors() -> None:
+def test_stream_isatty_handles_errors() -> None:
     class Raising:
         def isatty(self) -> bool:
             raise OSError("closed")
 
-    assert io_isatty(cast(TextIO, Raising())).run() is False
+    assert stream_isatty(cast(TextIO, Raising())).run() is False
 
 
 def test_resolve_cache_dir_creates_override(tmp_path: Path) -> None:

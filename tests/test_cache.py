@@ -5,10 +5,10 @@ from pathlib import Path
 from fakes import make_console, make_context
 
 from l2l.cache import (
+    always_acceptable,
     cache_lookup,
     cache_store,
     cached_translation,
-    const_acceptable,
 )
 from l2l.errors import TranslationError, fail_http
 from l2l.monads import IO, NOTHING, Err, Just, Ok, Result, io_pure
@@ -153,6 +153,6 @@ def test_cache_store_condition_gates_write(tmp_path: Path) -> None:
     assert cache_lookup(ctx, key).run() == NOTHING
 
 
-def test_const_acceptable_accepts_everything() -> None:
-    assert const_acceptable("")
-    assert const_acceptable("anything")
+def test_always_acceptable_accepts_everything() -> None:
+    assert always_acceptable("")
+    assert always_acceptable("anything")

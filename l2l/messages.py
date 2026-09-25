@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-def fmt_duration(seconds: float) -> str:
+def format_duration(seconds: float) -> str:
     if seconds < 60:
         return "%.1fs" % seconds
 
@@ -13,7 +13,7 @@ def usage_line(
 ) -> str:
     return "%s: %s, prompt=%d, completion=%d, %.1f tok/s, cost=$%.6f" % (
         label,
-        fmt_duration(elapsed),
+        format_duration(elapsed),
         prompt_tokens,
         completion_tokens,
         completion_tokens / elapsed if elapsed > 0 else 0.0,

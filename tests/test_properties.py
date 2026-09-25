@@ -5,7 +5,7 @@ from typing import Any
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
-from l2l.http import StreamState, step_stream
+from l2l.http import StreamState, ingest_raw_line
 from l2l.monads import Ok, cons_to_tuple
 from l2l.plans import plan_backoff
 from l2l.settings import PartialApiSettings
@@ -198,7 +198,7 @@ def test_stream_fold_concatenates_deltas_and_keeps_last_usage(
 ) -> None:
     state: StreamState = StreamState()
     for line in sse_bytes(chunks):
-        outcome = step_stream(state, line)
+        outcome = ingest_raw_line(state, line)
         assert isinstance(outcome, Ok)
         state = outcome.value
 
@@ -211,10 +211,10 @@ def test_stream_fold_concatenates_deltas_and_keeps_last_usage(
 
     usages = [chunk["usage"] for chunk in chunks if "usage" in chunk]
     if usages:
-        assert state.reported is not None
-        assert dict(state.reported) == usages[-1]
+        assert state.reported_usage is not None
+        assert dict(state.reported_usage) == usages[-1]
     else:
-        assert state.reported is None
+        assert state.reported_usage is None
 
 
 OPTIONAL_TEXT = st.one_of(st.none(), st.text(min_size=1, max_size=4))
