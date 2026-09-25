@@ -12,6 +12,7 @@ from l2l.config import load_setup
 from l2l.console import Console, StatusLine, toggle_verbose
 from l2l.effects import (
     RunLog,
+    Sleep,
     cache_entry_paths,
     close_run_log,
     file_age,
@@ -47,7 +48,7 @@ from l2l.monads import (
 )
 from l2l.pipeline import run_pipeline
 from l2l.plans import plan_report, setup_report
-from l2l.settings import Arguments, Context, Setup, build_settings
+from l2l.settings import Arguments, Context, OpenHTTP, Setup, build_settings
 
 
 def parse_args(arguments: Sequence[str]) -> Arguments:
@@ -193,6 +194,8 @@ def main(
     stdout: TextIO,
     stderr: TextIO,
     clock: Callable[[], float],
+    open_http: OpenHTTP = urllib_open,
+    sleep: Sleep = time_sleep,
 ) -> IO[int]:
     def after_parse(
         parsed_result: Result[Arguments, TranslationError],
@@ -215,7 +218,7 @@ def main(
         return io_bind(
             read_stdin(stdin),
             lambda text: run_main_program(
-                parsed, environment, text, stdout, stderr, clock
+                parsed, environment, text, stdout, stderr, clock, open_http, sleep
             ),
         )
 
@@ -240,6 +243,8 @@ def build_context(
     setup: Setup,
     console: Console,
     clock: Callable[[], float],
+    open_http: OpenHTTP,
+    sleep: Sleep,
     cache_directory: str = "",
     use_cache: bool = False,
     log: RunLog | None = None,
@@ -250,10 +255,10 @@ def build_context(
         use_cache=use_cache,
         cache_directory=cache_directory,
         console=console,
-        open_http=urllib_open,
+        open_http=open_http,
         log=log if log is not None else RunLog(NOTHING, clock),
         clock=clock,
-        sleep=time_sleep,
+        sleep=sleep,
         stream=parsed.stream,
     )
 
@@ -263,10 +268,12 @@ def dry_run_program(
     setup: Setup,
     console: Console,
     clock: Callable[[], float],
+    open_http: OpenHTTP,
+    sleep: Sleep,
     text: str,
     stdout: TextIO,
 ) -> IO[int]:
-    planning_ctx = build_context(parsed, setup, console, clock)
+    planning_ctx = build_context(parsed, setup, console, clock, open_http, sleep)
     return io_map(
         write_stdout(stdout, plan_report(planning_ctx, setup.passes, text) + "\n"),
         lambda _: 0,
@@ -319,7 +326,10 @@ def prune_program(
                         lambda was_removed: Ok(count + (1 if was_removed else 0)),
                     )
 
-                return io_bind(file_age(path, clock()), maybe_remove)
+                return io_bind(
+                    now(clock),
+                    lambda now_value: io_bind(file_age(path, now_value), maybe_remove),
+                )
 
             def report(pruned: Result[int, TranslationError]) -> IO[int]:
                 count = result_or_else(pruned, lambda: 0)
@@ -349,6 +359,8 @@ def run_main_program(
     stdout: TextIO,
     stderr: TextIO,
     clock: Callable[[], float],
+    open_http: OpenHTTP,
+    sleep: Sleep,
 ) -> IO[int]:
     if not text.strip():
         return io_pure(0)
@@ -360,7 +372,9 @@ def run_main_program(
 
             setup = setup_result.value
             if parsed.dry_run:
-                return dry_run_program(parsed, setup, console, clock, text, stdout)
+                return dry_run_program(
+                    parsed, setup, console, clock, open_http, sleep, text, stdout
+                )
 
             def with_started(started: float) -> IO[int]:
                 def with_cache_dir(cache_directory: str) -> IO[int]:
@@ -369,7 +383,7 @@ def run_main_program(
                             log.path,
                             lambda path: io_when_unit(
                                 parsed.show_log_path,
-                                console.log(f"l2l: log: {path}"),
+                                console.log("l2l: log: %s" % path),
                             ),
                             lambda: io_pure(None),
                         )
@@ -393,6 +407,8 @@ def run_main_program(
                                     setup,
                                     console,
                                     clock,
+                                    open_http,
+                                    sleep,
                                     cache_directory=cache_directory,
                                     use_cache=not parsed.no_cache,
                                     log=log,

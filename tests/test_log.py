@@ -5,7 +5,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import pytest
 from fakes import (
     FakeHttp,
     FakePlainResponse,
@@ -53,11 +52,10 @@ def write_config(tmp_path: Path) -> Path:
 def run_l2l(
     config_path: Path,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     open_http: Callable[[Any, float], Result[Any, TranslationError]],
     flags: list[str],
+    sleep: Callable[[float], None] | None = None,
 ) -> tuple[int, str, str]:
-    monkeypatch.setattr(cli, "urllib_open", open_http)
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [str(config_path), "--cache-dir", str(tmp_path / "cache"), *flags],
@@ -66,18 +64,16 @@ def run_l2l(
         stdout,
         stderr,
         time.time,
+        open_http,
+        sleep if sleep is not None else (lambda seconds: None),
     ).run()
     return code, stdout.getvalue(), stderr.getvalue()
 
 
-def test_run_log_captures_stream_request_and_response(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_log_captures_stream_request_and_response(tmp_path: Path) -> None:
     chunks = with_usage(stream_chunks("Hello."), USAGE)
     http = FakeHttp([FakeStreamResponse(chunks)])
-    code, _, _ = run_l2l(
-        write_config(tmp_path), tmp_path, monkeypatch, http.open, ["--no-cache"]
-    )
+    code, _, _ = run_l2l(write_config(tmp_path), tmp_path, http.open, ["--no-cache"])
     assert code == 0
 
     logs = list((tmp_path / "cache" / "logs").glob("*.log"))
@@ -110,16 +106,17 @@ def test_run_log_captures_plain_request_and_response(tmp_path: Path) -> None:
     assert '"Plain"' in content
 
 
-def test_run_log_captures_http_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_log_captures_http_error(tmp_path: Path) -> None:
     def open_fail(request: Any, timeout: float) -> Result[Any, TranslationError]:
         return fail_http("unreachable", "down")
 
     slept: list[float] = []
-    monkeypatch.setattr(cli, "time_sleep", lambda seconds: slept.append(seconds))
+
+    def record_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
     code, _, _ = run_l2l(
-        write_config(tmp_path), tmp_path, monkeypatch, open_fail, ["--no-cache"]
+        write_config(tmp_path), tmp_path, open_fail, ["--no-cache"], record_sleep
     )
     assert code == 1
     assert len(slept) == 2
@@ -132,12 +129,10 @@ def test_run_log_captures_http_error(
     assert "could not reach endpoint: down" in content
 
 
-def test_show_log_path_prints_log_path_to_stderr(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_show_log_path_prints_log_path_to_stderr(tmp_path: Path) -> None:
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
     code, _, stderr = run_l2l(
-        write_config(tmp_path), tmp_path, monkeypatch, http.open, ["--no-cache", "-l"]
+        write_config(tmp_path), tmp_path, http.open, ["--no-cache", "-l"]
     )
     assert code == 0
 
@@ -146,34 +141,26 @@ def test_show_log_path_prints_log_path_to_stderr(
     assert Path(match.group(1)).exists()
 
 
-def test_show_log_path_short_flag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_show_log_path_short_flag(tmp_path: Path) -> None:
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
-    code, _, stderr = run_l2l(
-        write_config(tmp_path), tmp_path, monkeypatch, http.open, ["-l"]
-    )
+    code, _, stderr = run_l2l(write_config(tmp_path), tmp_path, http.open, ["-l"])
     assert code == 0
     assert "l2l: log: " in stderr
 
 
-def test_verbose_alone_does_not_print_log_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_verbose_alone_does_not_print_log_path(tmp_path: Path) -> None:
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
     code, _, stderr = run_l2l(
-        write_config(tmp_path), tmp_path, monkeypatch, http.open, ["--no-cache", "-v"]
+        write_config(tmp_path), tmp_path, http.open, ["--no-cache", "-v"]
     )
     assert code == 0
     assert "l2l: log:" not in stderr
 
 
-def test_without_verbose_log_path_not_printed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_without_verbose_log_path_not_printed(tmp_path: Path) -> None:
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
     code, _, stderr = run_l2l(
-        write_config(tmp_path), tmp_path, monkeypatch, http.open, ["--no-cache"]
+        write_config(tmp_path), tmp_path, http.open, ["--no-cache"]
     )
     assert code == 0
     assert "l2l: log:" not in stderr

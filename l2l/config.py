@@ -53,8 +53,8 @@ def validate_document(
     unknown = sorted(set(document) - {"api", "options", "pass"})
     if unknown:
         return fail_config(
-            "{}: unknown top-level key(s): {} (expected [api], [options], "
-            "[[pass]])".format(path, ", ".join(unknown))
+            "%s: unknown top-level key(s): %s (expected [api], [options], "
+            "[[pass]])" % (path, ", ".join(unknown))
         )
 
     return Ok(None)
@@ -92,7 +92,7 @@ def string_api_setting(
 
         value = table[key]
         if not isinstance(value, str) or not value.strip():
-            return fail_config(f"{path}: [api] {key} must be a non-empty string")
+            return fail_config("%s: [api] %s must be a non-empty string" % (path, key))
 
         return Ok(set_field(partial, key, value.strip()))
 
@@ -129,7 +129,7 @@ def positive_number_setting(
     )
     if not valid:
         expected = "a positive integer" if whole else "a positive number"
-        return fail_config(f"{path}: [api] {key} must be {expected}")
+        return fail_config("%s: [api] %s must be %s" % (path, key, expected))
 
     if whole:
         return Ok(replace(partial, max_tokens=int(value)))
@@ -157,10 +157,10 @@ def params_api_setting(
 
     value = table["params"]
     if not isinstance(value, dict):
-        return fail_config(f"{path}: [api] params must be a table")
+        return fail_config("%s: [api] params must be a table" % path)
 
     if not is_json_value(value):
-        return fail_config(f"{path}: [api] params must contain only JSON values")
+        return fail_config("%s: [api] params must contain only JSON values" % path)
 
     return Ok(replace(partial, params=value))
 
@@ -181,13 +181,11 @@ def document_api_settings(
 
     table = document["api"]
     if not isinstance(table, dict):
-        return fail_config(f"{path}: [api] must be a table")
+        return fail_config("%s: [api] must be a table" % path)
 
     unknown = sorted(set(table) - set(API_SETTING_KEYS))
     if unknown:
-        return fail_config(
-            "{}: [api]: unknown key(s): {}".format(path, ", ".join(unknown))
-        )
+        return fail_config("%s: [api]: unknown key(s): %s" % (path, ", ".join(unknown)))
 
     def step(
         partial_result: Result[PartialApiSettings, TranslationError],
@@ -233,10 +231,10 @@ def env_positive_setting(
     try:
         parsed = parse(raw)
     except ValueError:
-        return fail_config(f"{variable} must be {kind}, got {raw!r}")
+        return fail_config("%s must be %s, got %r" % (variable, kind, raw))
 
     if parsed <= 0:
-        return fail_config(f"{variable} must be positive")
+        return fail_config("%s must be positive" % variable)
 
     return Ok(parsed)
 
@@ -406,31 +404,31 @@ def parse_options_table(
     path: str, table: Any
 ) -> Result[dict[str, bool | int], TranslationError]:
     if not isinstance(table, dict):
-        return fail_config(f"{path}: [options] must be a table")
+        return fail_config("%s: [options] must be a table" % path)
 
     unknown = sorted(
         set(table) - {"ascii", "ensure_paragraphs", "retranslate_untranslated"}
     )
     if unknown:
         return fail_config(
-            "{}: [options]: unknown key(s): {}".format(path, ", ".join(unknown))
+            "%s: [options]: unknown key(s): %s" % (path, ", ".join(unknown))
         )
 
     ascii_value = table.get("ascii", False)
     if not isinstance(ascii_value, bool):
-        return fail_config(f"{path}: [options] ascii must be true or false")
+        return fail_config("%s: [options] ascii must be true or false" % path)
 
     ensure_paragraphs = table.get("ensure_paragraphs", False)
     if not is_paragraph_tri_state(ensure_paragraphs):
         return fail_config(
-            f"{path}: [options] ensure_paragraphs must be true, false, "
-            "or a positive integer"
+            "%s: [options] ensure_paragraphs must be true, false, "
+            "or a positive integer" % path
         )
 
     retranslate_untranslated = table.get("retranslate_untranslated", False)
     if not isinstance(retranslate_untranslated, bool):
         return fail_config(
-            f"{path}: [options] retranslate_untranslated must be true or false"
+            "%s: [options] retranslate_untranslated must be true or false" % path
         )
 
     return Ok(
@@ -448,39 +446,44 @@ def pass_definition_from(
     mode = table.get("mode", "chunk")
     if mode not in ("analysis", "chunk", "paragraph"):
         return fail_config(
-            f"{path}: [[pass]] {name}: mode must be analysis, chunk, or paragraph"
+            "%s: [[pass]] %s: mode must be analysis, chunk, or paragraph" % (path, name)
         )
 
     ascii_value = table.get("ascii")
     if ascii_value is not None and not isinstance(ascii_value, bool):
-        return fail_config(f"{path}: [[pass]] {name}: ascii must be true or false")
+        return fail_config(
+            "%s: [[pass]] %s: ascii must be true or false" % (path, name)
+        )
 
     ensure_paragraphs_value = table.get("ensure_paragraphs")
     if ensure_paragraphs_value is not None and not is_paragraph_tri_state(
         ensure_paragraphs_value
     ):
         return fail_config(
-            f"{path}: [[pass]] {name}: ensure_paragraphs must be true, false, "
-            "or a positive integer"
+            "%s: [[pass]] %s: ensure_paragraphs must be true, false, "
+            "or a positive integer" % (path, name)
         )
 
     retranslate_value = table.get("retranslate_untranslated")
     if retranslate_value is not None and not isinstance(retranslate_value, bool):
         return fail_config(
-            f"{path}: [[pass]] {name}: retranslate_untranslated must be true or false"
+            "%s: [[pass]] %s: retranslate_untranslated must be true or false"
+            % (path, name)
         )
 
     model = table.get("model")
     if model is not None and (not isinstance(model, str) or not model.strip()):
-        return fail_config(f"{path}: [[pass]] {name}: model must be a non-empty string")
+        return fail_config(
+            "%s: [[pass]] %s: model must be a non-empty string" % (path, name)
+        )
 
     params = table.get("params", {})
     if not isinstance(params, dict):
-        return fail_config(f"{path}: [[pass]] {name}: params must be a table")
+        return fail_config("%s: [[pass]] %s: params must be a table" % (path, name))
 
     if not is_json_value(params):
         return fail_config(
-            f"{path}: [[pass]] {name}: params must contain only JSON values"
+            "%s: [[pass]] %s: params must contain only JSON values" % (path, name)
         )
 
     return Ok(
@@ -539,8 +542,8 @@ def load_instruction_text(
     if ("instruction_file" in table) == has_inline:
         return io_result(
             fail_config(
-                f"{path}: [[pass]] {name}: exactly one of instruction_file "
-                "or instruction is required"
+                "%s: [[pass]] %s: exactly one of instruction_file "
+                "or instruction is required" % (path, name)
             )
         )
 
@@ -548,7 +551,7 @@ def load_instruction_text(
         instruction = table["instruction"]
         if not isinstance(instruction, str) or not instruction.strip():
             return io_result(
-                fail_config(f"{path}: [[pass]] {name}: instruction is empty")
+                fail_config("%s: [[pass]] %s: instruction is empty" % (path, name))
             )
 
         return io_result(Ok(instruction.strip()))
@@ -556,10 +559,12 @@ def load_instruction_text(
     instruction_file = table["instruction_file"]
     if not isinstance(instruction_file, str) or not instruction_file.strip():
         return io_result(
-            fail_config(f"{path}: [[pass]] {name}: instruction_file must be a path")
+            fail_config(
+                "%s: [[pass]] %s: instruction_file must be a path" % (path, name)
+            )
         )
 
-    description = f"{path}: [[pass]] {name}: instruction file"
+    description = "%s: [[pass]] %s: instruction file" % (path, name)
     file_path = os.path.join(base_directory, instruction_file)
 
     def checked(
@@ -570,7 +575,9 @@ def load_instruction_text(
             lambda text: (
                 Ok(text.strip())
                 if text.strip()
-                else fail_config(f"{path}: [[pass]] {name}: instruction file is empty")
+                else fail_config(
+                    "%s: [[pass]] %s: instruction file is empty" % (path, name)
+                )
             ),
         )
 
@@ -581,20 +588,18 @@ def parse_pass_table(
     path: str, table: Any, base_directory: str
 ) -> IO[Result[PassDefinition, TranslationError]]:
     if not isinstance(table, dict):
-        return io_result(fail_config(f"{path}: [[pass]] entries must be tables"))
+        return io_result(fail_config("%s: [[pass]] entries must be tables" % path))
 
     unknown = sorted(set(table) - set(PASS_KEYS))
     if unknown:
         return io_result(
-            fail_config(
-                "{}: [[pass]]: unknown key(s): {}".format(path, ", ".join(unknown))
-            )
+            fail_config("%s: [[pass]]: unknown key(s): %s" % (path, ", ".join(unknown)))
         )
 
     name = table.get("name")
     if not isinstance(name, str) or not name.strip():
         return io_result(
-            fail_config(f"{path}: [[pass]]: name must be a non-empty string")
+            fail_config("%s: [[pass]]: name must be a non-empty string" % path)
         )
 
     return io_bind(
@@ -623,7 +628,7 @@ def document_passes(
         or not all(isinstance(entry, dict) for entry in entries)
     ):
         return io_result(
-            fail_config(f"{path}: [[pass]] must define one or more pass tables")
+            fail_config("%s: [[pass]] must define one or more pass tables" % path)
         )
 
     return io_map(
@@ -726,7 +731,10 @@ def read_document(
 
 
 def resolve_config_path(
-    requested: str | None, environment: Mapping[str, str]
+    requested: str | None,
+    environment: Mapping[str, str],
+    path_exists: Callable[[str], bool] = os.path.exists,
+    current_directory: IO[str] | None = None,
 ) -> IO[str | None]:
     if requested:
         return io_pure(requested)
@@ -737,13 +745,13 @@ def resolve_config_path(
 
     def pick(cwd_value: str, user_path: str) -> str | None:
         local = os.path.join(cwd_value, "l2l.toml")
-        if os.path.exists(local):
+        if path_exists(local):
             return local
 
-        return user_path if os.path.exists(user_path) else None
+        return user_path if path_exists(user_path) else None
 
     return io_bind(
-        cwd(),
+        current_directory if current_directory is not None else cwd(),
         lambda cwd_value: io_bind(
             user_config_path(environment),
             lambda user_path: IO(lambda: pick(cwd_value, user_path)),

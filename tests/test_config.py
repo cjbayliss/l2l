@@ -26,7 +26,7 @@ from l2l.config import (
     validate_document,
 )
 from l2l.errors import TranslationError, describe
-from l2l.monads import Err, Ok, Result
+from l2l.monads import Err, Ok, Result, io_pure
 from l2l.plans import mask_api_key, setup_report
 from l2l.settings import (
     DEFAULT_API_SETTINGS,
@@ -522,28 +522,35 @@ def test_read_document_without_a_file_is_empty() -> None:
     assert result.value == {}
 
 
-def test_resolve_config_path_discovers_local_then_user(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_resolve_config_path_discovers_local_then_user(tmp_path: Path) -> None:
     empty_root = tmp_path / "empty"
-    empty_root.mkdir()
-    monkeypatch.chdir(tmp_path)
-    assert resolve_config_path(None, {"XDG_CONFIG_HOME": str(empty_root)}).run() is (
-        None
-    )
-
     local = tmp_path / "l2l.toml"
-    local.write_text("", encoding="utf-8")
-    assert resolve_config_path(None, {}).run() == str(local)
-
     user_root = tmp_path / "cfg"
     user_path = user_root / "l2l" / "config.toml"
-    user_path.parent.mkdir(parents=True)
-    user_path.write_text("", encoding="utf-8")
-    local.unlink()
-    assert resolve_config_path(None, {"XDG_CONFIG_HOME": str(user_root)}).run() == (
-        str(user_path)
+
+    def exists_none(path: str) -> bool:
+        return False
+
+    assert (
+        resolve_config_path(
+            None, {"XDG_CONFIG_HOME": str(empty_root)}, exists_none
+        ).run()
+        is None
     )
+
+    def exists_local(path: str) -> bool:
+        return path == str(local)
+
+    assert resolve_config_path(
+        None, {}, exists_local, io_pure(str(tmp_path))
+    ).run() == str(local)
+
+    def exists_user(path: str) -> bool:
+        return path == str(user_path)
+
+    assert resolve_config_path(
+        None, {"XDG_CONFIG_HOME": str(user_root)}, exists_user
+    ).run() == str(user_path)
 
 
 def test_load_setup_reports_malformed_toml(tmp_path: Path) -> None:
