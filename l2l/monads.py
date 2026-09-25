@@ -8,8 +8,6 @@ from typing import Protocol
 
 
 class Managed[T](Protocol):
-    """A re-entrant context manager returning a resource of type `T`."""
-
     def __enter__(self) -> T: ...
 
     def __exit__(
@@ -126,9 +124,6 @@ type Maybe[T] = Just[T] | Nothing
 
 @dataclass(frozen=True)
 class Cons[T]:
-    """An immutable cons cell; prepend is O(1), so an accumulation that
-    only ever reads the whole sequence at the end stays linear overall."""
-
     head: T
     tail: Cons[T] | None = None
 
@@ -277,8 +272,6 @@ def io_when_unit(condition: bool, action: IO[None]) -> IO[None]:
 
 
 def io_atomic[T](lock: threading.Lock, action: IO[T]) -> IO[T]:
-    """Run `action` while holding `lock` (the sanctioned nested runner)."""
-
     def thunk() -> T:
         with lock:
             return action.run()
@@ -287,8 +280,6 @@ def io_atomic[T](lock: threading.Lock, action: IO[T]) -> IO[T]:
 
 
 def io_using[R, T](resource: Managed[R], body: Callable[[R], IO[T]]) -> IO[T]:
-    """Enter `resource` as a context manager, run `body`, always exit."""
-
     def thunk() -> T:
         with resource as entered:
             return body(entered).run()
@@ -299,8 +290,6 @@ def io_using[R, T](resource: Managed[R], body: Callable[[R], IO[T]]) -> IO[T]:
 def repeat_until(
     action: IO[None], until: threading.Event, interval: float
 ) -> Callable[[], None]:
-    """Runner for daemon threads: perform `action` every `interval` seconds."""
-
     def loop() -> None:
         while not until.wait(interval):
             action.run()

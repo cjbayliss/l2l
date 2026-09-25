@@ -1,9 +1,3 @@
-"""Frozen configuration data, defaults, and small pure accessors.
-
-`settings` is the data vocabulary of the package; `config` builds it from
-TOML, environment, and arguments. Dependencies point downward only.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
@@ -86,9 +80,6 @@ class Setup:
 
 
 class HttpResponse(Protocol):
-    """The slice of an endpoint response the package consumes: full-body
-    reads for plain calls, line iteration for SSE streams."""
-
     def read(self, amount: int = -1) -> bytes: ...
 
     def __iter__(self) -> Iterator[bytes]: ...
@@ -260,12 +251,6 @@ def resolve_call_settings(
 
 
 def paragraph_tolerance(value: bool | int | None) -> int | None:
-    """Collapse the tri-state `ensure_paragraphs` value to a tolerance.
-
-    `True` demands an exact paragraph count (tolerance 0), a non-negative
-    integer allows that many paragraphs of drift, and `False`/`None`
-    disables the paragraph-count check.
-    """
     if value is True:
         return 0
 
@@ -276,12 +261,9 @@ def paragraph_tolerance(value: bool | int | None) -> int | None:
 
 
 def salt(*parts: str) -> str:
-    """Join cache-key salt segments with the NUL separator."""
     return "\x00".join(parts)
 
 
 def pass_salt(pass_definition: PassDefinition, retry_attempt: int = 0) -> str:
     base = salt(CACHE_SALT_VERSION, pass_definition.name, pass_definition.instruction)
-    # A same-mode retry must make fresh endpoint calls, so its units are
-    # keyed apart from the first attempt's (bad) cached output.
     return salt(base, "retry%d" % retry_attempt) if retry_attempt else base

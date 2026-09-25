@@ -348,9 +348,6 @@ def test_retranslation_retranslates_only_flagged_paragraphs() -> None:
 
 
 def test_retranslation_fails_when_paragraph_still_untranslated() -> None:
-    # Majority-untranslated first attempt: the pass is retried once in its
-    # own mode, the retry is flagged again, and per-paragraph retranslation
-    # of both paragraphs still fails, ending the run with exit code 1.
     console, stderr = make_console()
     echo = "你好。\n\n世界。"
     http = FakeHttp(
@@ -494,8 +491,6 @@ def test_retranslation_results_are_cached(tmp_path: Path) -> None:
     first_code, first_output, first_calls = run()
     second_code, second_output, second_calls = run()
     assert (first_code, second_code) == (0, 0)
-    # First run: bad chunk, same-mode retry, then per-paragraph
-    # retranslation. Second run: everything (including the retry) is cached.
     assert (first_calls, second_calls) == (4, 0)
     assert first_output == second_output == "Hello.\n\nWorld.\n"
 
@@ -607,8 +602,6 @@ def test_retranslation_majority_retry_uses_fresh_cache_keys(tmp_path: Path) -> N
     second_code, second_output, second_calls = second_run()
     assert (first_code, second_code) == (0, 0)
     assert (first_calls, second_calls) == (2, 0)
-    # A retry key that collided with the first attempt's key would replay
-    # the cached echo here, triggering endpoint calls and a bad output.
     assert first_output == second_output == "Hello.\n\nWorld.\n"
 
 

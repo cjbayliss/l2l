@@ -1,15 +1,3 @@
-"""Interactive Tab toggle: listens on the controlling TTY for Tab keys.
-
-stdin carries the translation input, so the listener opens `/dev/tty`
-instead. The terminal is put into cbreak mode (Tab arrives without
-waiting for Enter while Ctrl-C still raises KeyboardInterrupt) and the
-original attributes are restored on exit.
-
-Every effect (opening the TTY, termios changes, thread start/stop) is an
-IO value; `start_tab_listener` composes them, and the program edge runs
-the returned IO exactly once to obtain the shutdown IO.
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -54,8 +42,6 @@ def is_toggle_key(data: bytes) -> bool:
 
 
 def open_tty() -> IO[Maybe[int]]:
-    """Probe for the controlling TTY as an IO value."""
-
     def from_tty_device() -> Maybe[int]:
         try:
             return Just(os.open("/dev/tty", os.O_RDONLY))
@@ -115,8 +101,6 @@ class TabListener:
     )
 
     def listen_action(self) -> IO[None]:
-        """One polling step; a vanished TTY halts the listener."""
-
         def thunk() -> None:
             try:
                 ready, _, _ = select.select([self.fd], [], [], POLL_SECONDS)
@@ -172,15 +156,6 @@ class TabListener:
 
 
 def start_tab_listener(console: Console, toggle: Callable[[], None]) -> IO[IO[None]]:
-    """Compose the Tab listener as IO values.
-
-    `toggle` performs the mode flip and re-render; the program edge
-    supplies it, so this module never executes IO itself. Running the
-    returned IO attaches to the TTY (cbreak mode) and starts the polling
-    thread, yielding the shutdown IO, which stops the listener and
-    restores the terminal. The no-op shutdown IO is returned when stderr
-    is not a terminal or no TTY is available.
-    """
     if not console.status.live:
         return io_pure(IO(no_op))
 

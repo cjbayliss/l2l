@@ -195,8 +195,6 @@ FLOAT_PATTERN = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 
 
 def parse_float(value: Any) -> Maybe[float]:
-    """Parse a JSON-ish number without exceptions: numbers pass through,
-    numeric strings are matched algebraically, everything else is Nothing."""
     if isinstance(value, bool):
         return NOTHING
 
@@ -214,9 +212,6 @@ def parse_cost(value: Any) -> float:
 
 
 def parse_tokens(value: Any) -> int:
-    """Token reports get the same defensive parse as costs: endpoints
-    occasionally report numeric strings or floats, and an uncoerced value
-    would crash usage accumulation mid-run."""
     return int(maybe_or_else_get(parse_float(value), lambda: 0.0))
 
 
@@ -258,9 +253,6 @@ def has_letters(text: str) -> bool:
 UNKNOWN_SCRIPT = ""
 LATIN_SCRIPT = "latin"
 
-# Unicode names do not give every letter its script as the first word;
-# these buckets fold the aliases into the script that reads best for the
-# untranslated check (halfwidth forms are kana, fullwidth letters Latin).
 SCRIPT_ALIASES: Mapping[str, str] = MappingProxyType(
     {
         "hiragana": "kana",
@@ -273,10 +265,6 @@ SCRIPT_ALIASES: Mapping[str, str] = MappingProxyType(
 
 
 def letter_script(char: str) -> str:
-    """The script family of a letter, taken from the first word of its
-    Unicode name ('LATIN' out of 'LATIN SMALL LETTER A'). CJK ideographs
-    share one family, so Chinese and Japanese kanji cannot be told apart
-    at script level; non-letters have no script."""
     if not char.isalpha():
         return UNKNOWN_SCRIPT
 
@@ -289,7 +277,6 @@ def letter_script(char: str) -> str:
 
 
 def dominant_script(text: str) -> str:
-    """The most frequent letter script in `text`, or '' when it has none."""
     scripts = tuple(script for script in map(letter_script, text) if script)
     tally = ((scripts.count(script), script) for script in frozenset(scripts))
     return max(tally, default=(0, UNKNOWN_SCRIPT))[1]
@@ -298,18 +285,6 @@ def dominant_script(text: str) -> str:
 def detect_language_pair(
     source_paragraphs: tuple[str, ...], output_paragraphs: tuple[str, ...]
 ) -> tuple[str, str]:
-    """Best-effort (source, target) script guess from the letters alone,
-    so the untranslated check can serve any language pair without a
-    model call.
-
-    The source script is the document's dominant letter script; the
-    target script is the most common dominant script among output
-    paragraphs that no longer read as the source (echoed paragraphs are
-    excluded, so they cannot skew the vote). When nothing distinguishes
-    itself — only echoes, letterless output, or output in the source's
-    own script, which covers Chinese↔Japanese kanji — the target is ''
-    and callers fall back to the historical ASCII-letter rule.
-    """
     source_script = dominant_script("".join(source_paragraphs))
     candidates = tuple(dominant_script(paragraph) for paragraph in output_paragraphs)
     votes = tuple(script for script in candidates if script != source_script)
@@ -324,17 +299,6 @@ def untranslated_paragraph(
     pair: tuple[str, str],
     character_map: Mapping[str, str],
 ) -> bool:
-    """Heuristic for a paragraph the pass returned without translating.
-
-    A paragraph is untranslated when the source has letters and either
-    the output matches it after mechanical ASCII folding (echoes often
-    differ only in punctuation and whitespace), or the output carries no
-    letters of the detected target script. With the target unknown (''),
-    that degenerates to the historical rule of no ASCII letters, which
-    keeps letterless replies flagged. Sources without letters (rules,
-    numbers) are never flagged, since they legitimately translate to
-    themselves.
-    """
     if not has_letters(source):
         return False
 
@@ -350,7 +314,6 @@ def untranslated_paragraph(
 
 
 def excerpt(text: str, limit: int = 60) -> str:
-    """Collapsed single-line prefix of `text`, for error messages."""
     collapsed = " ".join(text.split())
     return collapsed if len(collapsed) <= limit else collapsed[:limit] + "..."
 

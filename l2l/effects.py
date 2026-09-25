@@ -183,8 +183,7 @@ def open_run_log(cache_directory: str, clock: Clock) -> IO[RunLog]:
     def thunk() -> RunLog:
         path = run_log_path(cache_directory, clock(), os.getpid())
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        # The handle intentionally outlives this scope; `close_run_log` closes it.
-        handle = open(path, "a", encoding="utf-8")  # noqa: SIM115
+        handle = open(path, "a", encoding="utf-8")
 
         def append(content: str) -> None:
             with contextlib.suppress(OSError, ValueError):
@@ -272,7 +271,6 @@ LOG_SECONDS_PER_DAY = 86400.0
 
 
 def prune_old_logs(cache_directory: str, keep_days: int, clock: Clock) -> IO[int]:
-    """Delete run logs older than `keep_days` days, counting removals."""
     horizon = keep_days * LOG_SECONDS_PER_DAY
 
     def with_now(now_value: float) -> IO[int]:

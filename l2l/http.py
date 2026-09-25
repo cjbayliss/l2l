@@ -85,8 +85,6 @@ def build_chat_payload(
     }
 
 
-# Expected shapes of the chat-completions JSON. They document the wire
-# contract; parsing stays defensive because bodies come from the endpoint.
 class ChatMessage(TypedDict, total=False):
     role: str
     content: object
@@ -183,12 +181,10 @@ def reasoning_at(
 
 
 def keep_raw(value: str) -> Maybe[str]:
-    """Deltas keep every character: live display needs the newlines."""
     return Just(value) if value else NOTHING
 
 
 def keep_trimmed(value: str) -> Maybe[str]:
-    """Complete messages drop surrounding whitespace."""
     return Just(value.rstrip()) if value.strip() else NOTHING
 
 
@@ -239,8 +235,6 @@ class StreamState:
 
 
 def stream_text(state: StreamState) -> str:
-    """Materialise the accumulated visible text, including a held prefix
-    that was still waiting to be classified as a `<think>` tag at EOF."""
     return "".join(cons_to_tuple(state.contents)) + (
         state.think.held if state.think.checking and not state.think.open else ""
     )
@@ -311,9 +305,6 @@ class ChatReply:
     reasoning: tuple[str, ...] = ()
     reported: Mapping[str, Any] | None = None
     counted: int = 0
-    # True when the reasoning needs no conclude-time dump: streamed replies
-    # show it live (verbose) or record it as replayable console events, so
-    # only plain replies ever re-dump their (complete-text) reasoning.
     reasoning_shown: bool = False
 
 
@@ -364,7 +355,6 @@ def http_request(
 
 
 def http_error_detail(error: urllib.error.HTTPError) -> str:
-    """Read the error body; a failing read (closed socket) degrades to ''."""
     try:
         return error.read().decode("utf-8", "replace")[:500]
     except TRANSPORT_ERRORS:
@@ -575,8 +565,6 @@ def drive_stream(
     def flush(
         outcome: Result[StreamState, TranslationError],
     ) -> IO[Result[StreamState, TranslationError]]:
-        """A data frame left unterminated at EOF is still decoded, so the
-        final chunk's content and usage are never silently dropped."""
         if isinstance(outcome, Err):
             return io_result(outcome)
 
@@ -619,8 +607,6 @@ def collect_stream(
         return io_and_then(ctx.console.end_raw(), recorded(None))
 
     def handle(error: Exception) -> Result[StreamState, TranslationError]:
-        """Transport failures interrupt the stream; anything else is a
-        protocol-level defect. Both become errors — nothing re-raises."""
         if isinstance(error, TRANSPORT_ERRORS):
             return fail_http("interrupted", str(error))
 
@@ -742,7 +728,6 @@ def plain_call(
 
 
 type RepairOutcome = tuple[str, Usage, bool]
-"""Final output text, accumulated usage, and whether validation passed."""
 
 
 def repaired_call(
@@ -757,11 +742,6 @@ def repaired_call(
     on_repair: Callable[[int, str], IO[None]],
     on_exhausted: Callable[[str, str], IO[None]] | None,
 ) -> Callable[[Usage], IO[Result[RepairOutcome, TranslationError]]]:
-    """Chat once, then validate-and-repair: each failed validation logs,
-    rebuilds the prompt, and retries up to `max_repairs` times. A final
-    reply that still fails validation is returned (flagged `False`),
-    optionally after `on_exhausted` reports it."""
-
     def attempt(
         user: str, failed: int, usage: Usage
     ) -> IO[Result[RepairOutcome, TranslationError]]:

@@ -219,7 +219,6 @@ def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
     assert first == 0
     assert first_stdout.getvalue().strip() == "Hello."
 
-    # Second run with a refusing endpoint: success proves the cache served it.
     def refusing_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
         raise AssertionError("cache should have served the second run")
 
@@ -235,5 +234,4 @@ def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
     ).run()
     assert second == 0
     assert second_stdout.getvalue().strip() == "Hello."
-    # Zero token usage on the second run proves the cache served it.
     assert "prompt=0, completion=0" in second_stderr.getvalue()

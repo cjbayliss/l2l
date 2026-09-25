@@ -272,7 +272,6 @@ def test_fold_io_lazy_empty_items_returns_initial() -> None:
 
 
 def test_cons_prepends_and_materialises_in_order() -> None:
-    # Prepending 1, then 2, then 3 materialises in chronological order.
     items = cons(1)
     items = cons(2, items)
     items = cons(3, items)

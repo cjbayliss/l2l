@@ -48,6 +48,10 @@ ignore = [
     "RET501",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# The run-log handle intentionally outlives `open_run_log`; `close_run_log` closes it.
+"l2l/effects.py" = ["SIM115"]
+
 [tool.mypy]
 strict = true
 warn_unreachable = true

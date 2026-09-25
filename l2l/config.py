@@ -318,7 +318,6 @@ def build_config(partial: PartialApiSettings) -> Result[Config, TranslationError
 
 
 def is_json_value(value: Any) -> bool:
-    """True when `value` is a JSON scalar, or a list/table of JSON values."""
     match value:
         case bool() | int() | float() | str() | None:
             return True
@@ -334,7 +333,6 @@ def is_json_value(value: Any) -> bool:
 
 
 def is_paragraph_tri_state(value: Any) -> bool:
-    """True for `true`, `false`, or a positive integer paragraph tolerance."""
     match value:
         case bool():
             return True

@@ -326,8 +326,6 @@ class LogEvent:
 
 
 def terminal_size() -> IO[tuple[int, int]]:
-    """Probe the controlling terminal's dimensions as an IO value."""
-
     def probe() -> tuple[int, int]:
         try:
             size = os.get_terminal_size(sys.stderr.fileno())
@@ -342,7 +340,6 @@ def terminal_size() -> IO[tuple[int, int]]:
 
 
 def display_width(text: str) -> int:
-    """Terminal cells a string occupies: wide CJK/fullwidth chars span two."""
     width = 0
     for char in text:
         if unicodedata.combining(char):
@@ -395,7 +392,6 @@ def replay_rows(
 
 
 def erase_rows_render(rows: int, height: int) -> str:
-    """Erase `rows` content rows, the last of which holds the cursor."""
     if rows < 0:
         return ""
 
@@ -422,8 +418,6 @@ class Console:
     term_size: Callable[[], IO[tuple[int, int]]] = terminal_size
 
     def record(self, text: str, verbose_only: bool, raw: bool) -> IO[None]:
-        """Append a session event; compose inside a status-lock `io_atomic`."""
-
         def tracked(
             width: int,
         ) -> Callable[[Cons[LogEvent] | None], tuple[Cons[LogEvent] | None, IO[None]]]:
@@ -459,8 +453,6 @@ class Console:
         )
 
     def commit_pending_raw(self) -> IO[None]:
-        """Seal an open reasoning block; compose inside a locked scope."""
-
         def sealed(pending: str) -> IO[None]:
             if not pending:
                 return io_pure(None)
@@ -519,8 +511,6 @@ class Console:
         return io_bind(read_ref(self.verbose), act)
 
     def stream_reasoning(self, text: str) -> IO[None]:
-        """Capture a reasoning delta; display it live only when verbose."""
-
         def act(verbose: bool) -> IO[None]:
             def extended(previous: str) -> IO[None]:
                 pending = previous + text
@@ -569,8 +559,6 @@ class Console:
         )
 
     def replay(self) -> IO[None]:
-        """Erase this session's output and re-render it for the current mode."""
-
         def snapshot() -> IO[
             tuple[
                 tuple[bool, tuple[tuple[LogEvent, ...], str]],

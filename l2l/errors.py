@@ -8,15 +8,11 @@ from l2l.monads import Err
 
 @dataclass(frozen=True)
 class ConfigError:
-    """A configuration, environment, or setup problem."""
-
     message: str
 
 
 @dataclass(frozen=True)
 class MissingSettings:
-    """Required API settings absent from every configuration layer."""
-
     fields: tuple[str, ...]
 
 
@@ -25,8 +21,6 @@ HttpKind = Literal["status", "unreachable", "protocol", "stream", "interrupted"]
 
 @dataclass(frozen=True)
 class HttpError:
-    """A transport or protocol failure against the chat endpoint."""
-
     kind: HttpKind
     detail: str
     status: int | None = None
@@ -35,8 +29,6 @@ class HttpError:
 
 @dataclass(frozen=True)
 class BudgetError:
-    """A request or document exceeding the configured token budget."""
-
     request_tokens: int
     budget: int
     parts: int = 1
@@ -44,16 +36,12 @@ class BudgetError:
 
 @dataclass(frozen=True)
 class PassError:
-    """A pass failed; the inner error is the underlying cause."""
-
     pass_name: str
     inner: TranslationError
 
 
 @dataclass(frozen=True)
 class UnitError:
-    """A unit call failed; the inner error is the underlying cause."""
-
     pass_name: str
     unit_index: int
     inner: TranslationError
@@ -61,16 +49,12 @@ class UnitError:
 
 @dataclass(frozen=True)
 class AsciiError:
-    """ASCII enforcement failed; the inner error is the underlying cause."""
-
     pass_name: str
     inner: TranslationError
 
 
 @dataclass(frozen=True)
 class UntranslatedError:
-    """A paragraph is still untranslated after retranslation."""
-
     pass_name: str
     index: int
     sample: str

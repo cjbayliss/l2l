@@ -76,7 +76,6 @@ def test_prune_old_logs_removes_only_stale_logs(tmp_path: Path) -> None:
 
 
 def test_prune_old_logs_zero_days_is_a_zero_day_horizon(tmp_path: Path) -> None:
-    """A zero-day horizon prunes everything; the CLI gates on `keep > 0`."""
     logs = tmp_path / "logs"
     logs.mkdir()
     (logs / "ancient.log").write_text("old", encoding="utf-8")

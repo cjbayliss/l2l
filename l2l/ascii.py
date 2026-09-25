@@ -1,9 +1,3 @@
-"""ASCII enforcement: mechanical folding, LLM repair, and output checks.
-
-Pure text machinery lives in `text`; this module composes it with the
-chat effect and the cache. Dependencies point downward only.
-"""
-
 from __future__ import annotations
 
 from functools import reduce
@@ -94,8 +88,6 @@ def ascii_fix_llm(
             lambda bad_output, _problem: build_ascii_retry_user(
                 source_paragraph, output_paragraph, bad_output
             ),
-            # `ascii_fix_attempts` counts every LLM try, the repair loop
-            # counts retries after the first call, hence the difference.
             ctx.settings.ascii_fix_attempts - 1,
             on_repair,
             None,
