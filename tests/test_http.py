@@ -1,3 +1,4 @@
+import http.client
 import io
 import json
 import urllib.error
@@ -89,6 +90,18 @@ def test_urllib_open_survives_a_failing_error_body(monkeypatch: Any) -> None:
     assert isinstance(failure, HttpError)
     assert failure.kind == "status"
     assert "Internal Server Error" in failure.detail
+
+
+def test_urllib_open_reports_bare_http_exceptions(monkeypatch: Any) -> None:
+    def raise_http_exception(request: Any, timeout: float) -> Any:
+        raise http.client.IncompleteRead(b"partial")
+
+    monkeypatch.setattr(urllib.request, "urlopen", raise_http_exception)
+    result = urllib_open("request", 1.0)
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "unreachable"
 
 
 def test_retry_after_seconds_handles_garbage() -> None:

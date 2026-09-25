@@ -28,7 +28,6 @@ from l2l.text import cache_path
 
 Clock = Callable[[], float]
 Sleep = Callable[[float], None]
-PidGetter = Callable[[], int]
 
 
 def now(clock: Clock) -> IO[float]:
@@ -106,11 +105,11 @@ def load_toml(
             with open(path, "rb") as handle:
                 return Ok(tomllib.load(handle))
         except FileNotFoundError:
-            return fail_config(f"{description} not found: {path}")
+            return fail_config("%s not found: %s" % (description, path))
         except OSError as error:
-            return fail_config(f"cannot read {description}: {error}")
+            return fail_config("cannot read %s: %s" % (description, error))
         except tomllib.TOMLDecodeError as error:
-            return fail_config(f"cannot parse {description} {path}: {error}")
+            return fail_config("cannot parse %s %s: %s" % (description, path, error))
 
     return IO(thunk)
 
@@ -121,9 +120,9 @@ def read_text_file(path: str, description: str) -> IO[Result[str, TranslationErr
             with open(path, encoding="utf-8") as handle:
                 return Ok(handle.read())
         except FileNotFoundError:
-            return fail_config(f"{description} not found: {path}")
+            return fail_config("%s not found: %s" % (description, path))
         except OSError as error:
-            return fail_config(f"cannot read {description}: {error}")
+            return fail_config("cannot read %s: %s" % (description, error))
 
     return IO(thunk)
 
@@ -171,18 +170,18 @@ class RunLog:
     close: Callable[[], None] = _no_close
 
 
-def run_log_path(cache_directory: str, now_value: float, pid_getter: PidGetter) -> str:
+def run_log_path(cache_directory: str, now_value: float, pid_value: int) -> str:
     return os.path.join(
         cache_directory,
         "logs",
         "%s-%d.log"
-        % (time.strftime("%Y%m%d-%H%M%S", time.gmtime(now_value)), pid_getter()),
+        % (time.strftime("%Y%m%d-%H%M%S", time.gmtime(now_value)), pid_value),
     )
 
 
 def open_run_log(cache_directory: str, clock: Clock) -> IO[RunLog]:
     def thunk() -> RunLog:
-        path = run_log_path(cache_directory, clock(), os.getpid)
+        path = run_log_path(cache_directory, clock(), os.getpid())
         os.makedirs(os.path.dirname(path), exist_ok=True)
         # The handle intentionally outlives this scope; `close_run_log` closes it.
         handle = open(path, "a", encoding="utf-8")  # noqa: SIM115
@@ -219,7 +218,9 @@ def run_log_write(log: RunLog, content: str) -> IO[None]:
 
 def log_entry(log: RunLog, label: str, body: str) -> IO[None]:
     def stamped(now_value: float) -> IO[None]:
-        return run_log_write(log, f"== {log_stamp(now_value)} {label}\n{body}\n\n")
+        return run_log_write(
+            log, "== %s %s\n%s\n\n" % (log_stamp(now_value), label, body)
+        )
 
     return io_bind(now(log.clock), stamped)
 

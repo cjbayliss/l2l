@@ -129,7 +129,7 @@ def extract_message(
         message = body["choices"][0]["message"]
         return Ok((message, message["content"]))
     except KeyError, IndexError, TypeError:
-        return fail_http("protocol", f"unexpected response shape: {str(body)[:500]}")
+        return fail_http("protocol", "unexpected response shape: %s" % str(body)[:500])
 
 
 def collect_thinking_texts(part: Mapping[str, Any]) -> tuple[str, ...]:
@@ -325,7 +325,9 @@ def plain_reply(body: Any) -> Result[ChatReply, TranslationError]:
     message, content = message_result.value
     texts, thoughts = flatten_content_parts(content)
     if not isinstance(texts, str):
-        return fail_http("protocol", f"unexpected content type: {type(texts).__name__}")
+        return fail_http(
+            "protocol", "unexpected content type: %s" % type(texts).__name__
+        )
 
     usage_report = body.get("usage")
     reported = (
@@ -379,7 +381,7 @@ def urllib_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
             error.code,
             maybe_to_optional(retry_after_seconds(error.headers)),
         )
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
+    except TRANSPORT_ERRORS as error:
         return fail_http("unreachable", str(error))
 
 
@@ -450,9 +452,9 @@ def http_post_json(
                 body = response.read().decode("utf-8")
                 return Ok((body, json.loads(body)))
             except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                return fail_http("protocol", f"invalid JSON response: {error}")
+                return fail_http("protocol", "invalid JSON response: %s" % error)
             except TRANSPORT_ERRORS as error:
-                return fail_http("unreachable", f"response read failed: {error}")
+                return fail_http("unreachable", "response read failed: %s" % error)
 
     def attempt() -> IO[Result[tuple[str, Any], TranslationError]]:
         def thunk() -> Result[tuple[str, Any], TranslationError]:
@@ -622,7 +624,7 @@ def collect_stream(
         if isinstance(error, TRANSPORT_ERRORS):
             return fail_http("interrupted", str(error))
 
-        return fail_http("protocol", f"{type(error).__name__}: {error}")
+        return fail_http("protocol", "%s: %s" % (type(error).__name__, error))
 
     def respond(
         opened: Result[Any, TranslationError],

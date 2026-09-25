@@ -159,8 +159,8 @@ def resolve_work_groups(
         return grouped.value, NOTHING
 
     warning: Maybe[str] = Just(
-        f"l2l: [{pass_name}] paragraph count changed by a previous pass; "
-        "grouping working text independently"
+        "l2l: [%s] paragraph count changed by a previous pass; "
+        "grouping working text independently" % pass_name
     )
     match mode:
         case "paragraph":
@@ -172,11 +172,12 @@ def resolve_work_groups(
 
 def build_ascii_fix_user(source_paragraph: str, output_paragraph: str) -> str:
     return (
-        f"Source paragraph (original language):\n{source_paragraph}\n\n"
+        "Source paragraph (original language):\n%s\n\n"
         "Translated paragraph (must use ASCII characters only):\n"
-        f"{output_paragraph}\n\n"
+        "%s\n\n"
         "Rewrite the translated paragraph using ASCII characters only, "
         "preserving its meaning, register, and language."
+        % (source_paragraph, output_paragraph)
     )
 
 
@@ -184,14 +185,15 @@ def build_ascii_retry_user(
     source_paragraph: str, output_paragraph: str, result: str
 ) -> str:
     return (
-        f"Source paragraph (original language):\n{source_paragraph}\n\n"
+        "Source paragraph (original language):\n%s\n\n"
         "Translated paragraph (must use ASCII characters only):\n"
-        f"{output_paragraph}\n\n"
+        "%s\n\n"
         "Your previous reply still contained these non-ASCII "
-        f"characters: {non_ascii_sample(result)}. Rewrite the translated "
+        "characters: %s. Rewrite the translated "
         "paragraph again, finding an equivalent ASCII formulation for "
         "every one of them from the source and context. Reply with ASCII "
         "characters only."
+        % (source_paragraph, output_paragraph, non_ascii_sample(result))
     )
 
 
@@ -204,8 +206,9 @@ def build_unit_retry_user(
     return "\n\n".join(
         part
         for part in (
-            f"Your previous reply below does not satisfy the output rules: {problem}.",
-            f"Previous reply:\n{bad_output}",
+            "Your previous reply below does not satisfy the output rules: %s."
+            % problem,
+            "Previous reply:\n%s" % bad_output,
             *context_parts(context),
             source_chunk,
             "Translate the source text again, fixing the problem; output only "
@@ -359,7 +362,7 @@ def plan_report(
         )
         match pass_definition.mode:
             case "analysis":
-                return (f"{header}: mode=analysis, 1 call with the whole document",)
+                return ("%s: mode=analysis, 1 call with the whole document" % header,)
 
             case _:
                 plan = (
@@ -395,7 +398,7 @@ def plan_report(
                         for call in calls
                     ),
                     *(
-                        (f"  warning: {warning.value}",)
+                        ("  warning: %s" % warning.value,)
                         if isinstance(warning, Just)
                         else ()
                     ),
@@ -427,12 +430,12 @@ def params_text(params: Mapping[str, Any]) -> str:
 def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
     config = setup.config
     api_lines: tuple[str, ...] = (
-        f"api.base_url: {config.base_url}",
-        f"api.model: {config.model}",
-        f"api.timeout: {config.timeout:g}",
+        "api.base_url: %s" % config.base_url,
+        "api.model: %s" % config.model,
+        "api.timeout: %g" % config.timeout,
         "api.max_tokens: %d" % config.max_tokens,
-        f"api.api_key: {mask_api_key(config.api_key)}",
-        *((f"api.params: {params_text(config.params)}",) if config.params else ()),
+        "api.api_key: %s" % mask_api_key(config.api_key),
+        *(("api.params: %s" % params_text(config.params),) if config.params else ()),
     )
     pass_lines = tuple(
         line
@@ -453,7 +456,7 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
                     len(pass_definition.instruction),
                 ),
                 *(
-                    (f"  params: {params_text(pass_definition.params)}",)
+                    ("  params: %s" % params_text(pass_definition.params),)
                     if pass_definition.params
                     else ()
                 ),
@@ -463,5 +466,5 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
     return "\n".join(
         api_lines
         + pass_lines
-        + (f"options.ensure_paragraphs: {effective_ensure_paragraphs}",)
+        + ("options.ensure_paragraphs: %s" % effective_ensure_paragraphs,)
     )

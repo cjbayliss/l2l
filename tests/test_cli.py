@@ -3,7 +3,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import pytest
 from fakes import FakeHttp, FakePlainResponse, FakeStreamResponse, stream_chunks
 
 from l2l import cli
@@ -31,14 +30,12 @@ def write_config(tmp_path: Path) -> Path:
 
 def run_l2l(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     arguments: list[str],
     stdin: str = "你好。",
 ) -> tuple[int, str, str]:
     def open_http(request: Any, timeout: float) -> Result[Any, TranslationError]:
         raise AssertionError("endpoint must not be contacted")
 
-    monkeypatch.setattr(cli, "urllib_open", open_http)
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         arguments,
@@ -47,28 +44,27 @@ def run_l2l(
         stdout,
         stderr,
         time.time,
+        open_http,
     ).run()
     return code, stdout.getvalue(), stderr.getvalue()
 
 
 def test_empty_stdin_exits_zero_without_config(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(tmp_path, pytest.MonkeyPatch(), [str(tmp_path)], "")
+    code, stdout, stderr = run_l2l(tmp_path, [str(tmp_path)], "")
     assert code == 0
     assert stdout == ""
     assert stderr == ""
 
 
 def test_invalid_arguments_exit_two(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(tmp_path, pytest.MonkeyPatch(), ["--no-such-flag"])
+    code, stdout, stderr = run_l2l(tmp_path, ["--no-such-flag"])
     assert code == 2
     assert stdout == ""
     assert "invalid arguments" in stderr
 
 
 def test_missing_config_fails_with_error(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(
-        tmp_path, pytest.MonkeyPatch(), [str(tmp_path / "absent.toml")]
-    )
+    code, stdout, stderr = run_l2l(tmp_path, [str(tmp_path / "absent.toml")])
     assert code == 2
     assert stdout == ""
     assert "not found" in stderr
@@ -76,7 +72,7 @@ def test_missing_config_fails_with_error(tmp_path: Path) -> None:
 
 def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
     code, stdout, stderr = run_l2l(
-        tmp_path, pytest.MonkeyPatch(), [str(write_config(tmp_path)), "--check-config"]
+        tmp_path, [str(write_config(tmp_path)), "--check-config"]
     )
     assert code == 0
     assert stderr == ""
@@ -88,18 +84,14 @@ def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
 def test_check_config_reports_setup_errors(tmp_path: Path) -> None:
     broken = tmp_path / "broken.toml"
     broken.write_text("[api]\nunknown_key = 1\n")
-    code, stdout, stderr = run_l2l(
-        tmp_path, pytest.MonkeyPatch(), [str(broken), "--check-config"]
-    )
+    code, stdout, stderr = run_l2l(tmp_path, [str(broken), "--check-config"])
     assert code == 2
     assert stdout == ""
     assert "[api]: unknown key(s): unknown_key" in stderr
 
 
 def test_dry_run_prints_plan_without_calling_endpoint(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(
-        tmp_path, pytest.MonkeyPatch(), [str(write_config(tmp_path)), "--dry-run"]
-    )
+    code, stdout, stderr = run_l2l(tmp_path, [str(write_config(tmp_path)), "--dry-run"])
     assert code == 0
     assert stderr == ""
     assert "source: 3 character(s), 1 paragraph(s)" in stdout
@@ -122,7 +114,6 @@ def test_cache_prune_removes_old_entries(tmp_path: Path) -> None:
 
     code, _, stderr = run_l2l(
         tmp_path,
-        pytest.MonkeyPatch(),
         [str(tmp_path), "--cache-dir", str(cache_dir), "--cache-prune", "7"],
     )
     assert code == 0
@@ -134,7 +125,6 @@ def test_cache_prune_removes_old_entries(tmp_path: Path) -> None:
 def test_cache_prune_requires_positive_days(tmp_path: Path) -> None:
     code, _, stderr = run_l2l(
         tmp_path,
-        pytest.MonkeyPatch(),
         [str(tmp_path), "--cache-dir", str(tmp_path), "--cache-prune", "0"],
     )
     assert code == 2
@@ -151,8 +141,6 @@ def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:
         {"choices": [{"delta": {}}], "usage": body["usage"]},
     ]
     http = FakeHttp([FakeStreamResponse(chunks)])
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(cli, "urllib_open", http.open)
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
@@ -166,6 +154,7 @@ def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:
         stdout,
         stderr,
         time.time,
+        http.open,
     ).run()
     assert code == 0
     assert stdout.getvalue().strip() == "Hello."
@@ -180,8 +169,6 @@ def test_plain_call_end_to_end(tmp_path: Path) -> None:
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
     http = FakeHttp([FakePlainResponse(body)])
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(cli, "urllib_open", http.open)
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
@@ -196,6 +183,7 @@ def test_plain_call_end_to_end(tmp_path: Path) -> None:
         stdout,
         stderr,
         time.time,
+        http.open,
     ).run()
     assert code == 0
     assert stdout.getvalue().strip() == "Plain."
@@ -216,13 +204,17 @@ def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
             )
         ]
     )
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(cli, "urllib_open", http.open)
     flags = [str(write_config(tmp_path)), "--cache-dir", str(tmp_path / "cache")]
 
     first_stdout, first_stderr = io.StringIO(), io.StringIO()
     first = cli.main(
-        flags, {}, io.StringIO("你好。"), first_stdout, first_stderr, time.time
+        flags,
+        {},
+        io.StringIO("你好。"),
+        first_stdout,
+        first_stderr,
+        time.time,
+        http.open,
     ).run()
     assert first == 0
     assert first_stdout.getvalue().strip() == "Hello."
@@ -231,10 +223,15 @@ def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
     def refusing_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
         raise AssertionError("cache should have served the second run")
 
-    monkeypatch.setattr(cli, "urllib_open", refusing_open)
     second_stdout, second_stderr = io.StringIO(), io.StringIO()
     second = cli.main(
-        flags, {}, io.StringIO("你好。"), second_stdout, second_stderr, time.time
+        flags,
+        {},
+        io.StringIO("你好。"),
+        second_stdout,
+        second_stderr,
+        time.time,
+        refusing_open,
     ).run()
     assert second == 0
     assert second_stdout.getvalue().strip() == "Hello."

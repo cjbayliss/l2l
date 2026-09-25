@@ -120,7 +120,7 @@ def make_chunks(
 
 
 def split_sentences(text: str, boundary_characters: str) -> tuple[str, ...]:
-    pieces = re.split(f"(?<=[{re.escape(boundary_characters)}])", text)
+    pieces = re.split("(?<=[%s])" % re.escape(boundary_characters), text)
     trimmed = pieces[:-1] if pieces and pieces[-1] == "" else pieces
     return tuple(trimmed)
 

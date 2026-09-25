@@ -1070,9 +1070,7 @@ def test_main_empty_stdin_succeeds_without_config() -> None:
     assert code == 0
 
 
-def test_main_end_to_end_with_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_main_end_to_end_with_config(tmp_path: Path) -> None:
     config_path = tmp_path / "l2l.toml"
     config_path.write_text(
         "[api]\n"
@@ -1087,7 +1085,6 @@ def test_main_end_to_end_with_config(
     )
     chunks = with_usage(stream_chunks("Hello."), USAGE)
     http = FakeHttp([FakeStreamResponse(chunks)])
-    monkeypatch.setattr(cli, "urllib_open", http.open)
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [str(config_path), "--cache-dir", str(tmp_path / "cache"), "--no-cache"],
@@ -1096,6 +1093,7 @@ def test_main_end_to_end_with_config(
         stdout,
         stderr,
         time.time,
+        http.open,
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n"
@@ -1118,9 +1116,7 @@ def test_parse_arguments_reraises_version_exit() -> None:
         cli.parse_arguments(["--version"]).run()
 
 
-def test_main_check_config_prints_report_without_http(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_main_check_config_prints_report_without_http(tmp_path: Path) -> None:
     config_path = tmp_path / "l2l.toml"
     config_path.write_text(
         "[api]\n"
@@ -1133,7 +1129,6 @@ def test_main_check_config_prints_report_without_http(
         'instruction = "Translate."'
     )
     http = FakeHttp([])
-    monkeypatch.setattr(cli, "urllib_open", http.open)
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [str(config_path), "--check-config"],
@@ -1142,6 +1137,7 @@ def test_main_check_config_prints_report_without_http(
         stdout,
         stderr,
         time.time,
+        http.open,
     ).run()
     assert code == 0
     report = stdout.getvalue()
@@ -1152,10 +1148,7 @@ def test_main_check_config_prints_report_without_http(
     assert http.requests == []
 
 
-def test_main_check_config_reports_config_errors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(cli, "urllib_open", FakeHttp([]).open)
+def test_main_check_config_reports_config_errors(tmp_path: Path) -> None:
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [str(tmp_path / "missing.toml"), "--check-config"],
@@ -1164,14 +1157,13 @@ def test_main_check_config_reports_config_errors(
         stdout,
         stderr,
         time.time,
+        FakeHttp([]).open,
     ).run()
     assert code == 2
     assert "l2l: config file not found" in stderr.getvalue()
 
 
-def test_main_dry_run_prints_plan_without_http(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_main_dry_run_prints_plan_without_http(tmp_path: Path) -> None:
     config_path = tmp_path / "l2l.toml"
     config_path.write_text(
         "[api]\n"
@@ -1184,7 +1176,6 @@ def test_main_dry_run_prints_plan_without_http(
         'instruction = "Translate."'
     )
     http = FakeHttp([])
-    monkeypatch.setattr(cli, "urllib_open", http.open)
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [str(config_path), "--dry-run"],
@@ -1193,6 +1184,7 @@ def test_main_dry_run_prints_plan_without_http(
         stdout,
         stderr,
         time.time,
+        http.open,
     ).run()
     assert code == 0
     plan = stdout.getvalue()
@@ -1202,9 +1194,7 @@ def test_main_dry_run_prints_plan_without_http(
     assert http.requests == []
 
 
-def test_main_no_stream_flag_forces_plain_responses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_main_no_stream_flag_forces_plain_responses(tmp_path: Path) -> None:
     config_path = tmp_path / "l2l.toml"
     config_path.write_text(
         "[api]\n"
@@ -1222,7 +1212,6 @@ def test_main_no_stream_flag_forces_plain_responses(
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
     http = FakeHttp([FakePlainResponse(body)])
-    monkeypatch.setattr(cli, "urllib_open", http.open)
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [str(config_path), "--no-stream", "--no-cache"],
@@ -1231,15 +1220,14 @@ def test_main_no_stream_flag_forces_plain_responses(
         stdout,
         stderr,
         time.time,
+        http.open,
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Plain.\n"
     assert json.loads(http.requests[0].data)["stream"] is False
 
 
-def test_main_cache_prune_removes_old_entries(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_main_cache_prune_removes_old_entries(tmp_path: Path) -> None:
     cache_directory = tmp_path / "cache"
     cache_directory.mkdir()
     old = cache_directory / "old.txt"
@@ -1249,7 +1237,6 @@ def test_main_cache_prune_removes_old_entries(
     month_ago = time.time() - 40 * 86400
     os.utime(old, (month_ago, month_ago))
 
-    monkeypatch.setattr(cli, "urllib_open", FakeHttp([]).open)
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
@@ -1264,6 +1251,7 @@ def test_main_cache_prune_removes_old_entries(
         stdout,
         stderr,
         time.time,
+        FakeHttp([]).open,
     ).run()
     assert code == 0
     assert not old.exists()
@@ -1271,10 +1259,7 @@ def test_main_cache_prune_removes_old_entries(
     assert "pruned 1 cache entry" in stderr.getvalue()
 
 
-def test_main_cache_prune_rejects_non_positive_days(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(cli, "urllib_open", FakeHttp([]).open)
+def test_main_cache_prune_rejects_non_positive_days(tmp_path: Path) -> None:
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         ["--cache-prune", "0", "--cache-dir", str(tmp_path)],
@@ -1283,6 +1268,7 @@ def test_main_cache_prune_rejects_non_positive_days(
         stdout,
         stderr,
         time.time,
+        FakeHttp([]).open,
     ).run()
     assert code == 2
     assert "positive number of days" in stderr.getvalue()
@@ -1382,9 +1368,7 @@ def test_resolve_work_groups_keeps_matching_plan() -> None:
     assert isinstance(warning, Nothing)
 
 
-def test_main_log_keep_prunes_old_logs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_main_log_keep_prunes_old_logs(tmp_path: Path) -> None:
     config_path = tmp_path / "l2l.toml"
     config_path.write_text(
         "[api]\n"
@@ -1406,7 +1390,6 @@ def test_main_log_keep_prunes_old_logs(
 
     chunks = with_usage(stream_chunks("Hello."), USAGE)
     http = FakeHttp([FakeStreamResponse(chunks)])
-    monkeypatch.setattr(cli, "urllib_open", http.open)
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
@@ -1422,6 +1405,7 @@ def test_main_log_keep_prunes_old_logs(
         stdout,
         stderr,
         time.time,
+        http.open,
     ).run()
     assert code == 0
     assert not ancient.exists()

@@ -132,16 +132,16 @@ def fail_untranslated(pass_name: str, index: int, sample: str) -> Err[Translatio
 def describe_http(error: HttpError) -> str:
     match error.kind:
         case "status":
-            return f"HTTP {error.status} from endpoint: {error.detail}"
+            return "HTTP %s from endpoint: %s" % (error.status, error.detail)
 
         case "unreachable":
-            return f"could not reach endpoint: {error.detail}"
+            return "could not reach endpoint: %s" % error.detail
 
         case "stream":
-            return f"endpoint stream error: {error.detail}"
+            return "endpoint stream error: %s" % error.detail
 
         case "interrupted":
-            return f"stream interrupted: {error.detail}"
+            return "stream interrupted: %s" % error.detail
 
         case "protocol":
             return error.detail
@@ -178,7 +178,10 @@ def describe(error: TranslationError) -> str:
             return describe_budget(error)
 
         case PassError():
-            return f"l2l: pass [{error.pass_name}] failed: {describe(error.inner)}"
+            return "l2l: pass [%s] failed: %s" % (
+                error.pass_name,
+                describe(error.inner),
+            )
 
         case UnitError():
             return "l2l: [%s] failed on unit %d: %s" % (
@@ -188,9 +191,9 @@ def describe(error: TranslationError) -> str:
             )
 
         case AsciiError():
-            return (
-                f"l2l: pass [{error.pass_name}] ascii enforcement failed: "
-                f"{describe(error.inner)}"
+            return "l2l: pass [%s] ascii enforcement failed: %s" % (
+                error.pass_name,
+                describe(error.inner),
             )
 
         case UntranslatedError():

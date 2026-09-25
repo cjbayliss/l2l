@@ -3,7 +3,7 @@ from __future__ import annotations
 
 def fmt_duration(seconds: float) -> str:
     if seconds < 60:
-        return f"{seconds:.1f}s"
+        return "%.1fs" % seconds
 
     return "%dm%ds" % (int(seconds // 60), int(seconds % 60))
 
@@ -77,7 +77,7 @@ def unit_cache_hit_message(pass_name: str, index: int, total: int) -> str:
 
 
 def pass_cache_hit_message(pass_name: str) -> str:
-    return f"l2l: [{pass_name}] cache hit"
+    return "l2l: [%s] cache hit" % pass_name
 
 
 def pass_started_message(number: int, total: int, pass_name: str) -> str:
@@ -172,4 +172,4 @@ def retranslate_unit_message(pass_name: str, index: int, total: int) -> str:
 
 
 def done_in_message(elapsed: float) -> str:
-    return f"l2l: done in {elapsed:.1f}s"
+    return "l2l: done in %.1fs" % elapsed
