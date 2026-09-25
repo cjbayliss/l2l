@@ -216,7 +216,7 @@ def delta_text(delta: Mapping[str, Any]) -> str:
 
 
 @dataclass(frozen=True)
-class ProgressRequest:
+class ProgressUpdate:
     label: str
     count: int
     reasoning: str = ""
@@ -226,12 +226,12 @@ class ProgressRequest:
 class StreamState:
     reasoning: Cons[str] | None = None
     contents: Cons[str] | None = None
-    reported: Mapping[str, Any] | None = None
-    counted: int = 0
+    reported_usage: Mapping[str, Any] | None = None
+    chunk_count: int = 0
     content_started: bool = False
     think: ThinkState = ThinkState()
     sse: SseState = SseState()
-    progress_request: ProgressRequest | None = None
+    progress_update: ProgressUpdate | None = None
 
 
 def stream_text(state: StreamState) -> str:
@@ -244,16 +244,16 @@ def stream_step(
     state: StreamState, chunk: Mapping[str, Any]
 ) -> Result[StreamState, TranslationError]:
     usage_report = chunk.get("usage")
-    reported = (
+    reported_usage = (
         MappingProxyType(usage_report)
         if isinstance(usage_report, dict)
-        else state.reported
+        else state.reported_usage
     )
     delta = parse_chunk_delta(chunk)
     reasoning_found = reasoning_at(delta, keep_raw)
     text = delta_text(delta)
     if isinstance(reasoning_found, Nothing) and not text:
-        return Ok(replace(state, reported=reported, progress_request=None))
+        return Ok(replace(state, reported_usage=reported_usage, progress_update=None))
 
     think_state, thinking, visible = (
         think_step(state.think, text) if text else (state.think, False, "")
@@ -263,10 +263,10 @@ def stream_step(
     )
     thinking_progress = 1 if reasoning_texts and not state.content_started else 0
     text_progress = 1 if text else 0
-    progress_request: ProgressRequest | None = None
+    progress_update: ProgressUpdate | None = None
     if thinking_progress or text_progress:
         label = ("Thinking" if thinking else "Working") if text else "Thinking"
-        progress_request = ProgressRequest(
+        progress_update = ProgressUpdate(
             label,
             thinking_progress + text_progress,
             "".join(reasoning_texts),
@@ -276,22 +276,22 @@ def stream_step(
         StreamState(
             reasoning=cons_all(reasoning_texts, state.reasoning),
             contents=cons(visible, state.contents) if visible else state.contents,
-            reported=reported,
-            counted=state.counted + thinking_progress + text_progress,
+            reported_usage=reported_usage,
+            chunk_count=state.chunk_count + thinking_progress + text_progress,
             content_started=state.content_started or bool(text),
             think=think_state,
-            progress_request=progress_request,
+            progress_update=progress_update,
         )
     )
 
 
-def step_stream(
+def ingest_raw_line(
     state: StreamState, raw_line: bytes
 ) -> Result[StreamState, TranslationError]:
     sse, chunk = sse_step(state.sse, raw_line)
     updated = state if sse == state.sse else replace(state, sse=sse)
     if chunk is None:
-        return Ok(replace(updated, progress_request=None))
+        return Ok(replace(updated, progress_update=None))
 
     if isinstance(chunk.get("error"), dict):
         return fail_http("stream", str(chunk["error"])[:500])
@@ -303,8 +303,8 @@ def step_stream(
 class ChatReply:
     content: str
     reasoning: tuple[str, ...] = ()
-    reported: Mapping[str, Any] | None = None
-    counted: int = 0
+    reported_usage: Mapping[str, Any] | None = None
+    chunk_count: int = 0
     reasoning_shown: bool = False
 
 
@@ -321,15 +321,15 @@ def plain_reply(body: Any) -> Result[ChatReply, TranslationError]:
         )
 
     usage_report = body.get("usage")
-    reported = (
+    reported_usage = (
         MappingProxyType(usage_report) if isinstance(usage_report, dict) else None
     )
     return Ok(
         ChatReply(
             content=texts,
             reasoning=message_reasoning_texts(message) + thoughts,
-            reported=reported,
-            counted=0,
+            reported_usage=reported_usage,
+            chunk_count=0,
         )
     )
 
@@ -540,7 +540,7 @@ def drive_stream(
             if isinstance(outcome, Err):
                 return io_result(outcome)
 
-            request = outcome.value.progress_request
+            request = outcome.value.progress_update
             if request is None:
                 return io_result(outcome)
 
@@ -557,7 +557,7 @@ def drive_stream(
             return io_bind(on_reasoning(request.reasoning), after_reasoning)
 
         def after_log(_: None) -> IO[Result[StreamState, TranslationError]]:
-            return io_bind(io_result(step_stream(state, raw_line)), notify)
+            return io_bind(io_result(ingest_raw_line(state, raw_line)), notify)
 
         logged = io_pure(None) if on_raw_line is None else on_raw_line(raw_line)
         return io_bind(logged, after_log)
@@ -568,7 +568,7 @@ def drive_stream(
         if isinstance(outcome, Err):
             return io_result(outcome)
 
-        return io_result(step_stream(outcome.value, b""))
+        return io_result(ingest_raw_line(outcome.value, b""))
 
     return io_bind(fold_io_lazy(response, advance, Ok(StreamState())), flush)
 
@@ -689,8 +689,8 @@ def to_chat_reply(state: StreamState) -> ChatReply:
     return ChatReply(
         content=stream_text(state),
         reasoning=(joined,) if joined.strip() else (),
-        reported=state.reported,
-        counted=state.counted,
+        reported_usage=state.reported_usage,
+        chunk_count=state.chunk_count,
         reasoning_shown=True,
     )
 
@@ -803,18 +803,18 @@ def conclude_chat(
         def finish(
             _: Result[tuple[()], TranslationError],
         ) -> Result[Translated, TranslationError]:
-            reported = reply.reported
+            reported_usage = reply.reported_usage
             return Ok(
                 Translated(
                     content,
                     (
-                        add_usage(usage, reported)
-                        if reported
+                        add_usage(usage, reported_usage)
+                        if reported_usage
                         else add_usage(
                             usage,
                             {
                                 "prompt_tokens": estimated,
-                                "completion_tokens": reply.counted,
+                                "completion_tokens": reply.chunk_count,
                             },
                         )
                     ),

@@ -21,7 +21,7 @@ from l2l.settings import Context
 from l2l.text import Translated, Usage
 
 
-def const_acceptable(_: str) -> bool:
+def always_acceptable(_: str) -> bool:
     return True
 
 
@@ -32,7 +32,7 @@ def non_empty(text: str) -> bool:
 def cache_lookup(
     ctx: Context,
     key: str,
-    acceptable: Callable[[str], bool] = const_acceptable,
+    acceptable: Callable[[str], bool] = always_acceptable,
 ) -> IO[Maybe[str]]:
     def checked(cached: Maybe[str]) -> Maybe[str]:
         return (
@@ -69,7 +69,7 @@ def cached_translation(
     usage: Usage,
     compute: Callable[[], IO[Result[Translated, TranslationError]]],
     hit_log: IO[None],
-    acceptable: Callable[[str], bool] = const_acceptable,
+    acceptable: Callable[[str], bool] = always_acceptable,
 ) -> IO[Result[Translated, TranslationError]]:
     def compute_and_store() -> IO[Result[Translated, TranslationError]]:
         return io_bind(

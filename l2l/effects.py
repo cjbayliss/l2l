@@ -59,7 +59,7 @@ def cwd() -> IO[str]:
     return IO(os.getcwd)
 
 
-def io_isatty(stream: TextIO) -> IO[bool]:
+def stream_isatty(stream: TextIO) -> IO[bool]:
     def thunk() -> bool:
         try:
             return bool(stream.isatty())

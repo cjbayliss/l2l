@@ -16,13 +16,13 @@ from l2l.effects import (
     cache_entry_paths,
     close_run_log,
     file_age,
-    io_isatty,
     now,
     open_run_log,
     prune_old_logs,
     read_stdin,
     remove_file,
     resolve_cache_dir,
+    stream_isatty,
     time_sleep,
     write_stdout,
 )
@@ -206,7 +206,7 @@ def main(
                 console = Console(stderr, StatusLine(stderr, live))
                 return io_map(console.log(describe(parsed_result.error)), lambda _: 2)
 
-            return io_bind(io_isatty(stderr), report_parse_failure)
+            return io_bind(stream_isatty(stderr), report_parse_failure)
 
         parsed = parsed_result.value
         if parsed.check_config:
@@ -233,7 +233,7 @@ def with_console_io(
     def with_live(live: bool) -> IO[int]:
         return bound(Console(stderr, StatusLine(stderr, live), verbose=Ref(verbose)))
 
-    return io_bind(io_isatty(stderr), with_live)
+    return io_bind(stream_isatty(stderr), with_live)
 
 
 def build_context(

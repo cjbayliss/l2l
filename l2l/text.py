@@ -475,10 +475,10 @@ def cache_key(
     overrides: Mapping[str, Any] | None = None,
     context: str = "",
 ) -> str:
-    salted = pass_salt.encode("utf-8") + b"\x00" if pass_salt else b""
-    worked = b"\x00work\x00" + work_text.encode("utf-8") if work_text else b""
-    contexted = b"\x00context\x00" + context.encode("utf-8") if context else b""
-    overriden = (
+    salt_bytes = pass_salt.encode("utf-8") + b"\x00" if pass_salt else b""
+    work_bytes = b"\x00work\x00" + work_text.encode("utf-8") if work_text else b""
+    context_bytes = b"\x00context\x00" + context.encode("utf-8") if context else b""
+    override_bytes = (
         b"\x00"
         + json.dumps(overrides, sort_keys=True, ensure_ascii=False, default=str).encode(
             "utf-8"
@@ -487,11 +487,11 @@ def cache_key(
         else b""
     )
     parts = (
-        salted,
+        salt_bytes,
         chunk_text.encode("utf-8"),
-        worked,
-        contexted,
+        work_bytes,
+        context_bytes,
         b"\x00" + model.encode("utf-8"),
-        overriden,
+        override_bytes,
     )
     return hashlib.sha256(b"".join(parts)).hexdigest()

@@ -102,7 +102,7 @@ def fold_while[S, A, E](
     return outcome
 
 
-def results_sequence[T, E](results: Iterable[Result[T, E]]) -> Result[tuple[T, ...], E]:
+def result_sequence[T, E](results: Iterable[Result[T, E]]) -> Result[tuple[T, ...], E]:
     def step(values: tuple[T, ...], result: Result[T, E]) -> Result[tuple[T, ...], E]:
         return result_map(result, lambda value: values + (value,))
 
@@ -213,7 +213,7 @@ def fold_maybe[S, A](
     return outcome
 
 
-def maybes_sequence[T](maybes: Iterable[Maybe[T]]) -> Maybe[tuple[T, ...]]:
+def maybe_sequence[T](maybes: Iterable[Maybe[T]]) -> Maybe[tuple[T, ...]]:
     def step(collected: tuple[T, ...], maybe: Maybe[T]) -> Maybe[tuple[T, ...]]:
         return maybe_map(maybe, lambda value: collected + (value,))
 

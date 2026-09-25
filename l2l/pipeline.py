@@ -733,12 +733,12 @@ def run_text_pass(
     ) -> IO[StateResult]:
         retry: PassRetry | None = None
         if escalate and pass_to_run.mode == "chunk":
-            retry_source = current_state
+            retry_state = current_state
 
             def retry(accumulated: Usage, retry_started: float) -> IO[StateResult]:
                 return attempt(
                     pass_to_run,
-                    replace(retry_source, usage=accumulated),
+                    replace(retry_state, usage=accumulated),
                     retry_started,
                     escalate=False,
                     retry_attempt=1,

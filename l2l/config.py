@@ -28,7 +28,7 @@ from l2l.monads import (
     result_bind,
     result_bind_io,
     result_map,
-    results_sequence,
+    result_sequence,
 )
 from l2l.settings import (
     API_SETTING_KEYS,
@@ -634,7 +634,7 @@ def document_passes(
             parse_pass_table(path, entry, os.path.dirname(os.path.abspath(path)))
             for entry in entries
         ),
-        results_sequence,
+        result_sequence,
     )
 
 
