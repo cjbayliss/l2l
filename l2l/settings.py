@@ -280,5 +280,8 @@ def salt(*parts: str) -> str:
     return "\x00".join(parts)
 
 
-def pass_salt(pass_definition: PassDefinition) -> str:
-    return salt(CACHE_SALT_VERSION, pass_definition.name, pass_definition.instruction)
+def pass_salt(pass_definition: PassDefinition, retry_attempt: int = 0) -> str:
+    base = salt(CACHE_SALT_VERSION, pass_definition.name, pass_definition.instruction)
+    # A same-mode retry must make fresh endpoint calls, so its units are
+    # keyed apart from the first attempt's (bad) cached output.
+    return salt(base, "retry%d" % retry_attempt) if retry_attempt else base

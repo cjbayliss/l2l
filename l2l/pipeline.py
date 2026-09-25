@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import reduce
 from typing import TextIO
@@ -25,6 +26,7 @@ from l2l.messages import (
     pass_cache_hit_message,
     pass_started_message,
     retranslate_info_message,
+    retranslate_majority_message,
     retranslate_pair_message,
     retranslate_skipped_message,
     retranslate_unit_message,
@@ -113,6 +115,16 @@ class UnitsSoFar:
 
 StateResult = Result[State, TranslationError]
 
+# Capability thunk for re-running a pass in its current mode: given the
+# accumulated usage at the point of escalation and a clock reading, it
+# re-runs the pass and returns the resulting state.
+PassRetry = Callable[[Usage, float], IO[StateResult]]
+
+
+def untranslated_majority(flagged: int, total: int) -> bool:
+    """True when strictly more than half of the paragraphs are flagged."""
+    return flagged * 2 > total
+
 
 def run_analysis(
     ctx: Context,
@@ -190,12 +202,15 @@ def finish_pass_stage(
     next_state: State,
     started_at: float,
     source_paragraphs: tuple[str, ...],
+    retry_same_mode: PassRetry | None = None,
 ) -> IO[StateResult]:
     """Log the stage's usage line, then apply the pass's conclusion."""
 
     def after_stage(ended_at: float) -> IO[StateResult]:
         def concluded(_: None) -> IO[StateResult]:
-            return conclude_state(ctx, pass_definition, next_state, source_paragraphs)
+            return conclude_state(
+                ctx, pass_definition, next_state, source_paragraphs, retry_same_mode
+            )
 
         return io_bind(
             log_stage(
@@ -217,6 +232,7 @@ def conclude_state(
     pass_definition: PassDefinition,
     state: State,
     source_paragraphs: tuple[str, ...],
+    retry_same_mode: PassRetry | None = None,
 ) -> IO[StateResult]:
     # An analysis pass only fills `state.analysis`; its `text` is still the
     # untouched working document, so post-pass enforcement must not run
@@ -269,6 +285,7 @@ def conclude_state(
                 state.analysis,
                 state.usage,
                 retranslation_started,
+                retry_same_mode,
             ),
             after_retranslation,
         )
@@ -284,11 +301,17 @@ def retranslate_untranslated(
     analysis: str | None,
     usage: Usage,
     started_at: float,
+    retry_same_mode: PassRetry | None = None,
 ) -> IO[Result[Translated, TranslationError]]:
     """Post-pass untranslated-paragraph check. Paragraphs that came back
     untranslated (echo, or no letters of the target script) are re-asked
     with one call each, using the pass's own instruction; a paragraph
-    that survives retranslation unchanged fails the run."""
+    that survives retranslation unchanged fails the run.
+
+    When more than half of the paragraphs are flagged and the caller
+    supplied a retry thunk (chunk-mode passes only), the whole pass is
+    re-run once in its current mode first; per-paragraph retranslation
+    then handles whatever is still flagged."""
 
     paragraphs, separators = split_paragraphs(text)
     if len(paragraphs) != len(source_paragraphs):
@@ -314,6 +337,34 @@ def retranslate_untranslated(
     )
     if not flagged:
         return io_result(Ok(Translated(text, usage)))
+
+    if retry_same_mode is not None and untranslated_majority(
+        len(flagged), len(paragraphs)
+    ):
+        retry = retry_same_mode
+
+        def escalate(
+            retry_started: float,
+        ) -> IO[Result[Translated, TranslationError]]:
+            # The retried pass runs its own full conclusion (retranslation
+            # of whatever is still flagged, ascii), so only lift its final
+            # state back into this stage's result shape.
+            def lifted(outcome: StateResult) -> Result[Translated, TranslationError]:
+                if isinstance(outcome, Err):
+                    return Err(outcome.error)
+
+                return Ok(Translated(outcome.value.text, outcome.value.usage))
+
+            return io_map(retry(usage, retry_started), lifted)
+
+        return io_and_then(
+            ctx.console.log(
+                retranslate_majority_message(
+                    pass_definition.name, len(flagged), len(paragraphs)
+                )
+            ),
+            io_bind(now(ctx.clock), escalate),
+        )
 
     calls = plan_retranslation_calls(
         ctx,
@@ -578,9 +629,10 @@ def run_units(
     trailing_separators: tuple[str, ...],
     analysis: str | None,
     usage: Usage,
+    retry_attempt: int = 0,
 ) -> IO[Result[UnitsSoFar, TranslationError]]:
     calls = plan_unit_calls(
-        ctx, pass_definition, plan, work_groups, trailing_separators
+        ctx, pass_definition, plan, work_groups, trailing_separators, retry_attempt
     )
 
     def unit_part(
@@ -620,6 +672,8 @@ def run_text_pass_once(
     separators: tuple[str, ...],
     chunk_plan: tuple[tuple[str, ...], ...],
     paragraph_plan: tuple[tuple[str, ...], ...],
+    retry_attempt: int = 0,
+    retry_same_mode: PassRetry | None = None,
 ) -> IO[StateResult]:
     match pass_definition.mode:
         case "paragraph":
@@ -656,6 +710,7 @@ def run_text_pass_once(
                 next_state,
                 started_at,
                 source_paragraphs,
+                retry_same_mode,
             )
 
         return io_and_then(
@@ -671,6 +726,7 @@ def run_text_pass_once(
                     unit_separators(plan, separators),
                     state.analysis,
                     state.usage,
+                    retry_attempt,
                 ),
                 after_units,
             ),
@@ -693,8 +749,28 @@ def run_text_pass(
     paragraph_plan: tuple[tuple[str, ...], ...],
 ) -> IO[StateResult]:
     def attempt(
-        pass_to_run: PassDefinition, current_state: State, attempt_started: float
+        pass_to_run: PassDefinition,
+        current_state: State,
+        attempt_started: float,
+        escalate: bool,
+        retry_attempt: int = 0,
     ) -> IO[StateResult]:
+        # Only chunk-mode passes escalate: a paragraph-mode retry already
+        # makes one call per paragraph, so per-paragraph retranslation of
+        # the flagged ones is the cheaper fallback there.
+        retry: PassRetry | None = None
+        if escalate and pass_to_run.mode == "chunk":
+            retry_source = current_state
+
+            def retry(accumulated: Usage, retry_started: float) -> IO[StateResult]:
+                return attempt(
+                    pass_to_run,
+                    replace(retry_source, usage=accumulated),
+                    retry_started,
+                    escalate=False,
+                    retry_attempt=1,
+                )
+
         return run_text_pass_once(
             ctx,
             pass_to_run,
@@ -704,12 +780,14 @@ def run_text_pass(
             separators,
             chunk_plan,
             paragraph_plan,
+            retry_attempt,
+            retry,
         )
 
     tolerance = paragraph_tolerance(pass_definition.ensure_paragraphs)
 
     if tolerance is None:
-        return attempt(pass_definition, state, started_at)
+        return attempt(pass_definition, state, started_at, escalate=True)
 
     def mismatch_message(count: int, action: str) -> str:
         return paragraph_mismatch_message(
@@ -760,6 +838,7 @@ def run_text_pass(
                     replace(pass_definition, mode="paragraph"),
                     replace(state, usage=result.value.usage),
                     retry_started,
+                    escalate=True,
                 ),
                 after_retry,
             )
@@ -773,7 +852,7 @@ def run_text_pass(
             io_bind(now(ctx.clock), retry_at),
         )
 
-    return io_bind(attempt(pass_definition, state, started_at), check)
+    return io_bind(attempt(pass_definition, state, started_at, escalate=True), check)
 
 
 def run_pass(
