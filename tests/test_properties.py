@@ -104,10 +104,6 @@ def test_cache_key_is_deterministic_and_content_sensitive(
     assert key != cache_key(chunk_text + "x", model)
 
 
-# --- split_paragraphs -------------------------------------------------------
-# Paragraphs exclude all whitespace characters: whitespace-only runs adjacent
-# to blank lines are absorbed into separators by `split_paragraphs`, so they
-# are outside the contract these properties cover.
 PARAGRAPH = st.text(
     alphabet=st.characters(min_codepoint=32, max_codepoint=0x4DBF).filter(
         lambda char: not char.isspace()
@@ -154,10 +150,6 @@ def test_ensure_blank_line_separators_preserves_paragraph_count(
     assert count_paragraphs(joined) == len(expected)
 
 
-# --- SSE stream fold -------------------------------------------------------
-# Content excludes "<" (the <think> tag machinery legitimately consumes such
-# prefixes) and all-whitespace deltas (a whitespace-only prefix is held back
-# while checking for a tag, so raw contents differ until the held flush).
 PLAIN_TEXT = st.text(
     alphabet=st.characters(min_codepoint=32, max_codepoint=0x10FFFF).filter(
         lambda char: char != "<"
@@ -225,7 +217,6 @@ def test_stream_fold_concatenates_deltas_and_keeps_last_usage(
         assert state.reported is None
 
 
-# --- PartialApiSettings.merge ----------------------------------------------
 OPTIONAL_TEXT = st.one_of(st.none(), st.text(min_size=1, max_size=4))
 OPTIONAL_NUMBER = st.one_of(
     st.none(), st.integers(min_value=1, max_value=99).map(float)
@@ -275,7 +266,6 @@ def test_partial_merge_params_deep_merges(
         assert merged.params == {**base.params, **extra.params}
 
 
-# --- plan_backoff ----------------------------------------------------------
 @given(
     st.floats(min_value=0.1, max_value=10.0),
     st.floats(min_value=0.1, max_value=50.0),

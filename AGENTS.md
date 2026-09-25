@@ -52,7 +52,9 @@ code that passes them the first time.
 
 8. **House style.** Python 3.14 only (PEP 695 generics, PEP 758
    unparenthesized excepts are fine); standard-library only; printf
-   `%`-style formatting; comments explain *why*.
+   `%`-style formatting; no comments and no docstrings anywhere in
+   `l2l/` or `tests/` — names must speak for themselves (enforced by
+   `tests/test_architecture.py`).
 
 ## Testing
 
@@ -62,8 +64,8 @@ code that passes them the first time.
   `IO` once at the end, assert on captured outputs.
 - Architecture: `tests/test_architecture.py` enforces the rules above
   via AST — layering, `IO.run` edges, frozen dataclasses, no
-  `global`/`nonlocal`, no mutation outside `Ref`, no `raise`, and
-  effectful imports and builtin calls (`open`, `print`, `eval`, ...)
+  `global`/`nonlocal`, no mutation outside `Ref`, no `raise`, no
+  comments or docstrings, and effectful imports and builtin calls (`open`, `print`, `eval`, ...)
   confined to their sanctioned edges. If you add a sanctioned
   exception, extend the allowlist tables there deliberately — never
   weaken the checks.

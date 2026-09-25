@@ -76,8 +76,6 @@ def test_start_tab_listener_toggles_and_restores(
     saved = termios.tcgetattr(slave)
     stop = start_tab_listener(console, toggler(console)).run()
     try:
-        # Assert through locals: the listener thread mutates the Ref, and
-        # mypy's narrowing of the attribute chain cannot see that.
         start_verbose: bool = console.verbose.value
         assert start_verbose is False
         os.write(master, b"\t")

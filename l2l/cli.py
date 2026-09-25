@@ -230,8 +230,6 @@ def with_console_io(
     bound: Callable[[Console], IO[int]],
     verbose: bool = False,
 ) -> IO[int]:
-    """Build the session console from a liveness probe, then continue."""
-
     def with_live(live: bool) -> IO[int]:
         return bound(Console(stderr, StatusLine(stderr, live), verbose=Ref(verbose)))
 

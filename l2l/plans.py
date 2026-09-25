@@ -302,10 +302,6 @@ def plan_retranslation_calls(
     flagged: tuple[int, ...],
     separators: tuple[str, ...],
 ) -> tuple[UnitCall, ...]:
-    """Build one paragraph-mode call per flagged paragraph, so echoed or
-    untranslated units are re-asked with the pass's own instruction and
-    neighbouring source paragraphs as read-only context. Keys follow the
-    same shape as paragraph-mode units, so results stay cache-compatible."""
     model, params = resolve_call_settings(ctx.config, pass_definition)
 
     def neighbour_context(index: int) -> tuple[str, ...]:

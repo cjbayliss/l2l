@@ -220,8 +220,6 @@ def test_chat_without_override_keeps_params_stream_false() -> None:
 
 
 class DyingPlainResponse:
-    """Response whose body read fails mid-transfer."""
-
     def read(self) -> bytes:
         raise OSError("connection reset mid-body")
 
@@ -245,8 +243,6 @@ def test_chat_reports_a_plain_response_that_dies_mid_body() -> None:
 
 
 class DyingStreamResponse:
-    """SSE response that raises after two lines, before the frame ends."""
-
     def __init__(self) -> None:
         self._lines: list[bytes] = [
             b'data: {"choices": [{"delta": {"content": "Hi"}}]}\n',
@@ -278,8 +274,6 @@ def test_chat_reports_an_interrupted_stream() -> None:
 
 
 class TogglingStreamResponse:
-    """SSE response that flips verbose mode mid-stream, like a Tab press."""
-
     def __init__(
         self, chunks: list[dict[str, Any]], console: Any, toggle_after_chunks: int
     ) -> None:
@@ -309,8 +303,6 @@ class TogglingStreamResponse:
 
 
 def test_chat_shows_streamed_reasoning_once_across_a_mid_stream_toggle() -> None:
-    """Toggling verbose mid-stream must not re-dump the reasoning per delta
-    when the call concludes; the live tail plus sealed event already cover it."""
     console, stderr = make_console()
     chunks = [
         {"choices": [{"delta": {"reasoning_content": "Most"}}]},
@@ -333,8 +325,6 @@ def test_chat_shows_streamed_reasoning_once_across_a_mid_stream_toggle() -> None
 
 
 class UnterminatedStreamResponse:
-    """SSE response whose final frame never gets its blank line."""
-
     def __init__(self, chunks: list[dict[str, Any]]) -> None:
         self._lines = [
             line

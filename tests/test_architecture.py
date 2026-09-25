@@ -1,22 +1,13 @@
-"""Architectural guardrails for the functional core.
-
-The package's design rules are enforced as tests: `monads` stands alone,
-dependencies point strictly downward through the layer map, `IO.run` is
-executed only at the sanctioned edges, data is immutable, errors are
-values, mutation is confined to `Ref`, and effectful stdlib modules
-stay in their sanctioned homes.
-"""
-
 import ast
+import io
+import tokenize
 from collections.abc import Callable
 from itertools import chain
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "l2l"
+TESTS = Path(__file__).resolve().parent
 
-# Bottom-to-top layers; a module may import only from strictly lower
-# layers (the bare `l2l` root, which carries only `__version__`, may be
-# imported from anywhere).
 LAYERS: tuple[tuple[str, ...], ...] = (
     ("monads", "messages"),
     ("errors", "text"),
@@ -33,16 +24,10 @@ LEVELS: dict[str, int] = {
     name: level for level, names in enumerate(LAYERS) for name in names
 }
 
-# Where `IO.run` may appear: `cli` is the single program entry point and
-# `monads` hosts the combinator runners (`io_atomic`, `io_using`,
-# `repeat_until`). Every other module only composes IO values.
 IO_EDGES = frozenset({"cli", "monads"})
 
-# The package's single sanctioned mutable cell: `monads.Ref`.
 MUTABLE_DATACLASS_EXEMPT = frozenset({("monads", "Ref")})
 
-# Functions allowed to assign to attributes or subscripts: the `Ref`
-# operations, plus `io_memoize`, which writes through a `Ref`.
 MUTATION_ASSIGNMENT_ALLOWLIST = frozenset(
     {
         ("monads", "io_memoize"),
@@ -52,9 +37,6 @@ MUTATION_ASSIGNMENT_ALLOWLIST = frozenset(
     }
 )
 
-# Functions allowed to call container mutator methods: `cons_to_tuple`
-# drains into a local accumulator; `run_log_write` invokes the `RunLog`'s
-# injected append closure; `launch`/`start` start daemon threads.
 MUTATOR_CALL_ALLOWLIST = frozenset(
     {
         ("console", "launch"),
@@ -64,12 +46,8 @@ MUTATOR_CALL_ALLOWLIST = frozenset(
     }
 )
 
-# `raise` is confined to the error edge: `cli` re-raises after handling;
-# `errors` may raise while validating its own constructors' inputs.
 RAISE_MODULES = frozenset({"cli", "errors"})
 
-# Stdlib roots that perform I/O, concurrency, or global process state.
-# Everything else (`json`, `re`, `functools`, ...) counts as pure.
 EFFECT_MODULES = frozenset(
     {
         "http",
@@ -89,8 +67,6 @@ EFFECT_MODULES = frozenset(
     }
 )
 
-# Which effectful stdlib roots each module may import; modules absent
-# from this map get an empty allowlist (deny by default).
 EFFECT_IMPORT_ALLOWLIST: dict[str, frozenset[str]] = {
     "cli": frozenset({"os", "sys", "time"}),
     "config": frozenset({"os"}),
@@ -102,9 +78,6 @@ EFFECT_IMPORT_ALLOWLIST: dict[str, frozenset[str]] = {
     "text": frozenset({"os"}),
 }
 
-# Builtin calls that need no import, so the import allowlist cannot see
-# them: `open` lives only in `effects`, `print` only in `cli` (the
-# program edge); the rest are banned everywhere.
 BUILTIN_CALL_EDGES: dict[str, frozenset[str]] = {
     "__import__": frozenset(),
     "breakpoint": frozenset(),
@@ -115,7 +88,6 @@ BUILTIN_CALL_EDGES: dict[str, frozenset[str]] = {
     "print": frozenset({"cli"}),
 }
 
-# Container methods that mutate their receiver.
 MUTATING_METHODS = frozenset(
     {
         "add",
@@ -148,7 +120,6 @@ def parse_module(name: str) -> ast.Module:
 
 
 def l2l_imports(tree: ast.Module) -> set[str]:
-    """Package names imported by a module; "" is the `l2l` root itself."""
     imported: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.level == 0:
@@ -166,7 +137,6 @@ def l2l_imports(tree: ast.Module) -> set[str]:
 
 
 def import_roots(tree: ast.Module) -> set[str]:
-    """First segments of every absolute stdlib/external import."""
     roots: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -178,7 +148,6 @@ def import_roots(tree: ast.Module) -> set[str]:
 
 
 def module_aliases(tree: ast.Module) -> frozenset[str]:
-    """Names bound to imports, so `os.remove` is not a container mutator."""
     aliases: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -196,7 +165,6 @@ def visit_scoped(
     on_node: Callable[[ast.AST, tuple[str, ...]], None],
     functions: tuple[str, ...] = (),
 ) -> None:
-    """Visit `node` and its children, threading enclosing function names."""
     names = functions
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         names = functions + (node.name,)
@@ -212,7 +180,6 @@ def scoped_violations(
     matches: Callable[[ast.stmt | ast.expr, frozenset[str]], bool],
     allowlist: frozenset[tuple[str, str]],
 ) -> list[ast.stmt | ast.expr]:
-    """Nodes matching `matches` outside functions named in `allowlist`."""
     aliases = module_aliases(tree)
     found: list[ast.stmt | ast.expr] = []
 
@@ -241,7 +208,6 @@ def decorator_root(decorator: ast.expr) -> str:
 
 
 def is_mutation_assignment(node: ast.stmt | ast.expr, aliases: frozenset[str]) -> bool:
-    """Assignment to an attribute or subscript (`x.y = ...`, `x[k] = ...`)."""
     if isinstance(node, ast.Assign):
         targets = list(node.targets)
     elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
@@ -253,11 +219,6 @@ def is_mutation_assignment(node: ast.stmt | ast.expr, aliases: frozenset[str]) -
 
 
 def is_mutator_call(node: ast.stmt | ast.expr, aliases: frozenset[str]) -> bool:
-    """A mutator call on a plain local/parameter (`values.append(...)`, ...).
-
-    Receivers that are imported modules (`os.remove`) or attribute chains
-    (`self.halt.clear`, `thread.start`) are not container mutations.
-    """
     return (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
@@ -415,7 +376,6 @@ def test_effect_import_allowlist_stays_current() -> None:
 
 
 def banned_builtin_calls(tree: ast.Module) -> list[tuple[int, str]]:
-    """Bare calls to effectful builtins, with their locations."""
     return [
         (node.lineno, node.func.id)
         for node in ast.walk(tree)
@@ -435,3 +395,48 @@ def test_builtin_effect_calls_stay_at_the_edges() -> None:
     assert not problems, (
         f"builtin effect calls outside sanctioned edges: {'; '.join(problems)}"
     )
+
+
+def python_sources() -> list[tuple[str, str]]:
+    files = sorted(chain(PACKAGE.glob("*.py"), TESTS.glob("*.py")))
+    return [(path.stem, path.read_text(encoding="utf-8")) for path in files]
+
+
+def comment_lines(source: str) -> list[int]:
+    return [
+        token.start[0]
+        for token in tokenize.generate_tokens(io.StringIO(source).readline)
+        if token.type == tokenize.COMMENT
+    ]
+
+
+def docstring_nodes(tree: ast.Module) -> list[ast.Expr]:
+    return [
+        node.body[0]
+        for node in ast.walk(tree)
+        if isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        )
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    ]
+
+
+def test_no_comments_anywhere() -> None:
+    problems = [
+        f"{name}:{line}"
+        for name, source in python_sources()
+        for line in comment_lines(source)
+    ]
+    assert not problems, f"comments are banned: {'; '.join(problems)}"
+
+
+def test_no_docstrings_anywhere() -> None:
+    problems = [
+        f"{name}:{node.lineno}"
+        for name, source in python_sources()
+        for node in docstring_nodes(ast.parse(source))
+    ]
+    assert not problems, f"docstrings are banned: {'; '.join(problems)}"
