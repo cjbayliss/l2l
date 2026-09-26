@@ -1,7 +1,7 @@
 import pytest
 
 from l2l.http import build_chat_payload
-from l2l.messages import usage_line
+from l2l.messages import unit_no_source_message, usage_line
 from l2l.monads import NOTHING, Just
 from l2l.plans import (
     build_ascii_fix_user,
@@ -327,6 +327,7 @@ def test_letter_script_buckets_letters_by_family() -> None:
     assert letter_script("ह") == "devanagari"
     assert letter_script("7") == ""
     assert letter_script("!") == ""
+    assert letter_script(chr(0x17000)) == ""
 
 
 def test_dominant_script_picks_the_most_frequent_family() -> None:
@@ -392,3 +393,9 @@ def test_excerpt_collapses_and_truncates() -> None:
     assert excerpt("a\n\n b\tc") == "a b c"
     assert excerpt("x" * 80) == "x" * 60 + "..."
     assert excerpt("short") == "short"
+
+
+def test_unit_no_source_message_reports_the_pass_through() -> None:
+    assert unit_no_source_message("polish", 2, 5) == (
+        "l2l: [polish] unit 2/5 has no matching source; passing it through unchanged"
+    )

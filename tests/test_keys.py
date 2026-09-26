@@ -3,14 +3,22 @@ import pty
 import sys
 import termios
 import time
+import tty
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from fakes import make_console
 
 from l2l import keys
 from l2l.console import Console, toggle_verbose
-from l2l.keys import TabListener, is_toggle_key, open_tty, start_tab_listener
+from l2l.keys import (
+    TabListener,
+    enter_cbreak,
+    is_toggle_key,
+    open_tty,
+    start_tab_listener,
+)
 from l2l.monads import IO, NOTHING, Just, Ref
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="requires a POSIX TTY")
@@ -65,6 +73,34 @@ def test_start_tab_listener_disabled_without_live_terminal() -> None:
     console, _ = make_console(live=False)
     stop = start_tab_listener(console, toggler(console)).run()
     stop.run()
+
+
+def test_enter_cbreak_fails_on_a_non_tty_fd(tmp_path: Path) -> None:
+    fd = os.open(str(tmp_path / "plain"), os.O_RDWR | os.O_CREAT)
+    try:
+        assert enter_cbreak(fd).run() is False
+    finally:
+        os.close(fd)
+
+
+def test_start_tab_listener_without_cbreak_stays_detached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    master, slave = pty.openpty()
+
+    def refuse(fd: int) -> None:
+        raise termios.error("cannot enter cbreak mode")
+
+    monkeypatch.setattr(tty, "setcbreak", refuse)
+    console, _ = make_console(live=True)
+    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(slave)))
+    stop = start_tab_listener(console, toggler(console)).run()
+    os.write(master, b"\t")
+    time.sleep(0.3)
+    assert console.verbose.value is False
+    stop.run()
+    os.close(master)
+    os.close(slave)
 
 
 def test_start_tab_listener_toggles_and_restores(
