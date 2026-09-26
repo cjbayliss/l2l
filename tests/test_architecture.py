@@ -247,8 +247,8 @@ def dataclass_violation(name: str, node: ast.ClassDef) -> str | None:
     return (
         None
         if frozen
-        else f"{name}.{node.name} must be @dataclass(frozen=True); "
-        "use `replace` to derive new values"
+        else "%s.%s must be @dataclass(frozen=True); "
+        "use `replace` to derive new values" % (name, node.name)
     )
 
 
@@ -271,8 +271,13 @@ def test_dependencies_point_strictly_downward() -> None:
                 continue
 
             assert LEVELS[imported] < LEVELS[name], (
-                f"{name} (level {LEVELS[name]}) imports "
-                f"{imported} (level {LEVELS[imported]})"
+                "%s (level %d) imports %s (level %d)"
+                % (
+                    name,
+                    LEVELS[name],
+                    imported,
+                    LEVELS[imported],
+                )
             )
 
 
@@ -286,7 +291,7 @@ def test_io_runs_only_at_sanctioned_edges() -> None:
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "run"
-            ), f"{name}:{node.lineno} executes IO; compose IO values instead"
+            ), "%s:%d executes IO; compose IO values instead" % (name, node.lineno)
 
 
 def test_dataclasses_are_frozen() -> None:
@@ -301,14 +306,15 @@ def test_no_global_or_nonlocal_statements() -> None:
     for name in sorted(module_names()):
         for node in ast.walk(parse_module(name)):
             assert not isinstance(node, (ast.Global, ast.Nonlocal)), (
-                f"{name}:{node.lineno} uses {type(node).__name__.lower()}; "
-                "thread state through parameters and return values instead"
+                "%s:%d uses %s; thread state through parameters and "
+                "return values instead"
+                % (name, node.lineno, type(node).__name__.lower())
             )
 
 
 def test_mutation_assignments_only_where_sanctioned() -> None:
     problems = [
-        f"{name}:{node.lineno}"
+        "%s:%d" % (name, node.lineno)
         for name in sorted(module_names())
         for node in scoped_violations(
             name,
@@ -318,15 +324,15 @@ def test_mutation_assignments_only_where_sanctioned() -> None:
         )
     ]
     assert not problems, (
-        f"attribute/subscript assignments outside the allowlist: "
-        f"{'; '.join(problems)}; derive new values instead (`replace`, "
-        "tuples, `Ref` in `monads`)"
+        "attribute/subscript assignments outside the allowlist: %s; "
+        "derive new values instead (`replace`, tuples, `Ref` in `monads`)"
+        % "; ".join(problems)
     )
 
 
 def test_mutator_calls_only_where_sanctioned() -> None:
     problems = [
-        f"{name}:{node.lineno}"
+        "%s:%d" % (name, node.lineno)
         for name in sorted(module_names())
         for node in scoped_violations(
             name,
@@ -336,8 +342,9 @@ def test_mutator_calls_only_where_sanctioned() -> None:
         )
     ]
     assert not problems, (
-        f"container mutator calls outside the allowlist: {'; '.join(problems)}; "
+        "container mutator calls outside the allowlist: %s; "
         "build new collections instead (tuples, frozensets, comprehensions)"
+        % "; ".join(problems)
     )
 
 
@@ -348,8 +355,8 @@ def test_raise_only_at_the_error_edge() -> None:
 
         for node in ast.walk(parse_module(name)):
             assert not isinstance(node, ast.Raise), (
-                f"{name}:{node.lineno} raises; return a `Result` from "
-                "`errors` constructors instead"
+                "%s:%d raises; return a `Result` from `errors` constructors "
+                "instead" % (name, node.lineno)
             )
 
 
@@ -359,9 +366,9 @@ def test_effectful_imports_stay_in_sanctioned_modules() -> None:
         for root in sorted(import_roots(parse_module(name))):
             if root in EFFECT_MODULES:
                 assert root in allowed, (
-                    f"{name} imports effectful stdlib module {root!r}; keep "
-                    "effects in the sanctioned modules or extend the "
-                    "module's allowlist deliberately"
+                    "%s imports effectful stdlib module %r; keep effects in "
+                    "the sanctioned modules or extend the module's allowlist "
+                    "deliberately" % (name, root)
                 )
 
 
@@ -384,13 +391,13 @@ def banned_builtin_calls(tree: ast.Module) -> list[tuple[int, str]]:
 
 def test_builtin_effect_calls_stay_at_the_edges() -> None:
     problems = [
-        f"{name}:{lineno} calls {call!r}"
+        "%s:%d calls %r" % (name, lineno, call)
         for name in sorted(module_names())
         for lineno, call in banned_builtin_calls(parse_module(name))
         if name not in BUILTIN_CALL_EDGES[call]
     ]
     assert not problems, (
-        f"builtin effect calls outside sanctioned edges: {'; '.join(problems)}"
+        "builtin effect calls outside sanctioned edges: %s" % "; ".join(problems)
     )
 
 
@@ -423,17 +430,17 @@ def docstring_nodes(tree: ast.Module) -> list[ast.Expr]:
 
 def test_no_comments_anywhere() -> None:
     problems = [
-        f"{name}:{line}"
+        "%s:%d" % (name, line)
         for name, source in python_sources()
         for line in comment_lines(source)
     ]
-    assert not problems, f"comments are banned: {'; '.join(problems)}"
+    assert not problems, "comments are banned: %s" % "; ".join(problems)
 
 
 def test_no_docstrings_anywhere() -> None:
     problems = [
-        f"{name}:{node.lineno}"
+        "%s:%d" % (name, node.lineno)
         for name, source in python_sources()
         for node in docstring_nodes(ast.parse(source))
     ]
-    assert not problems, f"docstrings are banned: {'; '.join(problems)}"
+    assert not problems, "docstrings are banned: %s" % "; ".join(problems)

@@ -292,7 +292,7 @@ def test_io_catch_result_catches_exceptions_in_result_channel() -> None:
         raise RuntimeError("disaster")
 
     def handler(error: Exception) -> Result[int, str]:
-        return Err(f"caught: {error}")
+        return Err("caught: %s" % error)
 
     assert io_catch_result(IO(boom), handler).run() == Err("caught: disaster")
     assert io_catch_result(io_result(Ok(1)), handler).run() == Ok(1)

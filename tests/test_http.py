@@ -7,13 +7,12 @@ from email.message import Message
 from typing import Any, Literal
 
 from fakes import (
-    SLEEPS,
     FakeHttp,
     FakePlainResponse,
     FakeStreamResponse,
     make_console,
     make_context,
-    reset_sleeps,
+    make_sleep_recorder,
     stream_chunks,
     with_usage,
 )
@@ -113,7 +112,7 @@ def test_retry_after_seconds_handles_garbage() -> None:
 
 
 def test_chat_retries_transient_failures_then_succeeds() -> None:
-    reset_sleeps()
+    sleep, sleeps = make_sleep_recorder()
     console, _ = make_console()
     chunks = with_usage(stream_chunks("Hi"), USAGE)
     calls: list[Any] = []
@@ -125,28 +124,28 @@ def test_chat_retries_transient_failures_then_succeeds() -> None:
 
         return Ok(FakeStreamResponse(chunks))
 
-    ctx = make_context(console, flaky_open)
+    ctx = make_context(console, flaky_open, sleep=sleep)
     result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
     assert isinstance(result, Ok)
     assert result.value.text == "Hi"
     assert len(calls) == 3
-    assert SLEEPS == [1.0, 2.0]
+    assert sleeps() == (1.0, 2.0)
 
 
 def test_chat_does_not_retry_protocol_failures() -> None:
-    reset_sleeps()
+    sleep, sleeps = make_sleep_recorder()
     console, _ = make_console()
     http = FakeHttp([FakePlainResponse({"nope": True})])
-    ctx = make_context(console, http.open)
+    ctx = make_context(console, http.open, sleep=sleep)
     result = chat(ctx, "s", "u", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Err)
     assert "unexpected response shape" in describe(result.error)
     assert len(http.requests) == 1
-    assert SLEEPS == []
+    assert sleeps() == ()
 
 
 def test_chat_honours_retry_after_header() -> None:
-    reset_sleeps()
+    sleep, sleeps = make_sleep_recorder()
     console, _ = make_console()
     chunks = with_usage(stream_chunks("Hi"), USAGE)
     calls: list[Any] = []
@@ -158,15 +157,15 @@ def test_chat_honours_retry_after_header() -> None:
 
         return Ok(FakeStreamResponse(chunks))
 
-    ctx = make_context(console, rate_limited_then_ok)
+    ctx = make_context(console, rate_limited_then_ok, sleep=sleep)
     result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
     assert isinstance(result, Ok)
     assert len(calls) == 2
-    assert SLEEPS == [9.0]
+    assert sleeps() == (9.0,)
 
 
 def test_chat_gives_up_after_retry_budget() -> None:
-    reset_sleeps()
+    sleep, sleeps = make_sleep_recorder()
     console, _ = make_console()
     calls: list[Any] = []
 
@@ -174,12 +173,12 @@ def test_chat_gives_up_after_retry_budget() -> None:
         calls.append(request)
         return fail_http("unreachable", "down")
 
-    ctx = make_context(console, always_down)
+    ctx = make_context(console, always_down, sleep=sleep)
     result = chat(ctx, "s", "u", "m", {}, Usage()).run()
     assert isinstance(result, Err)
     assert "could not reach endpoint: down" in describe(result.error)
     assert len(calls) == 3
-    assert SLEEPS == [1.0, 2.0]
+    assert sleeps() == (1.0, 2.0)
 
 
 def test_chat_context_stream_false_forces_plain() -> None:
