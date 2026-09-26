@@ -7,20 +7,37 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from l2l.console import Console, StatusLine
-from l2l.effects import RunLog
+from l2l.effects import RunLog, Sleep
 from l2l.errors import TranslationError
-from l2l.monads import IO, NOTHING, Ok, Result, write_ref
+from l2l.monads import (
+    IO,
+    NOTHING,
+    Ok,
+    Ref,
+    Result,
+    modify_ref,
+    new_ref,
+    read_ref,
+    write_ref,
+)
 from l2l.settings import Config, Context, build_settings
 
-SLEEPS: list[float] = []
+
+def no_sleep(seconds: float) -> None:
+    return None
 
 
-def recording_sleep(seconds: float) -> None:
-    SLEEPS.append(seconds)
+def make_sleep_recorder() -> tuple[Sleep, Callable[[], tuple[float, ...]]]:
+    initial: tuple[float, ...] = ()
+    recorded: Ref[tuple[float, ...]] = new_ref(initial).run()
 
+    def sleep(seconds: float) -> None:
+        modify_ref(recorded, lambda current: current + (seconds,)).run()
 
-def reset_sleeps() -> None:
-    SLEEPS.clear()
+    def sleeps() -> tuple[float, ...]:
+        return read_ref(recorded).run()
+
+    return sleep, sleeps
 
 
 class FakeStreamResponse:
@@ -97,6 +114,7 @@ def make_context(
     stream: bool | None = None,
     verbose: bool = False,
     clock: Callable[[], float] = time.time,
+    sleep: Sleep = no_sleep,
 ) -> Context:
     config = Config(
         base_url="http://endpoint.test/v1",
@@ -116,7 +134,7 @@ def make_context(
         open_http=open_http,
         log=log if log is not None else RunLog(NOTHING, clock),
         clock=clock,
-        sleep=recording_sleep,
+        sleep=sleep,
         stream=stream,
     )
 

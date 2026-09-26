@@ -720,9 +720,9 @@ def test_run_pipeline_total_elapsed_measures_since_started() -> None:
     assert stdout.getvalue() == "Hello.\n"
     elapsed = readings[-1] - readings[0]
     total = [line for line in stderr.getvalue().splitlines() if "TOTAL" in line][0]
-    assert f"TOTAL: {elapsed:.1f}s" in total
+    assert "TOTAL: %.1fs" % elapsed in total
     rate = USAGE["completion_tokens"] / elapsed if elapsed > 0 else 0.0
-    assert f"{rate:.1f} tok/s" in total
+    assert "%.1f tok/s" % rate in total
 
 
 def test_ascii_drop_warning_mentions_paragraph_sample_and_attempts() -> None:
