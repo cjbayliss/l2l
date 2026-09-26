@@ -34,7 +34,7 @@ from l2l.monads import (
 POLL_SECONDS = 0.1
 
 
-type TermiosState = list[Any]
+type TermiosState = tuple[Any, ...]
 
 
 def is_toggle_key(data: bytes) -> bool:
@@ -62,7 +62,7 @@ def open_tty() -> IO[Maybe[int]]:
 def tty_attributes(fd: int) -> IO[Maybe[TermiosState]]:
     def thunk() -> Maybe[TermiosState]:
         try:
-            return Just(termios.tcgetattr(fd))
+            return Just(tuple(termios.tcgetattr(fd)))
         except OSError, termios.error:
             return NOTHING
 
@@ -137,7 +137,7 @@ class TabListener:
             def thunk() -> None:
                 if should_restore:
                     with contextlib.suppress(OSError, termios.error):
-                        termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
+                        termios.tcsetattr(self.fd, termios.TCSADRAIN, list(self.saved))
 
             return IO(thunk)
 

@@ -29,10 +29,17 @@ code that passes them the first time.
 4. **Data is immutable.** Every dataclass is `@dataclass(frozen=True)`;
    derive new values with `dataclasses.replace`. Prefer tuples and
    frozensets over lists and sets, and `Cons` (in `monads`) when you
-   need O(1) prepends. Do not call container mutators (`.append`,
-   `.update`, `.sort`, ...) or assign to attributes/subscripts — build
-   new collections instead. The single sanctioned mutable cell is
-   `Ref` (in `monads`), read and written only inside `IO` via
+   need O(1) prepends. Mappings stored in frozen dataclasses (e.g.
+   `Config.params`, `PassDefinition.params`) are wrapped in
+   `MappingProxyType` at the point they are stored, and JSON edges
+   serialize `dict(mapping)` (`json.dumps` rejects or mis-serializes
+   mapping proxies). Mutable stdlib structures are only materialized
+   at an effect edge when an API demands them (e.g. `termios.tcsetattr`
+   needs a real `list`; store a tuple, convert inside the thunk). Do
+   not call container mutators (`.append`, `.update`, `.sort`, ...) or
+   assign to attributes/subscripts — build new collections instead.
+   The single sanctioned mutable cell is `Ref` (in `monads`), read and
+   written only inside `IO` via
    `new_ref`/`read_ref`/`write_ref`/`modify_ref*`.
 
 5. **No `global`/`nonlocal`.** Thread state through parameters and

@@ -136,14 +136,14 @@ def cons_all[T](heads: Iterable[T], tail: Cons[T] | None = None) -> Cons[T] | No
     return reduce(lambda accumulated, head: Cons(head, accumulated), heads, tail)
 
 
-def cons_to_tuple[T](items: Cons[T] | None) -> tuple[T, ...]:
-    collected: list[T] = []
+def cons_cells[T](items: Cons[T] | None) -> Iterable[T]:
     while items is not None:
-        collected.append(items.head)
+        yield items.head
         items = items.tail
 
-    collected.reverse()
-    return tuple(collected)
+
+def cons_to_tuple[T](items: Cons[T] | None) -> tuple[T, ...]:
+    return tuple(reversed(tuple(cons_cells(items))))
 
 
 NOTHING: Nothing = Nothing()

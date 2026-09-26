@@ -200,7 +200,7 @@ def parse_chunk_delta(chunk: Mapping[str, Any]) -> dict[str, Any]:
             return {}
 
         return choices[0].get("delta") or {}
-    except AttributeError, IndexError, TypeError:
+    except AttributeError, IndexError, KeyError, TypeError:
         return {}
 
 
