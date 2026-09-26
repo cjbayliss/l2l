@@ -365,6 +365,19 @@ def test_load_instruction_text_inline() -> None:
     assert isinstance(result, Err)
 
 
+def test_load_instruction_text_rejects_blank_inline_instructions() -> None:
+    for instruction in ("   ", "", 3, None):
+        result = load_instruction_text(
+            "f", "p", {"instruction": instruction}, "."
+        ).run()
+        assert isinstance(result, Err)
+        assert "instruction is empty" in describe(result.error)
+
+
+def test_document_passes_without_tables_yields_no_passes() -> None:
+    assert document_passes("f", {"api": {}}).run() == Ok(())
+
+
 def test_resolve_passes_requires_pass_table() -> None:
     result = resolve_passes("user", ok_document({"api": {}}), None, Ok({})).run()
     assert isinstance(result, Err)

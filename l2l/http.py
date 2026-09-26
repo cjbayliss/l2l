@@ -574,7 +574,7 @@ def drive_stream(
 
 
 def collect_stream(
-    ctx: Context, payload: Mapping[str, Any], on_progress: ProgressCallback
+    ctx: Context, payload: Mapping[str, Any]
 ) -> IO[Result[StreamState, TranslationError]]:
     def on_reasoning(text: str) -> IO[None]:
         return ctx.console.stream_reasoning(text)
@@ -708,11 +708,8 @@ def streamed_call(
         ),
     }
 
-    def on_progress(label: str, count: int) -> IO[None]:
-        return ctx.console.progress(label, count)
-
     return io_map(
-        collect_stream(ctx, full_payload, on_progress),
+        collect_stream(ctx, full_payload),
         lambda outcome: result_map(outcome, lambda state: to_chat_reply(state)),
     )
 

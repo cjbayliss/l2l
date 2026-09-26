@@ -30,10 +30,13 @@ version = { attr = "l2l.__version__" }
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "--cov=l2l --cov-report=term-missing --cov-fail-under=90"
+addopts = "--cov=l2l --cov-report=term-missing --cov-fail-under=99"
 
 [tool.coverage.run]
 branch = true
+
+[tool.coverage.report]
+exclude_lines = ["assert_never", "\\(Protocol\\)"]
 
 [tool.ruff]
 line-length = 88

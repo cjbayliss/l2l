@@ -747,6 +747,114 @@ def test_run_pipeline_reports_unit_failure() -> None:
     assert "could not reach endpoint: down" in logged
 
 
+def test_ensure_paragraphs_propagates_a_failed_first_attempt() -> None:
+    console, stderr = make_console()
+
+    def open_fail(request: Any, timeout: float) -> Result[Any, TranslationError]:
+        return fail_http("unreachable", "down")
+
+    ctx = make_context(console, open_fail)
+    code = run_pipeline(
+        ctx, (chunk_pass(ensure_paragraphs=True),), "你好。", 0.0, io.StringIO()
+    ).run()
+    assert code == 1
+    assert "failed on unit 1" in stderr.getvalue()
+
+
+def test_ensure_paragraphs_reports_a_failed_retry_attempt() -> None:
+    console, stderr = make_console()
+    stubborn = "One.\n\nTwo.\n\nThree."
+    requests: list[Any] = []
+
+    def open_thrice_then_fail(
+        request: Any, timeout: float
+    ) -> Result[Any, TranslationError]:
+        requests.append(request)
+        if len(requests) <= 3:
+            return Ok(FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE)))
+
+        return fail_http("unreachable", "down")
+
+    ctx = make_context(console, open_thrice_then_fail)
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(ensure_paragraphs=True),),
+        "你好。\n\n世界。",
+        0.0,
+        io.StringIO(),
+    ).run()
+    assert code == 1
+    logged = stderr.getvalue()
+    assert "re-running the pass with one call per paragraph" in logged
+    assert "failed on unit 1" in logged
+    assert len(requests) == 6
+
+
+def test_ensure_paragraphs_continues_when_paragraph_mode_still_differs() -> None:
+    console, stderr = make_console()
+    stubborn = "One.\n\nTwo."
+    http = FakeHttp(
+        [FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE))] * 3
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    merged = PassDefinition("translate", "T.", "paragraph", {}, None, False, True)
+    code = run_pipeline(ctx, (merged,), "你好。", 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == stubborn + "\n"
+    logged = stderr.getvalue()
+    assert "failed validation 2 time(s)" in logged
+    assert "output has 2 paragraph(s), source has 1" in logged
+    assert "continuing" in logged
+    assert len(http.requests) == 3
+
+
+def test_paragraph_pass_after_growth_passes_units_without_source() -> None:
+    console, _ = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("Hello.\n\nWorld."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx, (chunk_pass(), paragraph_pass()), "你好。", 0.0, stdout
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.World.\n"
+    assert len(http.requests) == 2
+    users = [
+        json.loads(request.data)["messages"][1]["content"] for request in http.requests
+    ]
+    assert "你好。" in users[1]
+
+
+def test_ascii_enforcement_reports_a_failing_repair_call() -> None:
+    console, stderr = make_console()
+    requests: list[Any] = []
+
+    def open_once_then_fail(
+        request: Any, timeout: float
+    ) -> Result[Any, TranslationError]:
+        requests.append(request)
+        if len(requests) == 1:
+            return Ok(FakeStreamResponse(with_usage(stream_chunks("Hi 中"), USAGE)))
+
+        return fail_http("unreachable", "down")
+
+    ctx = make_context(console, open_once_then_fail)
+    code = run_pipeline(
+        ctx, (chunk_pass(ascii_output=True),), "文本。", 0.0, io.StringIO()
+    ).run()
+    assert code == 1
+    logged = stderr.getvalue()
+    assert "pass [translate] ascii enforcement failed" in logged
+    assert "could not reach endpoint: down" in logged
+    assert len(requests) == 4
+
+
 def test_run_pipeline_cache_hit(tmp_path: Path) -> None:
     cache_directory = tmp_path / "cache"
     cache_directory.mkdir()

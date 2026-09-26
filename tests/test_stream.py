@@ -14,9 +14,11 @@ from l2l.http import (
     ProgressUpdate,
     StreamState,
     chat,
+    collect_content_parts,
     drive_stream,
     flatten_content_parts,
     ingest_raw_line,
+    parse_chunk_delta,
     plain_reply,
     stream_step,
     to_chat_reply,
@@ -135,6 +137,24 @@ def test_stream_step_content_part_list() -> None:
     assert cons_to_tuple(result.value.contents) == ("ok",)
 
 
+def test_stream_step_reasoning_after_content_emits_no_progress() -> None:
+    state = feed(StreamState(), "Hello")
+    result = stream_step(
+        state,
+        {"choices": [{"delta": {"reasoning_content": "late thought"}}]},
+    )
+    assert isinstance(result, Ok)
+    assert result.value.progress_update is None
+    assert cons_to_tuple(result.value.reasoning) == ("late thought",)
+
+
+def test_parse_chunk_delta_tolerates_malformed_chunks() -> None:
+    assert parse_chunk_delta({}) == {}
+    assert parse_chunk_delta({"choices": []}) == {}
+    assert parse_chunk_delta({"choices": 5}) == {}
+    assert parse_chunk_delta({"choices": [5]}) == {}
+
+
 def test_ingest_raw_line_ignores_non_dict_chunks() -> None:
     state = feed(StreamState(), "keep")
     for raw in (
@@ -251,11 +271,13 @@ def test_flatten_content_parts_with_thinking() -> None:
     content = [
         {"type": "thinking", "thinking": [{"text": " t1 "}]},
         {"type": "text", "text": "A"},
+        {"type": "image_url", "image_url": {"url": "data:x"}},
         "B",
     ]
     texts, thoughts = flatten_content_parts(content)
     assert texts == "AB"
     assert thoughts == (" t1 ",)
+    assert collect_content_parts(content) == (("A", "B"), (" t1 ",))
 
 
 def test_drive_stream_progress_labels() -> None:

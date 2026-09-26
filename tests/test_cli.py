@@ -1,13 +1,24 @@
 import io
+import os
+import pty
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from fakes import FakeHttp, FakePlainResponse, FakeStreamResponse, stream_chunks
+import pytest
+from fakes import (
+    FakeHttp,
+    FakePlainResponse,
+    FakeStreamResponse,
+    stream_chunks,
+    with_usage,
+)
 
-from l2l import cli
+from l2l import cli, keys
+from l2l.console import toggle_verbose
 from l2l.errors import TranslationError
-from l2l.monads import Result
+from l2l.monads import IO, Just, Ok, Result
 
 CONFIG_TEXT = (
     "[api]\n"
@@ -20,6 +31,8 @@ CONFIG_TEXT = (
     'mode = "chunk"\n'
     'instruction = "Translate."'
 )
+
+USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
 
 def write_config(tmp_path: Path) -> Path:
@@ -235,3 +248,60 @@ def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
     assert second == 0
     assert second_stdout.getvalue().strip() == "Hello."
     assert "prompt=0, completion=0" in second_stderr.getvalue()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires a POSIX TTY")
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_tab_key_toggles_verbose_during_a_live_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output_master, output_slave = pty.openpty()
+    toggle_master, toggle_slave = pty.openpty()
+    in_request = threading.Event()
+    toggled = threading.Event()
+
+    def watching_toggle(console: Any) -> Any:
+        toggled.set()
+        return toggle_verbose(console)
+
+    def gated_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
+        in_request.set()
+        assert toggled.wait(5.0), "the tab key never toggled verbose mode"
+        chunks = with_usage(stream_chunks("Hello."), USAGE)
+        return Ok(FakeStreamResponse(chunks))
+
+    def feed_tab() -> None:
+        if in_request.wait(5.0):
+            os.write(toggle_master, b"\t")
+
+    monkeypatch.setattr(cli, "toggle_verbose", watching_toggle)
+    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(toggle_slave)))
+    writer = threading.Thread(target=feed_tab, daemon=True)
+    writer.start()
+
+    stderr = os.fdopen(output_slave, "w")
+    stdout = io.StringIO()
+    try:
+        code = cli.main(
+            [
+                str(write_config(tmp_path)),
+                "--cache-dir",
+                str(tmp_path / "cache"),
+                "--no-cache",
+            ],
+            {},
+            io.StringIO("你好。"),
+            stdout,
+            stderr,
+            time.time,
+            gated_open,
+        ).run()
+    finally:
+        stderr.close()
+        os.close(output_master)
+        os.close(toggle_master)
+        os.close(toggle_slave)
+
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n"
+    assert toggled.is_set()

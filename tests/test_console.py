@@ -8,6 +8,7 @@ from l2l.console import (
     LogEvent,
     StatusLine,
     StatusView,
+    display_width,
     draw_render,
     erase_rows_render,
     event_line,
@@ -43,6 +44,12 @@ def test_status_line_text_renders_prefix_and_values() -> None:
 def test_status_erase_text_clears_drawn_width() -> None:
     assert status_erase_text(StatusView(drawn="abc")) == "\r" + " " * 3 + "\r"
     assert status_erase_text(StatusView(drawn="")) == ""
+
+
+def test_display_width_skips_combining_marks() -> None:
+    assert display_width("cafe\u0301") == 4
+    assert display_width("e\u0301") == 1
+    assert display_width("你好") == 4
 
 
 def test_status_line_live_draws_progress_and_erases() -> None:

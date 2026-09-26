@@ -18,9 +18,9 @@ from fakes import (
 )
 
 from l2l.console import toggle_verbose
-from l2l.errors import HttpError, describe, fail_http
-from l2l.http import chat, retry_after_seconds, urllib_open
-from l2l.monads import NOTHING, Err, Just, Ok, cons_to_tuple
+from l2l.errors import HttpError, TranslationError, describe, fail_http
+from l2l.http import chat, http_post_json, log_all, retry_after_seconds, urllib_open
+from l2l.monads import NOTHING, Err, Just, Ok, Result, cons_to_tuple, write_ref
 from l2l.text import Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
@@ -373,3 +373,80 @@ def test_chat_reports_invalid_json_body_as_protocol_error() -> None:
     result = chat(ctx, "s", "u", "m", {}, Usage()).run()
     assert isinstance(result, Err)
     assert "invalid JSON response" in describe(result.error)
+
+
+def test_http_post_json_reports_an_unreachable_endpoint() -> None:
+    console, _ = make_console()
+
+    def open_fail(request: Any, timeout: float) -> Result[Any, TranslationError]:
+        return fail_http("unreachable", "down")
+
+    ctx = make_context(console, open_fail)
+    result = http_post_json(ctx, {"model": "m"}).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "unreachable"
+
+
+def test_chat_reopens_a_stream_without_stream_options() -> None:
+    console, _ = make_console()
+    chunks = with_usage(stream_chunks("Hi"), USAGE)
+    requests: list[Any] = []
+
+    def picky_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
+        requests.append(request)
+        if "stream_options" in json.loads(request.data):
+            return fail_http("status", "stream_options is unsupported", 400)
+
+        return Ok(FakeStreamResponse(chunks))
+
+    ctx = make_context(console, picky_open)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == "Hi"
+    assert len(requests) == 2
+    assert "stream_options" not in json.loads(requests[1].data)
+
+
+def test_chat_reports_endpoint_error_events_from_a_stream() -> None:
+    console, _ = make_console()
+    http = FakeHttp([FakeStreamResponse([{"error": {"message": "overloaded"}}])])
+    ctx = make_context(console, http.open)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
+    assert "overloaded" in describe(result.error)
+
+
+class ExplodingStreamResponse:
+    def __iter__(self) -> ExplodingStreamResponse:
+        return self
+
+    def __next__(self) -> bytes:
+        raise ValueError("bad frame")
+
+    def __enter__(self) -> ExplodingStreamResponse:
+        return self
+
+    def __exit__(self, *args: object) -> Literal[False]:
+        return False
+
+
+def test_chat_reports_malformed_stream_frames_as_protocol_errors() -> None:
+    console, _ = make_console()
+    http = FakeHttp([ExplodingStreamResponse()])
+    ctx = make_context(console, http.open)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "protocol"
+    assert "ValueError" in describe(failure)
+
+
+def test_log_all_writes_each_message_when_verbose() -> None:
+    console, stream = make_console()
+    write_ref(console.verbose, True).run()
+    outcome = log_all(console, ("one", "two")).run()
+    assert outcome == Ok(())
+    assert stream.getvalue() == "one\ntwo\n"
