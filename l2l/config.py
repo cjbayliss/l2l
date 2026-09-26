@@ -310,9 +310,7 @@ def build_config(partial: PartialApiSettings) -> Result[Config, TranslationError
                 if partial.max_tokens is not None
                 else DEFAULT_MAX_TOKENS
             ),
-            params=(
-                partial.params if partial.params is not None else MappingProxyType({})
-            ),
+            params=MappingProxyType(dict(partial.params or {})),
         )
     )
 

@@ -213,11 +213,13 @@ class PartialApiSettings:
 
     def merge(self, extra: PartialApiSettings) -> PartialApiSettings:
         if self.params is not None and extra.params is not None:
-            params: Mapping[str, Any] | None = {**self.params, **extra.params}
+            params: Mapping[str, Any] | None = MappingProxyType(
+                {**self.params, **extra.params}
+            )
         elif extra.params is None:
             params = self.params
         else:
-            params = extra.params
+            params = MappingProxyType(dict(extra.params))
 
         return PartialApiSettings(
             base_url=extra.base_url if extra.base_url is not None else self.base_url,
@@ -243,11 +245,10 @@ DEFAULT_API_SETTINGS = PartialApiSettings(
 
 def resolve_call_settings(
     config: Config, pass_definition: PassDefinition
-) -> tuple[str, dict[str, Any]]:
-    return (pass_definition.model or config.model), {
-        **dict(config.params),
-        **dict(pass_definition.params),
-    }
+) -> tuple[str, Mapping[str, Any]]:
+    return (pass_definition.model or config.model), MappingProxyType(
+        {**config.params, **pass_definition.params}
+    )
 
 
 def paragraph_tolerance(value: bool | int | None) -> int | None:

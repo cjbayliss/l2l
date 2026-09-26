@@ -39,10 +39,7 @@ MUTATION_ASSIGNMENT_ALLOWLIST = frozenset(
 
 MUTATOR_CALL_ALLOWLIST = frozenset(
     {
-        ("console", "launch"),
         ("effects", "run_log_write"),
-        ("keys", "start"),
-        ("monads", "cons_to_tuple"),
     }
 )
 

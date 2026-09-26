@@ -420,7 +420,7 @@ def mask_api_key(api_key: str) -> str:
 
 
 def params_text(params: Mapping[str, Any]) -> str:
-    return json.dumps(params, sort_keys=True, ensure_ascii=False, default=str)
+    return json.dumps(dict(params), sort_keys=True, ensure_ascii=False, default=str)
 
 
 def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:

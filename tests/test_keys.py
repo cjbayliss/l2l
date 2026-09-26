@@ -143,7 +143,7 @@ def test_start_tab_listener_survives_a_non_tty_fd(
 
 def test_tab_listener_stop_without_start() -> None:
     console, _ = make_console(live=True)
-    listener = TabListener(fd=-1, saved=[], toggle=lambda: None, restored=Ref(True))
+    listener = TabListener(fd=-1, saved=(), toggle=lambda: None, restored=Ref(True))
     listener.stop()
 
 

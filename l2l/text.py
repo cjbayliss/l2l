@@ -480,9 +480,9 @@ def cache_key(
     context_bytes = b"\x00context\x00" + context.encode("utf-8") if context else b""
     override_bytes = (
         b"\x00"
-        + json.dumps(overrides, sort_keys=True, ensure_ascii=False, default=str).encode(
-            "utf-8"
-        )
+        + json.dumps(
+            dict(overrides), sort_keys=True, ensure_ascii=False, default=str
+        ).encode("utf-8")
         if overrides
         else b""
     )
