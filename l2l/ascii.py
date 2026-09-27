@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import reduce
 
 from l2l.cache import cached_translation
 from l2l.effects import now
-from l2l.errors import TranslationError, fail_ascii
+from l2l.errors import TranslationError, fail_ascii, fail_ascii_collapse
 from l2l.http import repaired_call
 from l2l.messages import (
     ascii_cache_hit_message,
@@ -167,6 +168,20 @@ def repair_paragraph(
     )
 
 
+def stubborn_paragraphs(
+    paragraphs: tuple[str, ...], character_map: Mapping[str, str]
+) -> tuple[str, ...]:
+    return tuple(
+        paragraph
+        for paragraph in paragraphs
+        if not to_ascii_mechanical(paragraph, character_map).isascii()
+    )
+
+
+def ascii_collapse(stubborn: int, total: int, floor: int) -> bool:
+    return stubborn * 2 > total and stubborn >= floor
+
+
 def ensure_ascii_output(
     ctx: Context,
     pass_definition: PassDefinition,
@@ -175,6 +190,13 @@ def ensure_ascii_output(
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
     paragraphs, separators = split_paragraphs(text)
+    stubborn = stubborn_paragraphs(paragraphs, ctx.settings.ascii_character_map)
+    if ascii_collapse(
+        len(stubborn), len(paragraphs), ctx.settings.ascii_collapse_floor
+    ):
+        return io_result(
+            fail_ascii_collapse(pass_definition.name, len(stubborn), len(paragraphs))
+        )
 
     def paragraph_part(
         indexed: tuple[int, str],

@@ -54,6 +54,13 @@ class AsciiError:
 
 
 @dataclass(frozen=True)
+class AsciiCollapseError:
+    pass_name: str
+    stubborn: int
+    total: int
+
+
+@dataclass(frozen=True)
 class UntranslatedError:
     pass_name: str
     index: int
@@ -68,6 +75,7 @@ type TranslationError = (
     | PassError
     | UnitError
     | AsciiError
+    | AsciiCollapseError
     | UntranslatedError
 )
 
@@ -107,6 +115,12 @@ def fail_unit(
 
 def fail_ascii(pass_name: str, inner: TranslationError) -> Err[TranslationError]:
     return Err(AsciiError(pass_name, inner))
+
+
+def fail_ascii_collapse(
+    pass_name: str, stubborn: int, total: int
+) -> Err[TranslationError]:
+    return Err(AsciiCollapseError(pass_name, stubborn, total))
 
 
 def fail_untranslated(pass_name: str, index: int, sample: str) -> Err[TranslationError]:
@@ -178,6 +192,13 @@ def describe(error: TranslationError) -> str:
             return "l2l: pass [%s] ascii enforcement failed: %s" % (
                 error.pass_name,
                 describe(error.inner),
+            )
+
+        case AsciiCollapseError():
+            return (
+                "%d of %d paragraph(s) would need LLM ASCII repair; an "
+                "upstream pass probably returned untranslated text instead "
+                "of translating" % (error.stubborn, error.total)
             )
 
         case UntranslatedError():

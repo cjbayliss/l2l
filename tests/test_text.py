@@ -9,6 +9,7 @@ from l2l.plans import (
     build_pass_user,
     build_unit_retry_user,
     context_parts,
+    script_mismatch_problem,
     unit_output_problem,
 )
 from l2l.settings import build_settings
@@ -210,7 +211,7 @@ def test_build_chat_payload() -> None:
 
 def test_build_pass_user() -> None:
     user = build_pass_user("src", "draft", " brief ")
-    assert user == "brief\n\nsrc\n\ndraft"
+    assert user == ("brief\n\nSource text:\nsrc\n\nCurrent draft:\ndraft")
     same = build_pass_user("src", "src", None)
     assert same == "src"
     blank = build_pass_user("src", None, "   ")
@@ -275,11 +276,35 @@ def test_context_parts_and_build_pass_user_with_context() -> None:
 
 
 def test_build_unit_retry_user_includes_problem_and_reply() -> None:
-    user = build_unit_retry_user("src", (), "bad reply", "the reply was empty")
+    user = build_unit_retry_user("src", "src", (), "bad reply", "the reply was empty")
     assert "the reply was empty" in user
     assert "Previous reply:\nbad reply" in user
     assert "\n\nsrc\n\n" in user
     assert user.endswith("output only the translation.")
+
+
+def test_build_unit_retry_user_includes_distinct_draft() -> None:
+    user = build_unit_retry_user("src", "draft", (), "bad reply", "problem")
+    assert "Source text:\nsrc" in user
+    assert "Current draft:\ndraft" in user
+
+
+def test_script_mismatch_problem_flags_source_language_reply() -> None:
+    problem = script_mismatch_problem("你好。", "Hello.", "你好。")
+    assert isinstance(problem, Just)
+    assert "source language (cjk script)" in problem.value
+
+
+def test_script_mismatch_problem_accepts_translated_reply() -> None:
+    assert script_mismatch_problem("你好。", "Hello.", "World.") == NOTHING
+
+
+def test_script_mismatch_problem_skips_when_draft_matches_source() -> None:
+    assert script_mismatch_problem("你好。", "你好。", "你好。") == NOTHING
+
+
+def test_script_mismatch_problem_skips_letterless_source() -> None:
+    assert script_mismatch_problem("123", "Hi", "123") == NOTHING
 
 
 def test_cache_key_distinguishes_context() -> None:

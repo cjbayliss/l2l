@@ -1,4 +1,5 @@
 from l2l.errors import (
+    AsciiCollapseError,
     AsciiError,
     BudgetError,
     ConfigError,
@@ -10,6 +11,7 @@ from l2l.errors import (
     UntranslatedError,
     describe,
     fail_ascii,
+    fail_ascii_collapse,
     fail_budget,
     fail_config,
     fail_http,
@@ -95,6 +97,18 @@ def test_describe_ascii_error() -> None:
     assert isinstance(failure.error, AsciiError)
     assert describe(failure.error).startswith(
         "l2l: pass [translate] ascii enforcement failed: request is ~500"
+    )
+
+
+def test_describe_ascii_collapse_error() -> None:
+    collapse = fail_ascii_collapse("refine", 40, 40).error
+    assert collapse == AsciiCollapseError("refine", 40, 40)
+    wrapped = fail_ascii("refine", collapse)
+    assert isinstance(wrapped.error, AsciiError)
+    assert describe(wrapped.error) == (
+        "l2l: pass [refine] ascii enforcement failed: 40 of 40 paragraph(s) "
+        "would need LLM ASCII repair; an upstream pass probably returned "
+        "untranslated text instead of translating"
     )
 
 

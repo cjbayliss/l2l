@@ -21,6 +21,7 @@ from l2l.text import (
     AsciiDrop,
     cache_key,
     count_paragraphs,
+    dominant_script,
     estimate_tokens,
     make_chunks,
     non_ascii_sample,
@@ -95,6 +96,22 @@ def unit_output_problem(
     return NOTHING
 
 
+def script_mismatch_problem(
+    source_text: str, work_text: str, output: str
+) -> Maybe[str]:
+    source_script = dominant_script(source_text)
+    if not source_script or source_script == dominant_script(work_text):
+        return NOTHING
+
+    if dominant_script(output) != source_script:
+        return NOTHING
+
+    return Just(
+        "the reply is in the source language (%s script) instead of the "
+        "draft's language" % source_script
+    )
+
+
 def context_parts(context: tuple[str, ...]) -> tuple[str, ...]:
     if not context:
         return ()
@@ -114,15 +131,14 @@ def build_pass_user(
     analysis: str | None,
     context: tuple[str, ...] = (),
 ) -> str:
+    has_draft = work_chunk is not None and work_chunk != source_chunk
+    source_block = ("Source text:\n%s" % source_chunk) if has_draft else source_chunk
+    draft_block = ("Current draft:\n%s" % work_chunk) if has_draft else ""
     parts = (
         analysis.strip() if analysis else "",
         *context_parts(context),
-        source_chunk,
-        *(
-            extra
-            for extra in (work_chunk,)
-            if extra is not None and extra != source_chunk
-        ),
+        source_block,
+        draft_block,
     )
     return "\n\n".join(part for part in parts if part)
 
@@ -199,22 +215,20 @@ def build_ascii_retry_user(
 
 def build_unit_retry_user(
     source_chunk: str,
+    work_chunk: str | None,
     context: tuple[str, ...],
     bad_output: str,
     problem: str,
 ) -> str:
     return "\n\n".join(
-        part
-        for part in (
+        (
             "Your previous reply below does not satisfy the output rules: %s."
             % problem,
             "Previous reply:\n%s" % bad_output,
-            *context_parts(context),
-            source_chunk,
+            build_pass_user(source_chunk, work_chunk, None, context),
             "Translate the source text again, fixing the problem; output only "
             "the translation.",
         )
-        if part
     )
 
 
