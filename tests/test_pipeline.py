@@ -19,6 +19,7 @@ from fakes import (
 )
 
 from l2l import cli
+from l2l.ascii import ascii_collapse, stubborn_paragraphs
 from l2l.errors import TranslationError, describe, fail_http
 from l2l.http import chat
 from l2l.monads import (
@@ -41,7 +42,7 @@ from l2l.plans import (
     plan_unit_calls,
     resolve_work_groups,
 )
-from l2l.settings import PassDefinition
+from l2l.settings import PassDefinition, build_settings
 from l2l.text import AsciiDrop, Usage, unit_separators
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
@@ -853,6 +854,107 @@ def test_ascii_enforcement_reports_a_failing_repair_call() -> None:
     assert "pass [translate] ascii enforcement failed" in logged
     assert "could not reach endpoint: down" in logged
     assert len(requests) == 4
+
+
+def test_ascii_collapse_requires_majority_and_floor() -> None:
+    assert not ascii_collapse(1, 1, 4)
+    assert not ascii_collapse(3, 5, 4)
+    assert not ascii_collapse(2, 5, 4)
+    assert ascii_collapse(4, 5, 4)
+    assert ascii_collapse(5, 5, 4)
+
+
+def test_stubborn_paragraphs_skip_mechanically_fixable_text() -> None:
+    character_map = build_settings().ascii_character_map
+    stubborn = stubborn_paragraphs(("Café.", "你好。", "Plain."), character_map)
+    assert stubborn == ("你好。",)
+
+
+def test_ascii_enforcement_fails_fast_when_most_paragraphs_need_llm_repair() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(
+                with_usage(stream_chunks("一。\n\n二。\n\n三。\n\n四。\n\n五。"), USAGE)
+            )
+        ]
+    )
+    ctx = make_context(console, http.open)
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(ascii_output=True),),
+        "1。\n\n2。\n\n3。\n\n4。\n\n5。",
+        0.0,
+        io.StringIO(),
+    ).run()
+    assert code == 1
+    assert len(http.requests) == 1
+    logged = stderr.getvalue()
+    assert "5 of 5 paragraph(s) would need LLM ASCII repair" in logged
+    assert "untranslated text instead of translating" in logged
+
+
+def test_ascii_enforcement_repairs_a_minority_of_stubborn_paragraphs() -> None:
+    console, _ = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(
+                with_usage(
+                    stream_chunks("Hi 中。\n\nYo 中。\n\nHey 中。\n\nCafé.\n\nPlain."),
+                    USAGE,
+                )
+            ),
+            FakeStreamResponse(with_usage(stream_chunks("Hi there."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Yo there."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hey there."), USAGE)),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        ctx,
+        (chunk_pass(ascii_output=True),),
+        "一。\n\n二。\n\n三。\n\n四。\n\n五。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == (
+        "Hi there.\n\nYo there.\n\nHey there.\n\nCafe.\n\nPlain.\n"
+    )
+    assert len(http.requests) == 4
+
+
+def test_refine_pass_echoing_source_language_is_repaired_with_draft() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("Hello.\n\nWorld."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("你好。\n\n世界。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("你好。\n\n世界。"), USAGE)),
+            FakeStreamResponse(
+                with_usage(stream_chunks("Hello again.\n\nWorld again."), USAGE)
+            ),
+        ]
+    )
+    ctx = make_context(console, http.open)
+    stdout = io.StringIO()
+    refine = PassDefinition("refine", "R.", "chunk", {}, None, False, False, False)
+    code = run_pipeline(
+        ctx, (chunk_pass(), refine), "你好。\n\n世界。", 0.0, stdout
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello again.\n\nWorld again.\n"
+    assert len(http.requests) == 4
+    initial_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    assert "Source text:\n你好。\n\n世界。" in initial_user
+    assert "Current draft:\nHello.\n\nWorld." in initial_user
+    retry_user = json.loads(http.requests[2].data)["messages"][1]["content"]
+    assert "does not satisfy the output rules" in retry_user
+    assert "source language (cjk script)" in retry_user
+    assert "Source text:\n你好。\n\n世界。" in retry_user
+    assert "Current draft:\nHello.\n\nWorld." in retry_user
+    assert "failed validation" not in stderr.getvalue()
 
 
 def test_run_pipeline_cache_hit(tmp_path: Path) -> None:

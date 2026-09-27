@@ -53,6 +53,7 @@ from l2l.monads import (
     io_result,
     io_traverse,
     maybe_either,
+    maybe_or,
     result_bind,
     result_map,
 )
@@ -64,6 +65,7 @@ from l2l.plans import (
     plan_retranslation_calls,
     plan_unit_calls,
     resolve_work_groups,
+    script_mismatch_problem,
     unit_output_problem,
     verbose_log,
 )
@@ -485,13 +487,16 @@ def run_unit(
                 return paragraph_tolerance(pass_definition.ensure_paragraphs)
 
     def validate(output: str) -> Maybe[str]:
-        return unit_output_problem(
-            call.source_chunk, output, ctx.settings, unit_tolerance()
+        return maybe_or(
+            unit_output_problem(
+                call.source_chunk, output, ctx.settings, unit_tolerance()
+            ),
+            script_mismatch_problem(call.source_chunk, call.work_chunk, output),
         )
 
     def build_retry_user(bad_output: str, problem: str) -> str:
         return build_unit_retry_user(
-            call.source_chunk, call.context, bad_output, problem
+            call.source_chunk, call.work_chunk, call.context, bad_output, problem
         )
 
     def on_repair(failed: int, problem: str) -> IO[None]:

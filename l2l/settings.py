@@ -42,6 +42,7 @@ class Settings:
     chunk_budget_tokens: int
     analysis_reserve_tokens: int
     ascii_fix_attempts: int
+    ascii_collapse_floor: int
     sentence_boundary_characters: str
     ascii_fix_instruction: str
     ascii_character_map: Mapping[str, str]
@@ -116,6 +117,7 @@ def build_settings() -> Settings:
         chunk_budget_tokens=3500,
         analysis_reserve_tokens=128,
         ascii_fix_attempts=3,
+        ascii_collapse_floor=4,
         unit_fix_attempts=2,
         unit_output_max_ratio=6.0,
         retry_attempts=2,
