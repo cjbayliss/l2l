@@ -11,15 +11,10 @@ stop = ["END"]
 
 [[pass]]
 name = "translate"
-mode = "chunk"
-instruction_file = "zh2en.txt"
-model = "z-ai/glm-5.3-flash"
-# Per-pass overrides; omit to inherit [options] (and --ensure-paragraphs).
-# ensure_paragraphs = false
-[pass.params]
-reasoning_effort = "high"
-
-[options]
 ascii = true
-ensure_paragraphs = true
+ensure_paragraphs = 2
 retranslate_untranslated = true
+instruction_file = "zh2en.txt"
+mode = "chunk"
+[pass.params]
+reasoning.effort = "high"
