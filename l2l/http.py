@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from types import MappingProxyType
-from typing import Any, TypedDict
+from typing import Any
 
 import pycurl
 
@@ -90,33 +90,6 @@ def build_chat_payload(
         },
         **{key: value for key, value in params.items() if value is not None},
     }
-
-
-class ChatMessage(TypedDict, total=False):
-    role: str
-    content: object
-    reasoning_content: object
-    reasoning: object
-
-
-class ChatChoice(TypedDict, total=False):
-    message: ChatMessage
-    delta: ChatMessage
-
-
-class UsageReport(TypedDict, total=False):
-    prompt_tokens: int
-    completion_tokens: int
-    cost: float
-
-
-class ChatCompletion(TypedDict, total=False):
-    choices: list[ChatChoice]
-    usage: UsageReport
-
-
-class StreamChunk(ChatCompletion, total=False):
-    error: dict[str, Any]
 
 
 TRANSPORT_ERRORS = (OSError, TimeoutError)
@@ -436,12 +409,8 @@ def is_error_status_line(line: bytes) -> bool:
         return False
 
 
-def append_chunk(collected: tuple[bytes, ...], chunk: bytes) -> tuple[bytes, ...]:
-    return collected + (chunk,)
-
-
-def append_line(lines: tuple[bytes, ...], line: bytes) -> tuple[bytes, ...]:
-    return lines + (line,)
+def append_bytes(collected: tuple[bytes, ...], item: bytes) -> tuple[bytes, ...]:
+    return collected + (item,)
 
 
 def configure_curl(
@@ -478,6 +447,52 @@ def configure_curl(
 
 
 @dataclass(frozen=True)
+class ResponseTaps:
+    chunks: Ref[tuple[bytes, ...]]
+    header_lines: Ref[tuple[bytes, ...]]
+    on_header: Callable[[bytes], None]
+
+
+def response_taps() -> ResponseTaps:
+    chunks: Ref[tuple[bytes, ...]] = Ref(())
+    header_lines: Ref[tuple[bytes, ...]] = Ref(())
+    reset_body = ref_write_when(is_status_line, chunks, ())
+    reset_headers = ref_write_when(is_status_line, header_lines, ())
+    collect_header = ref_collector(append_bytes, header_lines)
+
+    def on_header(line: bytes) -> None:
+        reset_body(line)
+        reset_headers(line)
+        collect_header(line)
+
+    return ResponseTaps(chunks=chunks, header_lines=header_lines, on_header=on_header)
+
+
+def curl_transfer(curl: Any, kind: HttpKind) -> IO[Result[int, TranslationError]]:
+    def thunk() -> Result[int, TranslationError]:
+        try:
+            curl.perform()
+            return Ok(int(curl.getinfo(pycurl.RESPONSE_CODE)))
+        except pycurl.error as error:
+            return curl_failure(error, kind)
+        finally:
+            curl.close()
+
+    return IO(thunk)
+
+
+def status_failure(
+    code: int, collected: tuple[bytes, ...], headers: tuple[bytes, ...]
+) -> Err[TranslationError]:
+    return fail_http(
+        "status",
+        b"".join(collected).decode("utf-8", "replace")[:500],
+        code,
+        maybe_to_optional(retry_after_header(headers)),
+    )
+
+
+@dataclass(frozen=True)
 class CurlResponse:
     request: HttpRequest
     timeout: float
@@ -485,55 +500,32 @@ class CurlResponse:
     new_curl: Callable[[], Any] = pycurl.Curl
 
     def body(self) -> IO[Result[bytes, TranslationError]]:
-        chunks: Ref[tuple[bytes, ...]] = Ref(())
-        header_lines: Ref[tuple[bytes, ...]] = Ref(())
+        taps = response_taps()
         curl = self.new_curl()
-        reset_body = ref_write_when(is_status_line, chunks, ())
-        reset_headers = ref_write_when(is_status_line, header_lines, ())
-        collect_header = ref_collector(append_line, header_lines)
-
-        def on_header(line: bytes) -> None:
-            reset_body(line)
-            reset_headers(line)
-            collect_header(line)
-
         configure_curl(
             self.request,
             self.timeout,
             self.environment,
             curl,
-            on_chunk=ref_collector(append_chunk, chunks),
-            on_header=on_header,
+            on_chunk=ref_collector(append_bytes, taps.chunks),
+            on_header=taps.on_header,
         )
-
-        def transfer() -> Result[int, TranslationError]:
-            try:
-                curl.perform()
-                return Ok(int(curl.getinfo(pycurl.RESPONSE_CODE)))
-            except pycurl.error as error:
-                return curl_failure(error, "unreachable")
-            finally:
-                curl.close()
 
         def finish(code: int) -> IO[Result[bytes, TranslationError]]:
             def decide(
                 parts: tuple[tuple[bytes, ...], tuple[bytes, ...]],
             ) -> Result[bytes, TranslationError]:
                 collected, headers = parts
-                payload = b"".join(collected)
                 if code >= 400:
-                    return fail_http(
-                        "status",
-                        payload.decode("utf-8", "replace")[:500],
-                        code,
-                        maybe_to_optional(retry_after_header(headers)),
-                    )
+                    return status_failure(code, collected, headers)
 
-                return Ok(payload)
+                return Ok(b"".join(collected))
 
-            return io_map(io_pair(read_ref(chunks), read_ref(header_lines)), decide)
+            return io_map(
+                io_pair(read_ref(taps.chunks), read_ref(taps.header_lines)), decide
+            )
 
-        return io_result_bind(IO(transfer), finish)
+        return io_result_bind(curl_transfer(curl, "unreachable"), finish)
 
     def consume(
         self,
@@ -542,16 +534,12 @@ class CurlResponse:
     ) -> IO[Result[Any, TranslationError]]:
         state: Ref[Result[Any, TranslationError]] = Ref(initial)
         remainder: Ref[bytes] = Ref(b"")
-        chunks: Ref[tuple[bytes, ...]] = Ref(())
-        header_lines: Ref[tuple[bytes, ...]] = Ref(())
         error_active: Ref[bool] = Ref(False)
+        taps = response_taps()
         gated = ref_gate(error_active, fold_io_push(step, state))
         feed = line_push(gated, remainder)
-        collect = ref_collector(append_chunk, chunks)
-        reset_body = ref_write_when(is_status_line, chunks, ())
-        reset_headers = ref_write_when(is_status_line, header_lines, ())
+        collect = ref_collector(append_bytes, taps.chunks)
         arm = ref_write_when(is_error_status_line, error_active, True)
-        collect_header = ref_collector(append_line, header_lines)
         curl = self.new_curl()
 
         def on_chunk(chunk: bytes) -> None:
@@ -559,10 +547,8 @@ class CurlResponse:
             feed(chunk)
 
         def on_header(line: bytes) -> None:
-            reset_body(line)
-            reset_headers(line)
+            taps.on_header(line)
             arm(line)
-            collect_header(line)
 
         configure_curl(
             self.request,
@@ -572,15 +558,6 @@ class CurlResponse:
             on_chunk=on_chunk,
             on_header=on_header,
         )
-
-        def transfer() -> Result[int, TranslationError]:
-            try:
-                curl.perform()
-                return Ok(int(curl.getinfo(pycurl.RESPONSE_CODE)))
-            except pycurl.error as error:
-                return curl_failure(error, "interrupted")
-            finally:
-                curl.close()
 
         def emit_remainder(remaining: bytes) -> None:
             if remaining:
@@ -596,12 +573,7 @@ class CurlResponse:
                 outcome, rest = parts
                 collected, headers = rest
                 if code >= 400:
-                    return fail_http(
-                        "status",
-                        b"".join(collected).decode("utf-8", "replace")[:500],
-                        code,
-                        maybe_to_optional(retry_after_header(headers)),
-                    )
+                    return status_failure(code, collected, headers)
 
                 return outcome
 
@@ -609,7 +581,7 @@ class CurlResponse:
                 return io_map(
                     io_pair(
                         read_ref(state),
-                        io_pair(read_ref(chunks), read_ref(header_lines)),
+                        io_pair(read_ref(taps.chunks), read_ref(taps.header_lines)),
                     ),
                     decide,
                 )
@@ -618,7 +590,7 @@ class CurlResponse:
                 io_map(read_ref(remainder), emit_remainder), drained(None)
             )
 
-        return io_result_bind(IO(transfer), finish)
+        return io_result_bind(curl_transfer(curl, "interrupted"), finish)
 
 
 def curl_open(

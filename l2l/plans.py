@@ -253,6 +253,40 @@ class UnitCall:
     params: Mapping[str, Any]
 
 
+def build_unit_call(
+    model: str,
+    params: Mapping[str, Any],
+    salt: str,
+    separators: tuple[str, ...],
+    index: int,
+    separator_index: int,
+    total: int,
+    source_chunk: str,
+    work_chunk: str,
+    context: tuple[str, ...],
+) -> UnitCall:
+    return UnitCall(
+        index=index,
+        total=total,
+        source_chunk=source_chunk,
+        work_chunk=work_chunk,
+        context=context,
+        key=cache_key(
+            source_chunk,
+            model,
+            salt,
+            work_chunk,
+            overrides=params,
+            context="\n\n".join(context),
+        ),
+        trailing_separator=(
+            separators[separator_index] if separator_index < len(separators) else ""
+        ),
+        model=model,
+        params=params,
+    )
+
+
 def plan_unit_calls(
     ctx: Context,
     pass_definition: PassDefinition,
@@ -281,28 +315,17 @@ def plan_unit_calls(
                 return ()
 
     def call(index: int, work_group: tuple[str, ...]) -> UnitCall:
-        source_chunk = "\n\n".join(plan[index]) if index < len(plan) else ""
-        work_chunk = "\n\n".join(work_group)
-        context = neighbour_context(index)
-        return UnitCall(
-            index=index,
-            total=len(work_groups),
-            source_chunk=source_chunk,
-            work_chunk=work_chunk,
-            context=context,
-            key=cache_key(
-                source_chunk,
-                model,
-                pass_salt(pass_definition, retry_attempt),
-                work_chunk,
-                overrides=params,
-                context="\n\n".join(context),
-            ),
-            trailing_separator=(
-                trailing_separators[index] if index < len(trailing_separators) else ""
-            ),
-            model=model,
-            params=params,
+        return build_unit_call(
+            model,
+            params,
+            pass_salt(pass_definition, retry_attempt),
+            trailing_separators,
+            index,
+            index,
+            len(work_groups),
+            "\n\n".join(plan[index]) if index < len(plan) else "",
+            "\n\n".join(work_group),
+            neighbour_context(index),
         )
 
     return tuple(call(index, group) for index, group in enumerate(work_groups))
@@ -329,26 +352,17 @@ def plan_retranslation_calls(
         return context
 
     def call(position: int, index: int) -> UnitCall:
-        source_chunk = source_paragraphs[index]
-        work_chunk = work_paragraphs[index]
-        context = neighbour_context(index)
-        return UnitCall(
-            index=position,
-            total=len(flagged),
-            source_chunk=source_chunk,
-            work_chunk=work_chunk,
-            context=context,
-            key=cache_key(
-                source_chunk,
-                model,
-                pass_salt(pass_definition),
-                work_chunk,
-                overrides=params,
-                context="\n\n".join(context),
-            ),
-            trailing_separator=(separators[index] if index < len(separators) else ""),
-            model=model,
-            params=params,
+        return build_unit_call(
+            model,
+            params,
+            pass_salt(pass_definition),
+            separators,
+            position,
+            index,
+            len(flagged),
+            source_paragraphs[index],
+            work_paragraphs[index],
+            neighbour_context(index),
         )
 
     return tuple(call(position, index) for position, index in enumerate(flagged))
