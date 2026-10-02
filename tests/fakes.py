@@ -4,17 +4,22 @@ import io
 import json
 import time
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any
+
+import pycurl
 
 from l2l.console import Console, StatusLine
 from l2l.effects import RunLog, Sleep
 from l2l.errors import TranslationError
+from l2l.http import CurlResponse
 from l2l.monads import (
     IO,
     NOTHING,
     Ok,
     Ref,
     Result,
+    fold_io,
+    io_result,
     modify_ref,
     new_ref,
     read_ref,
@@ -51,28 +56,88 @@ class FakeStreamResponse:
             )
         ]
 
-    def __iter__(self) -> Any:
-        return iter(self._lines)
-
-    def __enter__(self) -> FakeStreamResponse:
-        return self
-
-    def __exit__(self, *args: object) -> Literal[False]:
-        return False
+    def consume(
+        self,
+        step: Callable[[Any, bytes], IO[Result[Any, TranslationError]]],
+        initial: Result[Any, TranslationError],
+    ) -> IO[Result[Any, TranslationError]]:
+        return fold_io(self._lines, step, initial)
 
 
 class FakePlainResponse:
     def __init__(self, body: dict[str, Any]) -> None:
         self._body = body
 
-    def read(self) -> bytes:
-        return json.dumps(self._body).encode("utf-8")
+    def body(self) -> IO[Result[bytes, TranslationError]]:
+        return io_result(Ok(json.dumps(self._body).encode("utf-8")))
 
-    def __enter__(self) -> FakePlainResponse:
-        return self
 
-    def __exit__(self, *args: object) -> Literal[False]:
-        return False
+class FakeCurl:
+    def __init__(
+        self,
+        status: int = 200,
+        headers: tuple[bytes, ...] = (),
+        chunks: tuple[bytes, ...] = (),
+        error: Exception | None = None,
+        stages: tuple[tuple[int, tuple[bytes, ...], tuple[bytes, ...]], ...] = (),
+    ) -> None:
+        self.status = status
+        self.headers = headers
+        self.chunks = chunks
+        self.error = error
+        self.stages = stages
+        self.options: dict[int, Any] = {}
+        self.performed = 0
+        self.closed = False
+
+    def setopt(self, option: int, value: Any) -> None:
+        self.options[option] = value
+
+    def perform(self) -> None:
+        self.performed += 1
+        on_header = self.options[pycurl.HEADERFUNCTION]
+        on_chunk = self.options[pycurl.WRITEFUNCTION]
+        responses = self.stages or ((self.status, self.headers, self.chunks),)
+        for stage_status, stage_headers, stage_chunks in responses:
+            for line in stage_headers:
+                on_header(line)
+
+            for chunk in stage_chunks:
+                on_chunk(chunk)
+
+            self.status = stage_status
+
+        if self.error is not None:
+            raise self.error
+
+    def getinfo(self, info: int) -> int:
+        return self.status
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeCurlHttp:
+    def __init__(self, responses: list[FakeCurl]) -> None:
+        self.responses = responses
+        self.requests: list[Any] = []
+
+    def open(self, request: Any, timeout: float) -> Result[Any, TranslationError]:
+        self.requests.append(request)
+        index = min(len(self.requests) - 1, len(self.responses) - 1)
+        curl = self.responses[index]
+        return Ok(CurlResponse(request, timeout, {}, lambda: curl))
+
+
+def sse_bytes(chunks: list[dict[str, Any]]) -> tuple[bytes, ...]:
+    return tuple(
+        line
+        for chunk in chunks
+        for line in (
+            b"data: " + json.dumps(chunk).encode("utf-8") + b"\n",
+            b"\n",
+        )
+    )
 
 
 class FakeHttp:

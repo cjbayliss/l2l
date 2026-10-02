@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-import http.client
 import json
-import urllib.error
-import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from types import MappingProxyType
 from typing import Any, TypedDict
 
+import pycurl
+
 from l2l import __version__
 from l2l.console import Console
 from l2l.effects import log_entry, log_error, log_request, run_log_write
 from l2l.errors import (
     HttpError,
+    HttpKind,
     TranslationError,
     describe,
     fail_budget,
@@ -29,24 +29,31 @@ from l2l.monads import (
     Maybe,
     Nothing,
     Ok,
+    Ref,
     Result,
     cons,
     cons_all,
     cons_to_tuple,
     fold_io,
-    fold_io_lazy,
+    fold_io_push,
     io_and_then,
     io_bind,
     io_catch_result,
     io_map,
+    io_pair,
     io_pure,
     io_result,
-    io_using,
+    io_result_bind,
+    line_push,
     maybe_either,
+    maybe_from_optional,
     maybe_map,
     maybe_or,
     maybe_to_optional,
     read_ref,
+    ref_collector,
+    ref_gate,
+    ref_write_when,
     result_bind,
     result_map,
 )
@@ -112,12 +119,52 @@ class StreamChunk(ChatCompletion, total=False):
     error: dict[str, Any]
 
 
-TRANSPORT_ERRORS = (
-    urllib.error.URLError,
-    TimeoutError,
-    OSError,
-    http.client.HTTPException,
+TRANSPORT_ERRORS = (OSError, TimeoutError)
+
+CONNECT_ERROR_CODES = frozenset(
+    {1, 3, 5, 6, 7, 35, 51, 58, 60, 61, 64, 66, 77, 83, 90, 96, 200}
 )
+
+
+@dataclass(frozen=True)
+class HttpRequest:
+    url: str
+    body: bytes
+    headers: Mapping[str, str]
+
+
+def curl_error_code(error: Any) -> int:
+    return int(error.args[0]) if error.args else 0
+
+
+def curl_error_detail(error: Any) -> str:
+    return str(error.args[1]) if len(error.args) > 1 else str(error)
+
+
+def curl_failure(error: Any, kind: HttpKind) -> Err[TranslationError]:
+    resolved = "unreachable" if curl_error_code(error) in CONNECT_ERROR_CODES else kind
+    return fail_http(resolved, curl_error_detail(error))
+
+
+def proxy_for(url: str, environment: Mapping[str, str]) -> Maybe[str]:
+    scheme = url.split(":", 1)[0].lower() if ":" in url else ""
+    candidates = (scheme + "_proxy", "all_proxy", "ALL_PROXY")
+
+    def lookup(name: str) -> Maybe[str]:
+        return maybe_from_optional(environment.get(name) or None)
+
+    initial: Maybe[str] = NOTHING
+    return reduce(maybe_or, (lookup(name) for name in candidates), initial)
+
+
+def noproxy_for(environment: Mapping[str, str]) -> Maybe[str]:
+    def lookup(name: str) -> Maybe[str]:
+        return maybe_from_optional(environment.get(name) or None)
+
+    initial: Maybe[str] = NOTHING
+    return reduce(
+        maybe_or, (lookup(name) for name in ("no_proxy", "NO_PROXY")), initial
+    )
 
 
 def extract_message(
@@ -336,51 +383,251 @@ def plain_reply(body: Any) -> Result[ChatReply, TranslationError]:
 
 def http_request(
     config: Config, payload: Mapping[str, Any], accept: str | None = None
-) -> urllib.request.Request:
-    headers = {
-        **{
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + config.api_key,
-            "User-Agent": "l2l/" + __version__,
-        },
-        **({"Accept": accept} if accept else {}),
-    }
+) -> HttpRequest:
+    headers = MappingProxyType(
+        {
+            **{
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + config.api_key,
+                "User-Agent": "l2l/" + __version__,
+            },
+            **({"Accept": accept} if accept else {}),
+        }
+    )
 
-    return urllib.request.Request(
-        config.base_url + "/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
+    return HttpRequest(
+        url=config.base_url + "/chat/completions",
+        body=json.dumps(payload).encode("utf-8"),
         headers=headers,
-        method="POST",
     )
 
 
-def http_error_detail(error: urllib.error.HTTPError) -> str:
-    try:
-        return error.read().decode("utf-8", "replace")[:500]
-    except TRANSPORT_ERRORS:
-        return str(error)
-
-
-def urllib_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
-    try:
-        return Ok(urllib.request.urlopen(request, timeout=timeout))
-    except urllib.error.HTTPError as error:
-        return fail_http(
-            "status",
-            http_error_detail(error),
-            error.code,
-            maybe_to_optional(retry_after_seconds(error.headers)),
-        )
-    except TRANSPORT_ERRORS as error:
-        return fail_http("unreachable", str(error))
-
-
-def retry_after_seconds(headers: Any) -> Maybe[float]:
-    raw = headers.get("Retry-After") if headers is not None else None
+def retry_after_seconds(raw: str | None) -> Maybe[float]:
     if raw is None:
         return NOTHING
 
     return maybe_map(parse_float(raw), lambda seconds: max(seconds, 0.0))
+
+
+def retry_after_header(lines: tuple[bytes, ...]) -> Maybe[float]:
+    def matching(line: bytes) -> bool:
+        return line.lower().startswith(b"retry-after:")
+
+    found = next((line for line in lines if matching(line)), None)
+    if found is None:
+        return NOTHING
+
+    raw = found.split(b":", 1)[1].decode("ascii", "replace").strip()
+    return retry_after_seconds(raw or None)
+
+
+def is_status_line(line: bytes) -> bool:
+    return line.startswith(b"HTTP/")
+
+
+def is_error_status_line(line: bytes) -> bool:
+    parts = line.split(None, 2)
+    if not is_status_line(line) or len(parts) < 2:
+        return False
+
+    try:
+        return int(parts[1]) >= 400
+    except ValueError:
+        return False
+
+
+def append_chunk(collected: tuple[bytes, ...], chunk: bytes) -> tuple[bytes, ...]:
+    return collected + (chunk,)
+
+
+def append_line(lines: tuple[bytes, ...], line: bytes) -> tuple[bytes, ...]:
+    return lines + (line,)
+
+
+def configure_curl(
+    request: HttpRequest,
+    timeout: float,
+    environment: Mapping[str, str],
+    curl: Any,
+    on_chunk: Callable[[bytes], None],
+    on_header: Callable[[bytes], None],
+) -> None:
+    curl.setopt(pycurl.URL, request.url)
+    curl.setopt(pycurl.POST, 1)
+    curl.setopt(pycurl.POSTFIELDS, request.body)
+    curl.setopt(
+        pycurl.HTTPHEADER,
+        [name + ": " + value for name, value in request.headers.items()],
+    )
+    curl.setopt(pycurl.CONNECTTIMEOUT_MS, int(timeout * 1000))
+    curl.setopt(pycurl.LOW_SPEED_LIMIT, 1)
+    curl.setopt(pycurl.LOW_SPEED_TIME, max(int(timeout), 1))
+    curl.setopt(pycurl.NOSIGNAL, 1)
+    curl.setopt(pycurl.FOLLOWLOCATION, 1)
+    curl.setopt(pycurl.MAXREDIRS, 10)
+    curl.setopt(pycurl.WRITEFUNCTION, on_chunk)
+    curl.setopt(pycurl.HEADERFUNCTION, on_header)
+
+    proxy = proxy_for(request.url, environment)
+    if isinstance(proxy, Just):
+        curl.setopt(pycurl.PROXY, proxy.value)
+
+    noproxy = noproxy_for(environment)
+    if isinstance(noproxy, Just):
+        curl.setopt(pycurl.NOPROXY, noproxy.value)
+
+
+@dataclass(frozen=True)
+class CurlResponse:
+    request: HttpRequest
+    timeout: float
+    environment: Mapping[str, str]
+    new_curl: Callable[[], Any] = pycurl.Curl
+
+    def body(self) -> IO[Result[bytes, TranslationError]]:
+        chunks: Ref[tuple[bytes, ...]] = Ref(())
+        header_lines: Ref[tuple[bytes, ...]] = Ref(())
+        curl = self.new_curl()
+        reset_body = ref_write_when(is_status_line, chunks, ())
+        reset_headers = ref_write_when(is_status_line, header_lines, ())
+        collect_header = ref_collector(append_line, header_lines)
+
+        def on_header(line: bytes) -> None:
+            reset_body(line)
+            reset_headers(line)
+            collect_header(line)
+
+        configure_curl(
+            self.request,
+            self.timeout,
+            self.environment,
+            curl,
+            on_chunk=ref_collector(append_chunk, chunks),
+            on_header=on_header,
+        )
+
+        def transfer() -> Result[int, TranslationError]:
+            try:
+                curl.perform()
+                return Ok(int(curl.getinfo(pycurl.RESPONSE_CODE)))
+            except pycurl.error as error:
+                return curl_failure(error, "unreachable")
+            finally:
+                curl.close()
+
+        def finish(code: int) -> IO[Result[bytes, TranslationError]]:
+            def decide(
+                parts: tuple[tuple[bytes, ...], tuple[bytes, ...]],
+            ) -> Result[bytes, TranslationError]:
+                collected, headers = parts
+                payload = b"".join(collected)
+                if code >= 400:
+                    return fail_http(
+                        "status",
+                        payload.decode("utf-8", "replace")[:500],
+                        code,
+                        maybe_to_optional(retry_after_header(headers)),
+                    )
+
+                return Ok(payload)
+
+            return io_map(io_pair(read_ref(chunks), read_ref(header_lines)), decide)
+
+        return io_result_bind(IO(transfer), finish)
+
+    def consume(
+        self,
+        step: Callable[[Any, bytes], IO[Result[Any, TranslationError]]],
+        initial: Result[Any, TranslationError],
+    ) -> IO[Result[Any, TranslationError]]:
+        state: Ref[Result[Any, TranslationError]] = Ref(initial)
+        remainder: Ref[bytes] = Ref(b"")
+        chunks: Ref[tuple[bytes, ...]] = Ref(())
+        header_lines: Ref[tuple[bytes, ...]] = Ref(())
+        error_active: Ref[bool] = Ref(False)
+        gated = ref_gate(error_active, fold_io_push(step, state))
+        feed = line_push(gated, remainder)
+        collect = ref_collector(append_chunk, chunks)
+        reset_body = ref_write_when(is_status_line, chunks, ())
+        reset_headers = ref_write_when(is_status_line, header_lines, ())
+        arm = ref_write_when(is_error_status_line, error_active, True)
+        collect_header = ref_collector(append_line, header_lines)
+        curl = self.new_curl()
+
+        def on_chunk(chunk: bytes) -> None:
+            collect(chunk)
+            feed(chunk)
+
+        def on_header(line: bytes) -> None:
+            reset_body(line)
+            reset_headers(line)
+            arm(line)
+            collect_header(line)
+
+        configure_curl(
+            self.request,
+            self.timeout,
+            self.environment,
+            curl,
+            on_chunk=on_chunk,
+            on_header=on_header,
+        )
+
+        def transfer() -> Result[int, TranslationError]:
+            try:
+                curl.perform()
+                return Ok(int(curl.getinfo(pycurl.RESPONSE_CODE)))
+            except pycurl.error as error:
+                return curl_failure(error, "interrupted")
+            finally:
+                curl.close()
+
+        def emit_remainder(remaining: bytes) -> None:
+            if remaining:
+                gated(remaining)
+
+        def finish(code: int) -> IO[Result[Any, TranslationError]]:
+            def decide(
+                parts: tuple[
+                    Result[Any, TranslationError],
+                    tuple[tuple[bytes, ...], tuple[bytes, ...]],
+                ],
+            ) -> Result[Any, TranslationError]:
+                outcome, rest = parts
+                collected, headers = rest
+                if code >= 400:
+                    return fail_http(
+                        "status",
+                        b"".join(collected).decode("utf-8", "replace")[:500],
+                        code,
+                        maybe_to_optional(retry_after_header(headers)),
+                    )
+
+                return outcome
+
+            def drained(_: None) -> IO[Result[Any, TranslationError]]:
+                return io_map(
+                    io_pair(
+                        read_ref(state),
+                        io_pair(read_ref(chunks), read_ref(header_lines)),
+                    ),
+                    decide,
+                )
+
+            return io_and_then(
+                io_map(read_ref(remainder), emit_remainder), drained(None)
+            )
+
+        return io_result_bind(IO(transfer), finish)
+
+
+def curl_open(
+    request: Any,
+    timeout: float,
+    environment: Mapping[str, str],
+    new_curl: Callable[[], Any] = pycurl.Curl,
+) -> Result[CurlResponse, TranslationError]:
+    return Ok(CurlResponse(request, timeout, environment, new_curl))
 
 
 def verbose_retry_log(
@@ -425,32 +672,44 @@ def with_retries[T](
     return attempt_at(0)
 
 
+def parse_json_body(
+    body_result: Result[bytes, TranslationError],
+) -> Result[tuple[str, Any], TranslationError]:
+    if isinstance(body_result, Err):
+        return body_result
+
+    try:
+        text = body_result.value.decode("utf-8")
+        return Ok((text, json.loads(text)))
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        return fail_http("protocol", "invalid JSON response: %s" % error)
+
+
+def read_failure(error: Exception) -> Result[tuple[str, Any], TranslationError]:
+    if isinstance(error, TRANSPORT_ERRORS):
+        return fail_http("unreachable", "response read failed: %s" % error)
+
+    return fail_http("protocol", "%s: %s" % (type(error).__name__, error))
+
+
 def http_post_json(
     ctx: Context, payload: Mapping[str, Any]
 ) -> IO[Result[dict[str, Any], TranslationError]]:
     def opened() -> Result[Any, TranslationError]:
         return ctx.open_http(http_request(ctx.config, payload), ctx.config.timeout)
 
-    def read(
+    def transferred(
         outcome: Result[Any, TranslationError],
-    ) -> Result[tuple[str, Any], TranslationError]:
+    ) -> IO[Result[tuple[str, Any], TranslationError]]:
         if isinstance(outcome, Err):
-            return outcome
+            return io_result(outcome)
 
-        with outcome.value as response:
-            try:
-                body = response.read().decode("utf-8")
-                return Ok((body, json.loads(body)))
-            except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                return fail_http("protocol", "invalid JSON response: %s" % error)
-            except TRANSPORT_ERRORS as error:
-                return fail_http("unreachable", "response read failed: %s" % error)
+        return io_catch_result(
+            io_map(outcome.value.body(), parse_json_body), read_failure
+        )
 
     def attempt() -> IO[Result[tuple[str, Any], TranslationError]]:
-        def thunk() -> Result[tuple[str, Any], TranslationError]:
-            return read(opened())
-
-        return IO(thunk)
+        return io_bind(IO(opened), transferred)
 
     def record(
         outcome: Result[tuple[str, Any], TranslationError],
@@ -470,9 +729,11 @@ def http_post_json(
     )
 
 
-def http_open_stream(
-    ctx: Context, payload: Mapping[str, Any]
-) -> IO[Result[Any, TranslationError]]:
+def http_stream(
+    ctx: Context,
+    payload: Mapping[str, Any],
+    drive: Callable[[Any], IO[Result[StreamState, TranslationError]]],
+) -> IO[Result[StreamState, TranslationError]]:
     def open_stream(
         body: Mapping[str, Any], label: str
     ) -> IO[Result[Any, TranslationError]]:
@@ -497,32 +758,36 @@ def http_open_stream(
             lambda _: opened,
         )
 
-    def decide(
+    def respond(
         opened: Result[Any, TranslationError],
-    ) -> IO[Result[Any, TranslationError]]:
-        if (
-            isinstance(opened, Ok)
-            or "stream_options" not in payload
-            or not (
-                isinstance(opened.error, HttpError)
-                and "stream_options" in opened.error.detail
-            )
-        ):
+    ) -> IO[Result[StreamState, TranslationError]]:
+        if isinstance(opened, Err):
             return io_result(opened)
 
-        return io_bind(
-            open_stream(
-                {
-                    key: value
-                    for key, value in payload.items()
-                    if key != "stream_options"
-                },
-                "REQUEST (stream, retry)",
-            ),
-            logged,
+        return drive(opened.value)
+
+    def attempt(
+        body: Mapping[str, Any], label: str
+    ) -> IO[Result[StreamState, TranslationError]]:
+        return io_bind(io_bind(open_stream(body, label), logged), respond)
+
+    def decide(
+        outcome: Result[StreamState, TranslationError],
+    ) -> IO[Result[StreamState, TranslationError]]:
+        if (
+            not isinstance(outcome, Err)
+            or "stream_options" not in payload
+            or not (isinstance(outcome.error, HttpError))
+            or "stream_options" not in outcome.error.detail
+        ):
+            return io_result(outcome)
+
+        return attempt(
+            {key: value for key, value in payload.items() if key != "stream_options"},
+            "REQUEST (stream, retry)",
         )
 
-    return io_bind(io_bind(open_stream(payload, "REQUEST (stream)"), logged), decide)
+    return io_bind(attempt(payload, "REQUEST (stream)"), decide)
 
 
 def drive_stream(
@@ -570,7 +835,7 @@ def drive_stream(
 
         return io_result(ingest_raw_line(outcome.value, b""))
 
-    return io_bind(fold_io_lazy(response, advance, Ok(StreamState())), flush)
+    return io_bind(response.consume(advance, Ok(StreamState())), flush)
 
 
 def collect_stream(
@@ -612,24 +877,16 @@ def collect_stream(
 
         return fail_http("protocol", "%s: %s" % (type(error).__name__, error))
 
-    def respond(
-        opened: Result[Any, TranslationError],
-    ) -> IO[Result[StreamState, TranslationError]]:
-        if isinstance(opened, Err):
-            return io_result(opened)
-
+    def drive(response: Any) -> IO[Result[StreamState, TranslationError]]:
         return io_catch_result(
-            io_using(
-                opened.value,
-                lambda response: io_bind(
-                    drive_stream(response, note_progress, on_raw_line, on_reasoning),
-                    conclude,
-                ),
+            io_bind(
+                drive_stream(response, note_progress, on_raw_line, on_reasoning),
+                conclude,
             ),
             handle,
         )
 
-    return io_bind(http_open_stream(ctx, payload), respond)
+    return http_stream(ctx, payload, drive)
 
 
 def log_all(

@@ -4,18 +4,6 @@ import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from functools import reduce
-from typing import Protocol
-
-
-class Managed[T](Protocol):
-    def __enter__(self) -> T: ...
-
-    def __exit__(
-        self,
-        exc_type: object,
-        exc_value: object,
-        traceback: object,
-    ) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -279,14 +267,6 @@ def io_atomic[T](lock: threading.Lock, action: IO[T]) -> IO[T]:
     return IO(thunk)
 
 
-def io_using[R, T](resource: Managed[R], body: Callable[[R], IO[T]]) -> IO[T]:
-    def thunk() -> T:
-        with resource as entered:
-            return body(entered).run()
-
-    return IO(thunk)
-
-
 def repeat_until(
     action: IO[None], until: threading.Event, interval: float
 ) -> Callable[[], None]:
@@ -350,25 +330,57 @@ def fold_io[S, A, E](
     return IO(thunk)
 
 
-def fold_io_lazy[S, A, E](
-    items: Iterable[S],
-    step: Callable[[A, S], IO[Result[A, E]]],
-    initial: Result[A, E],
-) -> IO[Result[A, E]]:
-    def thunk() -> Result[A, E]:
-        outcome = initial
-        iterator = iter(items)
-        while isinstance(outcome, Ok):
-            try:
-                item = next(iterator)
-            except StopIteration:
-                return outcome
+def fold_io_push[A, B, E](
+    advance: Callable[[A, B], IO[Result[A, E]]],
+    state: Ref[Result[A, E]],
+) -> Callable[[B], None]:
+    def sink(item: B) -> None:
+        outcome = read_ref(state).run()
+        if isinstance(outcome, Ok):
+            write_ref(state, advance(outcome.value, item).run()).run()
 
-            outcome = step(outcome.value, item).run()
+    return sink
 
-        return outcome
 
-    return IO(thunk)
+def ref_collector[A, B](
+    append: Callable[[A, B], A],
+    target: Ref[A],
+) -> Callable[[B], None]:
+    def sink(item: B) -> None:
+        write_ref(target, append(read_ref(target).run(), item)).run()
+
+    return sink
+
+
+def ref_write_when[E, B](
+    predicate: Callable[[E], bool], target: Ref[B], value: B
+) -> Callable[[E], None]:
+    def consume(item: E) -> None:
+        if predicate(item):
+            write_ref(target, value).run()
+
+    return consume
+
+
+def ref_gate[B](flag: Ref[bool], sink: Callable[[B], None]) -> Callable[[B], None]:
+    def consume(item: B) -> None:
+        if not read_ref(flag).run():
+            sink(item)
+
+    return consume
+
+
+def line_push(
+    sink: Callable[[bytes], None], remainder: Ref[bytes]
+) -> Callable[[bytes], None]:
+    def callback(chunk: bytes) -> None:
+        buffer = read_ref(remainder).run() + chunk
+        *lines, rest = buffer.split(b"\n")
+        write_ref(remainder, rest).run()
+        for line in lines:
+            sink(line + b"\n")
+
+    return callback
 
 
 def io_traverse[S, T, E](

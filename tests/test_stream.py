@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from typing import Any
 
 from fakes import (
     FakeHttp,
@@ -9,7 +9,7 @@ from fakes import (
     with_usage,
 )
 
-from l2l.errors import describe
+from l2l.errors import TranslationError, describe
 from l2l.http import (
     ProgressUpdate,
     StreamState,
@@ -23,7 +23,17 @@ from l2l.http import (
     stream_step,
     to_chat_reply,
 )
-from l2l.monads import IO, NOTHING, Err, Just, Ok, cons_to_tuple, io_pure
+from l2l.monads import (
+    IO,
+    NOTHING,
+    Err,
+    Just,
+    Ok,
+    Result,
+    cons_to_tuple,
+    fold_io,
+    io_pure,
+)
 from l2l.text import (
     THINK_CLOSE,
     THINK_OPEN,
@@ -370,20 +380,29 @@ def test_to_chat_reply_without_reasoning_reports_none() -> None:
     assert reply.reasoning_shown
 
 
-def test_drive_stream_stops_on_error_without_reading_next() -> None:
-    pulled: list[bytes] = []
+def test_drive_stream_stops_on_error_without_stepping_further() -> None:
+    delivered: list[bytes] = []
+    lines = [
+        b'data: {"error": {"message": "boom"}}\n',
+        b"\n",
+        b"data: next\n",
+    ]
 
-    def lines() -> Iterator[bytes]:
-        chunk = b'data: {"error": {"message": "boom"}}\n'
-        pulled.append(chunk)
-        yield chunk
-        blank = b"\n"
-        pulled.append(blank)
-        yield blank
-        pulled.append(b"data: next\n")
-        yield b"data: next\n"
+    class CountingStreamResponse:
+        def consume(
+            self,
+            step: Any,
+            initial: Result[Any, TranslationError],
+        ) -> IO[Result[Any, TranslationError]]:
+            def advance(state: Any, line: bytes) -> Any:
+                delivered.append(line)
+                return step(state, line)
 
-    result = drive_stream(lines(), lambda label, count: io_pure(None)).run()
+            return fold_io(lines, advance, initial)
+
+    result = drive_stream(
+        CountingStreamResponse(), lambda label, count: io_pure(None)
+    ).run()
     assert isinstance(result, Err)
     assert "boom" in describe(result.error)
-    assert len(pulled) == 2
+    assert delivered == lines[:2]

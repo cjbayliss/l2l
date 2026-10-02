@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Literal, Protocol
@@ -8,7 +8,7 @@ from typing import Any, Literal, Protocol
 from l2l.console import Console
 from l2l.effects import Clock, RunLog, Sleep
 from l2l.errors import TranslationError
-from l2l.monads import Result
+from l2l.monads import IO, Result
 from l2l.text import CACHE_SALT_VERSION
 
 
@@ -81,18 +81,13 @@ class Setup:
 
 
 class HttpResponse(Protocol):
-    def read(self, amount: int = -1) -> bytes: ...
+    def body(self) -> IO[Result[bytes, TranslationError]]: ...
 
-    def __iter__(self) -> Iterator[bytes]: ...
-
-    def __enter__(self) -> HttpResponse: ...
-
-    def __exit__(
+    def consume(
         self,
-        exc_type: object,
-        exc_value: object,
-        traceback: object,
-    ) -> object: ...
+        step: Callable[[Any, bytes], IO[Result[Any, TranslationError]]],
+        initial: Result[Any, TranslationError],
+    ) -> IO[Result[Any, TranslationError]]: ...
 
 
 OpenHTTP = Callable[[Any, float], Result[HttpResponse, TranslationError]]

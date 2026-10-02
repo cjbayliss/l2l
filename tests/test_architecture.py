@@ -61,6 +61,7 @@ EFFECT_MODULES = frozenset(
         "tomllib",
         "tty",
         "urllib",
+        "pycurl",
     }
 )
 
@@ -69,7 +70,7 @@ EFFECT_IMPORT_ALLOWLIST: dict[str, frozenset[str]] = {
     "config": frozenset({"os"}),
     "console": frozenset({"os", "shutil", "sys", "threading", "time"}),
     "effects": frozenset({"os", "time", "tomllib"}),
-    "http": frozenset({"http", "urllib"}),
+    "http": frozenset({"pycurl"}),
     "keys": frozenset({"os", "select", "sys", "termios", "threading", "tty"}),
     "monads": frozenset({"threading"}),
     "text": frozenset({"os"}),

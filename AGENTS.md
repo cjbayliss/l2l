@@ -58,10 +58,11 @@ code that passes them the first time.
    testable without patching.
 
 8. **House style.** Python 3.14 only (PEP 695 generics, PEP 758
-   unparenthesized excepts are fine); standard-library only; printf
-   `%`-style formatting; no comments and no docstrings anywhere in
-   `l2l/` or `tests/` — names must speak for themselves (enforced by
-   `tests/test_architecture.py`).
+   unparenthesized excepts are fine); standard-library only except the
+   HTTP transport edge, which uses `pycurl` (confined to
+   `l2l/http.py`); printf `%`-style formatting; no comments and no
+   docstrings anywhere in `l2l/` or `tests/` — names must speak for
+   themselves (enforced by `tests/test_architecture.py`).
 
 ## Testing
 
