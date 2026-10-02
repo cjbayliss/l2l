@@ -1,62 +1,92 @@
-import http.client
-import io
 import json
-import urllib.error
-from collections.abc import Iterator
-from email.message import Message
-from typing import Any, Literal
+from typing import Any
 
+import pycurl
 from fakes import (
+    FakeCurl,
+    FakeCurlHttp,
     FakeHttp,
     FakePlainResponse,
     FakeStreamResponse,
     make_console,
     make_context,
     make_sleep_recorder,
+    sse_bytes,
     stream_chunks,
     with_usage,
 )
 
 from l2l.console import toggle_verbose
 from l2l.errors import HttpError, TranslationError, describe, fail_http
-from l2l.http import chat, http_post_json, log_all, retry_after_seconds, urllib_open
-from l2l.monads import NOTHING, Err, Just, Ok, Result, cons_to_tuple, write_ref
+from l2l.http import (
+    CurlResponse,
+    chat,
+    curl_error_code,
+    curl_error_detail,
+    curl_open,
+    drive_stream,
+    http_post_json,
+    http_request,
+    http_stream,
+    log_all,
+    noproxy_for,
+    proxy_for,
+    retry_after_seconds,
+)
+from l2l.monads import (
+    IO,
+    NOTHING,
+    Err,
+    Just,
+    Ok,
+    Result,
+    cons_to_tuple,
+    fold_io,
+    io_and_then,
+    io_map,
+    io_pure,
+    io_result,
+    write_ref,
+)
 from l2l.text import Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
 
-def _retry_after_headers(value: str) -> Message:
-    headers = Message()
-    headers["Retry-After"] = value
-    return headers
+def test_curl_open_returns_a_configured_response() -> None:
+    console, _ = make_console()
+    ctx = make_context(console, FakeCurlHttp([]).open)
+    request = http_request(ctx.config, {"model": "m"})
+    opened = curl_open(request, 10.0, {})
+    assert isinstance(opened, Ok)
+    assert opened.value.request == request
+    assert opened.value.timeout == 10.0
 
 
-def test_urllib_open_reports_unreachable(monkeypatch: Any) -> None:
-    def raise_url_error(request: Any, timeout: float) -> Any:
-        raise urllib.error.URLError("connection refused")
-
-    monkeypatch.setattr(urllib.request, "urlopen", raise_url_error)
-    result = urllib_open("request", 1.0)
+def test_curl_open_reports_an_unreachable_endpoint() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(error=pycurl.error(7, "Failed to connect to endpoint"))
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open)
+    result = http_post_json(ctx, {"model": "m"}).run()
     assert isinstance(result, Err)
-    assert isinstance(result.error, HttpError)
-    assert result.error.kind == "unreachable"
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "unreachable"
+    assert "Failed to connect" in describe(failure)
+    assert curl.closed
 
 
-def test_urllib_open_parses_status_and_retry_after(monkeypatch: Any) -> None:
-    error = urllib.error.HTTPError(
-        "http://endpoint",
-        429,
-        "Too Many Requests",
-        _retry_after_headers("7"),
-        io.BytesIO(b"slow down"),
+def test_curl_open_parses_status_and_retry_after() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(
+        status=429,
+        headers=(b"HTTP/1.1 429 Too Many Requests\r\n", b"Retry-After: 7\r\n"),
+        chunks=(b"slow down",),
     )
-
-    def raise_http_error(request: Any, timeout: float) -> Any:
-        raise error
-
-    monkeypatch.setattr(urllib.request, "urlopen", raise_http_error)
-    result = urllib_open("request", 1.0)
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open)
+    result = http_post_json(ctx, {"model": "m"}).run()
     assert isinstance(result, Err)
     failure = result.error
     assert isinstance(failure, HttpError)
@@ -64,51 +94,131 @@ def test_urllib_open_parses_status_and_retry_after(monkeypatch: Any) -> None:
     assert failure.status == 429
     assert failure.detail == "slow down"
     assert failure.retry_after == 7.0
+    assert curl.closed
 
 
-def test_urllib_open_survives_a_failing_error_body(monkeypatch: Any) -> None:
-    class ClosedBody(io.BytesIO):
-        def read(self, size: int | None = -1) -> bytes:
-            raise OSError("socket closed")
-
-    error = urllib.error.HTTPError(
-        "http://endpoint",
-        500,
-        "Internal Server Error",
-        Message(),
-        ClosedBody(),
-    )
-
-    def raise_http_error(request: Any, timeout: float) -> Any:
-        raise error
-
-    monkeypatch.setattr(urllib.request, "urlopen", raise_http_error)
-    result = urllib_open("request", 1.0)
+def test_curl_open_ignores_a_garbage_retry_after() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(status=500, headers=(b"Retry-After: bogus\r\n",), chunks=(b"boom",))
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open)
+    result = http_post_json(ctx, {"model": "m"}).run()
     assert isinstance(result, Err)
     failure = result.error
     assert isinstance(failure, HttpError)
     assert failure.kind == "status"
-    assert "Internal Server Error" in failure.detail
+    assert failure.detail == "boom"
+    assert failure.retry_after is None
 
 
-def test_urllib_open_reports_bare_http_exceptions(monkeypatch: Any) -> None:
-    def raise_http_exception(request: Any, timeout: float) -> Any:
-        raise http.client.IncompleteRead(b"partial")
-
-    monkeypatch.setattr(urllib.request, "urlopen", raise_http_exception)
-    result = urllib_open("request", 1.0)
+def test_curl_open_survives_a_single_argument_error() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(error=pycurl.error(28))
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open)
+    result = http_post_json(ctx, {"model": "m"}).run()
     assert isinstance(result, Err)
     failure = result.error
     assert isinstance(failure, HttpError)
     assert failure.kind == "unreachable"
 
 
+def test_curl_open_reports_a_status_error_without_retry_after() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(status=400, headers=(), chunks=(b"nope",))
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open)
+    result = http_post_json(ctx, {"model": "m"}).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "status"
+    assert failure.status == 400
+    assert failure.detail == "nope"
+    assert failure.retry_after is None
+
+
+def test_curl_error_helpers_tolerate_an_empty_error() -> None:
+    empty = pycurl.error()
+    assert curl_error_code(empty) == 0
+    assert curl_error_detail(empty) == str(empty)
+
+
+def test_curl_open_delivers_a_successful_body() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(status=200, chunks=(b'{"ok": true}',))
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open)
+    result = http_post_json(ctx, {"model": "m"}).run()
+    assert isinstance(result, Ok)
+    assert result.value == {"ok": True}
+
+
+def test_http_request_builds_url_body_and_headers() -> None:
+    console, _ = make_console()
+    ctx = make_context(console, FakeCurlHttp([]).open)
+    request = http_request(ctx.config, {"model": "m"}, accept="text/event-stream")
+    assert request.url == "http://endpoint.test/v1/chat/completions"
+    assert json.loads(request.body) == {"model": "m"}
+    assert request.headers["Authorization"] == "Bearer key"
+    assert request.headers["Content-Type"] == "application/json"
+    assert request.headers["Accept"] == "text/event-stream"
+
+
+def test_curl_response_sets_expected_options() -> None:
+    console, _ = make_console()
+    curl = FakeCurl()
+    ctx = make_context(console, FakeCurlHttp([]).open)
+    request = http_request(ctx.config, {"model": "m"})
+    response = CurlResponse(request, 10.0, {}, lambda: curl)
+    assert isinstance(response.body().run(), Ok)
+    assert curl.options[pycurl.URL] == "http://endpoint.test/v1/chat/completions"
+    assert curl.options[pycurl.POST] == 1
+    assert curl.options[pycurl.POSTFIELDS] == request.body
+    assert curl.options[pycurl.CONNECTTIMEOUT_MS] == 10000
+    assert curl.options[pycurl.LOW_SPEED_LIMIT] == 1
+    assert curl.options[pycurl.LOW_SPEED_TIME] == 10
+    assert curl.options[pycurl.NOSIGNAL] == 1
+    assert curl.options[pycurl.FOLLOWLOCATION] == 1
+    assert curl.options[pycurl.MAXREDIRS] == 10
+    headers = curl.options[pycurl.HTTPHEADER]
+    assert "Authorization: Bearer key" in headers
+    assert "Content-Type: application/json" in headers
+    assert any(header.startswith("User-Agent: l2l/") for header in headers)
+    assert curl.closed
+
+
+def test_curl_response_configures_proxy_from_environment() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(status=200, chunks=(b"{}",))
+    ctx = make_context(console, FakeCurlHttp([]).open)
+    request = http_request(ctx.config, {"model": "m"})
+    environment = {"http_proxy": "http://proxy:1", "no_proxy": "localhost"}
+    response = CurlResponse(request, 10.0, environment, lambda: curl)
+    assert isinstance(response.body().run(), Ok)
+    assert curl.options[pycurl.PROXY] == "http://proxy:1"
+    assert curl.options[pycurl.NOPROXY] == "localhost"
+
+
+def test_proxy_for_prefers_scheme_specific_variables() -> None:
+    environment = {
+        "http_proxy": "http://a:1",
+        "https_proxy": "http://b:2",
+        "ALL_PROXY": "http://c:3",
+    }
+    assert proxy_for("https://endpoint.test/v1", environment) == Just("http://b:2")
+    assert proxy_for("http://endpoint.test/v1", environment) == Just("http://a:1")
+    assert proxy_for("https://endpoint.test/v1", {}) is NOTHING
+    assert noproxy_for({"NO_PROXY": "x"}) == Just("x")
+    assert noproxy_for({}) is NOTHING
+
+
 def test_retry_after_seconds_handles_garbage() -> None:
-    assert retry_after_seconds(_retry_after_headers("bogus")) is NOTHING
-    assert retry_after_seconds(Message()) is NOTHING
     assert retry_after_seconds(None) is NOTHING
-    assert retry_after_seconds(_retry_after_headers("-3")) == Just(0.0)
-    assert retry_after_seconds(_retry_after_headers("7")) == Just(7.0)
+    assert retry_after_seconds("") is NOTHING
+    assert retry_after_seconds("bogus") is NOTHING
+    assert retry_after_seconds("-3") == Just(0.0)
+    assert retry_after_seconds("7") == Just(7.0)
 
 
 def test_chat_retries_transient_failures_then_succeeds() -> None:
@@ -192,7 +302,7 @@ def test_chat_context_stream_false_forces_plain() -> None:
     result = chat(ctx, "s", "u", "m", {}, Usage()).run()
     assert isinstance(result, Ok)
     assert result.value.text == "Plain"
-    assert json.loads(http.requests[0].data)["stream"] is False
+    assert json.loads(http.requests[0].body)["stream"] is False
 
 
 def test_chat_context_stream_true_overrides_params() -> None:
@@ -202,7 +312,7 @@ def test_chat_context_stream_true_overrides_params() -> None:
     ctx = make_context(console, http.open, stream=True)
     result = chat(ctx, "s", "u", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Ok)
-    assert json.loads(http.requests[0].data)["stream"] is True
+    assert json.loads(http.requests[0].body)["stream"] is True
 
 
 def test_chat_without_override_keeps_params_stream_false() -> None:
@@ -215,18 +325,15 @@ def test_chat_without_override_keeps_params_stream_false() -> None:
     ctx = make_context(console, http.open)
     result = chat(ctx, "s", "u", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Ok)
-    assert json.loads(http.requests[0].data)["stream"] is False
+    assert json.loads(http.requests[0].body)["stream"] is False
 
 
 class DyingPlainResponse:
-    def read(self) -> bytes:
-        raise OSError("connection reset mid-body")
+    def body(self) -> IO[Result[bytes, TranslationError]]:
+        def die() -> Result[bytes, TranslationError]:
+            raise OSError("connection reset mid-body")
 
-    def __enter__(self) -> DyingPlainResponse:
-        return self
-
-    def __exit__(self, *args: object) -> Literal[False]:
-        return False
+        return IO(die)
 
 
 def test_chat_reports_a_plain_response_that_dies_mid_body() -> None:
@@ -248,16 +355,15 @@ class DyingStreamResponse:
             b"\n",
         ]
 
-    def __iter__(self) -> Iterator[bytes]:
-        yield self._lines[0]
-        yield self._lines[1]
-        raise OSError("connection reset mid-stream")
+    def consume(
+        self,
+        step: Any,
+        initial: Result[Any, TranslationError],
+    ) -> IO[Result[Any, TranslationError]]:
+        def die() -> Result[Any, TranslationError]:
+            raise OSError("connection reset mid-stream")
 
-    def __enter__(self) -> DyingStreamResponse:
-        return self
-
-    def __exit__(self, *args: object) -> Literal[False]:
-        return False
+        return io_and_then(fold_io(self._lines, step, initial), IO(die))
 
 
 def test_chat_reports_an_interrupted_stream() -> None:
@@ -276,29 +382,30 @@ class TogglingStreamResponse:
     def __init__(
         self, chunks: list[dict[str, Any]], console: Any, toggle_after_chunks: int
     ) -> None:
-        self._lines = [
-            line
-            for chunk in chunks
-            for line in (
-                b"data: " + json.dumps(chunk).encode("utf-8") + b"\n",
-                b"\n",
-            )
-        ]
+        self._lines = list(sse_bytes(chunks))
         self._console = console
         self._toggle_after = toggle_after_chunks * 2
 
-    def __iter__(self) -> Iterator[bytes]:
-        for index, line in enumerate(self._lines):
-            if index == self._toggle_after:
-                toggle_verbose(self._console).run()
+    def consume(
+        self,
+        step: Any,
+        initial: Result[Any, TranslationError],
+    ) -> IO[Result[Any, TranslationError]]:
+        def toggling(state: Any, indexed: tuple[int, bytes]) -> Any:
+            index, line = indexed
+            return io_and_then(
+                io_map(
+                    (
+                        toggle_verbose(self._console)
+                        if index == self._toggle_after
+                        else io_pure(False)
+                    ),
+                    lambda _: None,
+                ),
+                step(state, line),
+            )
 
-            yield line
-
-    def __enter__(self) -> TogglingStreamResponse:
-        return self
-
-    def __exit__(self, *args: object) -> Literal[False]:
-        return False
+        return fold_io(tuple(enumerate(self._lines)), toggling, initial)
 
 
 def test_chat_shows_streamed_reasoning_once_across_a_mid_stream_toggle() -> None:
@@ -325,23 +432,14 @@ def test_chat_shows_streamed_reasoning_once_across_a_mid_stream_toggle() -> None
 
 class UnterminatedStreamResponse:
     def __init__(self, chunks: list[dict[str, Any]]) -> None:
-        self._lines = [
-            line
-            for chunk in chunks
-            for line in (
-                b"data: " + json.dumps(chunk).encode("utf-8") + b"\n",
-                b"\n",
-            )
-        ][:-1]
+        self._lines = sse_bytes(chunks)[:-1]
 
-    def __iter__(self) -> Iterator[bytes]:
-        return iter(self._lines)
-
-    def __enter__(self) -> UnterminatedStreamResponse:
-        return self
-
-    def __exit__(self, *args: object) -> Literal[False]:
-        return False
+    def consume(
+        self,
+        step: Any,
+        initial: Result[Any, TranslationError],
+    ) -> IO[Result[Any, TranslationError]]:
+        return fold_io(self._lines, step, initial)
 
 
 def test_chat_flushes_an_unterminated_final_frame() -> None:
@@ -356,14 +454,8 @@ def test_chat_flushes_an_unterminated_final_frame() -> None:
 
 
 class GarbagePlainResponse:
-    def read(self) -> bytes:
-        return b"{not json at all"
-
-    def __enter__(self) -> GarbagePlainResponse:
-        return self
-
-    def __exit__(self, *args: object) -> Literal[False]:
-        return False
+    def body(self) -> IO[Result[bytes, TranslationError]]:
+        return io_result(Ok(b"{not json at all"))
 
 
 def test_chat_reports_invalid_json_body_as_protocol_error() -> None:
@@ -373,6 +465,26 @@ def test_chat_reports_invalid_json_body_as_protocol_error() -> None:
     result = chat(ctx, "s", "u", "m", {}, Usage()).run()
     assert isinstance(result, Err)
     assert "invalid JSON response" in describe(result.error)
+
+
+class ExplodingPlainResponse:
+    def body(self) -> IO[Result[bytes, TranslationError]]:
+        def explode() -> Result[bytes, TranslationError]:
+            raise ValueError("bad body")
+
+        return IO(explode)
+
+
+def test_chat_reports_a_plain_read_failure_as_protocol_error() -> None:
+    console, _ = make_console()
+    http = FakeHttp([ExplodingPlainResponse()])
+    ctx = make_context(console, http.open, stream=False)
+    result = chat(ctx, "s", "u", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "protocol"
+    assert "ValueError" in describe(failure)
 
 
 def test_http_post_json_reports_an_unreachable_endpoint() -> None:
@@ -396,7 +508,7 @@ def test_chat_reopens_a_stream_without_stream_options() -> None:
 
     def picky_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
         requests.append(request)
-        if "stream_options" in json.loads(request.data):
+        if "stream_options" in json.loads(request.body):
             return fail_http("status", "stream_options is unsupported", 400)
 
         return Ok(FakeStreamResponse(chunks))
@@ -406,7 +518,48 @@ def test_chat_reopens_a_stream_without_stream_options() -> None:
     assert isinstance(result, Ok)
     assert result.value.text == "Hi"
     assert len(requests) == 2
-    assert "stream_options" not in json.loads(requests[1].data)
+    assert "stream_options" not in json.loads(requests[1].body)
+
+
+def test_chat_reopens_a_curl_stream_without_stream_options() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(
+        status=400,
+        headers=(b"Content-Type: application/json\r\n",),
+        chunks=(b'{"error": {"message": "stream_options is unsupported"}}',),
+    )
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
+    assert "stream_options" in describe(result.error)
+    assert len(http.requests) == 2
+    assert curl.performed == 2
+
+
+def test_http_stream_retries_only_when_the_request_sends_stream_options() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(
+        status=400,
+        headers=(b"HTTP/1.1 400 Bad Request\r\n",),
+        chunks=(b"stream_options is unsupported",),
+    )
+    guarded = FakeCurlHttp([curl])
+    ctx = make_context(console, guarded.open)
+
+    def plain_drive(response: Any) -> Any:
+        return drive_stream(response, lambda label, count: io_pure(None))
+
+    outcome = http_stream(ctx, {"model": "m"}, plain_drive).run()
+    assert isinstance(outcome, Err)
+    assert len(guarded.requests) == 1
+
+    retrying = FakeCurlHttp([curl])
+    ctx = make_context(console, retrying.open)
+    outcome = http_stream(ctx, {"model": "m", "stream_options": {}}, plain_drive).run()
+    assert isinstance(outcome, Err)
+    assert len(retrying.requests) == 2
+    assert b"stream_options" not in retrying.requests[1].body
 
 
 def test_chat_reports_endpoint_error_events_from_a_stream() -> None:
@@ -419,17 +572,15 @@ def test_chat_reports_endpoint_error_events_from_a_stream() -> None:
 
 
 class ExplodingStreamResponse:
-    def __iter__(self) -> ExplodingStreamResponse:
-        return self
+    def consume(
+        self,
+        step: Any,
+        initial: Result[Any, TranslationError],
+    ) -> IO[Result[Any, TranslationError]]:
+        def explode() -> Result[Any, TranslationError]:
+            raise ValueError("bad frame")
 
-    def __next__(self) -> bytes:
-        raise ValueError("bad frame")
-
-    def __enter__(self) -> ExplodingStreamResponse:
-        return self
-
-    def __exit__(self, *args: object) -> Literal[False]:
-        return False
+        return IO(explode)
 
 
 def test_chat_reports_malformed_stream_frames_as_protocol_errors() -> None:
@@ -442,6 +593,92 @@ def test_chat_reports_malformed_stream_frames_as_protocol_errors() -> None:
     assert isinstance(failure, HttpError)
     assert failure.kind == "protocol"
     assert "ValueError" in describe(failure)
+
+
+def test_chat_flushes_a_partial_final_line_from_a_stream() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(chunks=(b'data: {"choices": [{"delta": {"content": "Hi"}}]}',))
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == "Hi"
+
+
+def test_chat_retries_a_stream_that_fails_to_connect() -> None:
+    sleep, sleeps = make_sleep_recorder()
+    console, _ = make_console()
+    curl = FakeCurl(error=pycurl.error(7, "Failed to connect"))
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open, sleep=sleep)
+    result = chat(ctx, "s", "u", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "unreachable"
+    assert sleeps() == (1.0, 2.0)
+
+
+def test_chat_reports_a_dropped_stream_without_retrying() -> None:
+    sleep, sleeps = make_sleep_recorder()
+    console, _ = make_console()
+    curl = FakeCurl(
+        chunks=sse_bytes(stream_chunks("Hi")),
+        error=pycurl.error(56, "Recv failure: connection reset"),
+    )
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open, sleep=sleep)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "interrupted"
+    assert sleeps() == ()
+
+
+def test_chat_does_not_feed_error_bodies_to_the_stream_pipeline() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(
+        status=400,
+        headers=(b"HTTP/1.1 400 Bad Request\r\n",),
+        chunks=(b'data: {"error": {"message": "poison"}}\n\n',),
+    )
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open)
+    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "status"
+    assert "poison" in failure.detail
+
+
+def test_curl_response_uses_the_final_response_after_redirects() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(
+        stages=(
+            (
+                301,
+                (b"HTTP/1.1 301 Moved Permanently\r\n", b"Retry-After: 9\r\n"),
+                (b"redirecting away",),
+            ),
+            (
+                429,
+                (b"HTTP/1.1 429 Too Many Requests\r\n", b"Retry-After: 3\r\n"),
+                (b"slow down",),
+            ),
+        )
+    )
+    http = FakeCurlHttp([curl])
+    ctx = make_context(console, http.open)
+    result = http_post_json(ctx, {"model": "m"}).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "status"
+    assert failure.status == 429
+    assert failure.detail == "slow down"
+    assert failure.retry_after == 3.0
 
 
 def test_log_all_writes_each_message_when_verbose() -> None:

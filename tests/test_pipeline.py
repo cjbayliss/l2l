@@ -188,7 +188,7 @@ def test_chat_plain_when_stream_disabled() -> None:
     result = chat(ctx, "s", "u", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Ok)
     assert result.value.text == "Plain"
-    payload = json.loads(http.requests[0].data)
+    payload = json.loads(http.requests[0].body)
     assert payload["stream"] is False
 
 
@@ -213,7 +213,7 @@ def test_run_pipeline_runs_analysis_before_translation() -> None:
     code = run_pipeline(ctx, (analysis, chunk_pass()), "你好。", 0.0, stdout).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n"
-    second_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    second_user = json.loads(http.requests[1].body)["messages"][1]["content"]
     assert "Names: Qin Yu." in second_user
 
 
@@ -297,7 +297,7 @@ def test_retranslation_retranslates_an_echoed_paragraph() -> None:
     logged = stderr.getvalue()
     assert "1 of 3 paragraph(s) look untranslated" in logged
     assert "(more than half)" not in logged
-    retry = json.loads(http.requests[1].data)
+    retry = json.loads(http.requests[1].body)
     assert retry["messages"][0]["content"] == "T."
     retry_user = retry["messages"][1]["content"]
     assert retry_user.startswith("Context paragraphs (reference only")
@@ -827,7 +827,7 @@ def test_paragraph_pass_after_growth_passes_units_without_source() -> None:
     assert stdout.getvalue() == "Hello.World.\n"
     assert len(http.requests) == 2
     users = [
-        json.loads(request.data)["messages"][1]["content"] for request in http.requests
+        json.loads(request.body)["messages"][1]["content"] for request in http.requests
     ]
     assert "你好。" in users[1]
 
@@ -946,10 +946,10 @@ def test_refine_pass_echoing_source_language_is_repaired_with_draft() -> None:
     assert code == 0
     assert stdout.getvalue() == "Hello again.\n\nWorld again.\n"
     assert len(http.requests) == 4
-    initial_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    initial_user = json.loads(http.requests[1].body)["messages"][1]["content"]
     assert "Source text:\n你好。\n\n世界。" in initial_user
     assert "Current draft:\nHello.\n\nWorld." in initial_user
-    retry_user = json.loads(http.requests[2].data)["messages"][1]["content"]
+    retry_user = json.loads(http.requests[2].body)["messages"][1]["content"]
     assert "does not satisfy the output rules" in retry_user
     assert "source language (cjk script)" in retry_user
     assert "Source text:\n你好。\n\n世界。" in retry_user
@@ -1090,9 +1090,9 @@ def test_unit_validation_repairs_hallucinated_paragraph(tmp_path: Path) -> None:
     assert code == 0
     assert stdout.getvalue() == "Chapter 4: Ruined.\n"
     assert len(http.requests) == 2
-    first_user = json.loads(http.requests[0].data)["messages"][1]["content"]
+    first_user = json.loads(http.requests[0].body)["messages"][1]["content"]
     assert "reference only" not in first_user
-    retry_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    retry_user = json.loads(http.requests[1].body)["messages"][1]["content"]
     assert "does not satisfy the output rules" in retry_user
     assert "Shen Yue" in retry_user
     cached = list(cache_directory.glob("*.txt"))
@@ -1142,7 +1142,7 @@ def test_unit_validation_repairs_dropped_chunk_paragraph() -> None:
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nWorld.\n"
     assert len(http.requests) == 2
-    retry_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    retry_user = json.loads(http.requests[1].body)["messages"][1]["content"]
     assert "has 1 paragraph(s) but the source has 2" in retry_user
 
 
@@ -1213,7 +1213,7 @@ def test_paragraph_mode_stays_strict_despite_tolerance() -> None:
     assert code == 0
     assert stdout.getvalue() == "One.\n"
     assert len(http.requests) == 2
-    retry_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    retry_user = json.loads(http.requests[1].body)["messages"][1]["content"]
     assert "has 2 paragraph(s) but the source has 1" in retry_user
     assert "(allowed" not in retry_user
 
@@ -1232,7 +1232,7 @@ def test_unit_validation_rejects_implausible_length() -> None:
     assert code == 0
     assert stdout.getvalue() == "Okay.\n"
     assert len(http.requests) == 2
-    retry_user = json.loads(http.requests[1].data)["messages"][1]["content"]
+    retry_user = json.loads(http.requests[1].body)["messages"][1]["content"]
     assert "tokens against a source" in retry_user
 
 
@@ -1253,7 +1253,7 @@ def test_paragraph_mode_supplies_neighbour_context() -> None:
     assert code == 0
     assert stdout.getvalue() == "One.\n\nTwo.\n\nThree.\n"
     users = [
-        json.loads(request.data)["messages"][1]["content"] for request in http.requests
+        json.loads(request.body)["messages"][1]["content"] for request in http.requests
     ]
     assert users[0].count("reference only") == 1
     assert "二。" in users[0]
@@ -1427,7 +1427,7 @@ def test_main_no_stream_flag_forces_plain_responses(tmp_path: Path) -> None:
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Plain.\n"
-    assert json.loads(http.requests[0].data)["stream"] is False
+    assert json.loads(http.requests[0].body)["stream"] is False
 
 
 def test_main_cache_prune_removes_old_entries(tmp_path: Path) -> None:

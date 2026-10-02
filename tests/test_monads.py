@@ -1,5 +1,4 @@
 import threading
-from collections.abc import Iterator
 
 from l2l.monads import (
     IO,
@@ -8,11 +7,12 @@ from l2l.monads import (
     Err,
     Just,
     Ok,
+    Ref,
     Result,
     cons,
     cons_all,
     cons_to_tuple,
-    fold_io_lazy,
+    fold_io_push,
     io_and_then,
     io_atomic,
     io_bind,
@@ -26,9 +26,12 @@ from l2l.monads import (
     io_result_map,
     io_traverse,
     io_unless,
-    io_using,
     io_when,
     io_when_unit,
+    line_push,
+    read_ref,
+    ref_gate,
+    ref_write_when,
     repeat_until,
     result_bind,
     result_either,
@@ -37,6 +40,7 @@ from l2l.monads import (
     result_map_error,
     result_or_else,
     result_zip,
+    write_ref,
 )
 
 
@@ -148,22 +152,6 @@ def test_io_atomic_holds_lock_while_running() -> None:
     assert log == ["inside"]
 
 
-def test_io_using_enters_and_exits_resource() -> None:
-    log: list[str] = []
-
-    class Resource:
-        def __enter__(self) -> str:
-            log.append("enter")
-            return "resource"
-
-        def __exit__(self, *args: object) -> None:
-            log.append("exit")
-
-    program = io_using(Resource(), lambda entered: io_pure(len(entered)))
-    assert program.run() == 8
-    assert log == ["enter", "exit"]
-
-
 def test_repeat_until_runs_until_event_set() -> None:
     until = threading.Event()
     log: list[str] = []
@@ -237,38 +225,60 @@ def test_io_result_bind_chains_io_results() -> None:
     assert io_result_bind(io_result(Err("e")), step).run() == Err("e")
 
 
-def test_fold_io_lazy_pulls_items_lazily_and_stops_on_error() -> None:
-    consumed: list[int] = []
+def test_fold_io_push_threads_state_and_stops_on_error() -> None:
+    state: Ref[Result[int, str]] = Ref(Ok(0))
 
-    def items() -> Iterator[int]:
-        for number in range(5):
-            consumed.append(number)
-            yield number
-
-    def step(total: int, number: int) -> IO[Result[int, str]]:
-        if number == 2:
-            return io_result(Err("stopped at 2"))
+    def advance(total: int, number: int) -> IO[Result[int, str]]:
+        if number == 0:
+            return io_result(Err("stopped at 0"))
 
         return io_result(Ok(total + number))
 
-    program = fold_io_lazy(items(), step, Ok(0))
-    assert program.run() == Err("stopped at 2")
-    assert consumed == [0, 1, 2]
+    sink = fold_io_push(advance, state)
+    sink(1)
+    sink(2)
+    assert read_ref(state).run() == Ok(3)
+    sink(0)
+    assert read_ref(state).run() == Err("stopped at 0")
+    sink(5)
+    assert read_ref(state).run() == Err("stopped at 0")
 
 
-def test_fold_io_lazy_consumes_everything_on_success() -> None:
-    def step(total: int, number: int) -> IO[Result[int, str]]:
-        return io_result(Ok(total + number))
+def test_line_push_splits_chunks_into_newline_terminated_lines() -> None:
+    lines: list[bytes] = []
+    remainder: Ref[bytes] = Ref(b"")
+    feed = line_push(lines.append, remainder)
 
-    program = fold_io_lazy((1, 2, 3), step, Ok(0))
-    assert program.run() == Ok(6)
+    feed(b"ab\nc")
+    feed(b"d\n\ne")
+
+    assert lines == [b"ab\n", b"cd\n", b"\n"]
+    assert read_ref(remainder).run() == b"e"
 
 
-def test_fold_io_lazy_empty_items_returns_initial() -> None:
-    program: IO[Result[int, str]] = fold_io_lazy(
-        (), lambda total, value: io_result(Ok(total)), Ok(7)
-    )
-    assert program.run() == Ok(7)
+def test_ref_write_when_sets_the_value_only_on_matching_events() -> None:
+    def over_ten(item: int) -> bool:
+        return item > 10
+
+    flag: Ref[bool] = Ref(False)
+    consume = ref_write_when(over_ten, flag, True)
+
+    consume(5)
+    assert read_ref(flag).run() is False
+    consume(11)
+    assert read_ref(flag).run() is True
+
+
+def test_ref_gate_drops_items_once_the_flag_is_set() -> None:
+    passed: list[int] = []
+    flag: Ref[bool] = Ref(False)
+    consume = ref_gate(flag, passed.append)
+
+    consume(1)
+    write_ref(flag, True).run()
+    consume(2)
+
+    assert passed == [1]
 
 
 def test_cons_prepends_and_materialises_in_order() -> None:

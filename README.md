@@ -18,8 +18,9 @@ resume cheaply.
 
 ## Install
 
-l2l is standard-library-only Python and requires **Python 3.14 or
-newer**.
+l2l requires **Python 3.14 or newer** and uses `pycurl` (libcurl) for
+its HTTP transport; on platforms without a `pycurl` wheel, installing
+the libcurl development headers first lets pip build it.
 
 ```sh
 uv tool install .

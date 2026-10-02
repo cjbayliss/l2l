@@ -27,7 +27,7 @@ from l2l.effects import (
     write_stdout,
 )
 from l2l.errors import TranslationError, describe, fail_config
-from l2l.http import urllib_open
+from l2l.http import curl_open
 from l2l.keys import start_tab_listener
 from l2l.monads import (
     IO,
@@ -187,6 +187,10 @@ def parse_arguments(
     return IO(thunk)
 
 
+def curl_open_http(environment: Mapping[str, str]) -> OpenHTTP:
+    return lambda request, timeout: curl_open(request, timeout, environment)
+
+
 def main(
     arguments: Sequence[str],
     environment: Mapping[str, str],
@@ -194,9 +198,11 @@ def main(
     stdout: TextIO,
     stderr: TextIO,
     clock: Callable[[], float],
-    open_http: OpenHTTP = urllib_open,
+    open_http: OpenHTTP | None = None,
     sleep: Sleep = time_sleep,
 ) -> IO[int]:
+    opener = open_http if open_http is not None else curl_open_http(environment)
+
     def after_parse(
         parsed_result: Result[Arguments, TranslationError],
     ) -> IO[int]:
@@ -218,7 +224,7 @@ def main(
         return io_bind(
             read_stdin(stdin),
             lambda text: run_main_program(
-                parsed, environment, text, stdout, stderr, clock, open_http, sleep
+                parsed, environment, text, stdout, stderr, clock, opener, sleep
             ),
         )
 

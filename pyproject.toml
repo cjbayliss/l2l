@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "l2l"
 description = "Translate text between any pair of languages on stdin/stdout using any OpenAI-compatible chat completions endpoint."
 requires-python = ">=3.14"
-dependencies = []
+dependencies = ["pycurl>=7.45.7"]
 dynamic = ["version"]
 
 [project.optional-dependencies]
@@ -16,6 +16,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "hypothesis>=6",
+    "types-pycurl>=7.45",
 ]
 
 [project.scripts]
