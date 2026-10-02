@@ -251,7 +251,6 @@ def has_letters(text: str) -> bool:
 
 
 UNKNOWN_SCRIPT = ""
-LATIN_SCRIPT = "latin"
 
 SCRIPT_ALIASES: Mapping[str, str] = MappingProxyType(
     {

@@ -78,9 +78,9 @@ def cached_translation(
         )
 
     def use_cached(cached: Maybe[str]) -> IO[Result[Translated, TranslationError]]:
-        if isinstance(cached, Just) and acceptable(cached.value):
+        if isinstance(cached, Just):
             return io_map(hit_log, lambda _: Ok(Translated(cached.value, usage)))
 
         return compute_and_store()
 
-    return io_bind(cache_lookup(ctx, key), use_cached)
+    return io_bind(cache_lookup(ctx, key, acceptable), use_cached)
