@@ -23,7 +23,7 @@ its HTTP transport; on platforms without a `pycurl` wheel, installing
 the libcurl development headers first lets pip build it.
 
 ```sh
-uv tool install .
+uv tool install git+https://github.com/cjbayliss/l2l
 ```
 
 This installs the `l2l` command. To run it without installing:
