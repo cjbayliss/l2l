@@ -14,12 +14,14 @@ code that passes them the first time.
 2. **Effects are `IO` values.** Wrap every side effect in an `IO` thunk
    (`IO(lambda: ...)`) from `l2l.monads`, compose with `io_bind`,
    `io_map`, `io_and_then`, `fold_io`, `io_traverse`, ... and never call
-   `.run()` outside `l2l/cli.py` (the program edge) and `l2l/monads.py`
-   (the combinator runners). Raw effect *sources* (`Clock`, `Sleep`,
-   terminal probes) are capability callables: inject them as parameters
-   or frozen-field defaults, call them only inside IO thunks, and give
-   any new source an `IO`-returning wrapper (see `terminal_size` in
-   `l2l/console.py`).
+   `.run()` outside `l2l/cli.py` and `tools/optimize.py` (the program
+   edges) and `l2l/monads.py` (the combinator runners). Ref operations
+   are never discarded as bare statements and never `.run()` outside
+   the edges — compose them into the IO chain. Raw effect *sources*
+   (`Clock`, `Sleep`, terminal probes) are capability callables: inject
+   them as parameters or frozen-field defaults, call them only inside
+   IO thunks, and give any new source an `IO`-returning wrapper (see
+   `terminal_size` in `l2l/console.py`).
 
 3. **Errors are values.** Return `Result` (`Ok`/`Err`) or `Maybe`
    (`Just`/`Nothing`) instead of raising. Build errors with the
@@ -69,7 +71,9 @@ code that passes them the first time.
 - Pure functions: plain pytest plus Hypothesis properties
   (`tests/test_properties.py`) where invariants exist.
 - IO composition: fake effects (`tests/fakes.py`), run the composed
-  `IO` once at the end, assert on captured outputs.
+  `IO` once at the end, assert on captured outputs. The optimizer gets
+  the same treatment (`tests/test_optimize.py`): whole runs are driven
+  through fake endpoint openers, l2l subprocesses, and sleep clocks.
 - Architecture: `tests/test_architecture.py` enforces the rules above
   via AST — layering, `IO.run` edges, frozen dataclasses, no
   `global`/`nonlocal`, no mutation outside `Ref`, no `raise`, no
@@ -77,6 +81,16 @@ code that passes them the first time.
   confined to their sanctioned edges. If you add a sanctioned
   exception, extend the allowlist tables there deliberately — never
   weaken the checks.
+- The same checks scan `tools/*.py` as a second perimeter:
+  `tools/optimize.py` is a program edge (it may call `.run()` and
+  `print` only there), its effectful imports (`os`, `sys`, `time`) are
+  allowlisted separately, and it may import only the standard library
+  and the `l2l` package (below `l2l.cli`).
+- Additional invariants, also in `tests/test_architecture.py`: `l2l/`
+  imports stay stdlib-only plus `pycurl`; `Mapping[...]`-annotated
+  bindings store `MappingProxyType` (or `None`); formatting stays
+  printf `%`-style (no f-strings anywhere in `l2l/`, `tests/`, or
+  `tools/`).
 
 ## Before you finish
 

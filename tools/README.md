@@ -1,15 +1,18 @@
 # tools
 
-Development tools for l2l. Each script is standalone standard-library
-Python and runs directly rather than being installed:
+Development tools for l2l. Each script runs directly rather than being
+installed, and composes the `l2l` package it ships with:
 
 ```sh
-python3 tools/optimize.py ...
+uv run python3 tools/optimize.py ...
 ```
 
 - `optimize.py` — evolve a translation instruction through rounds of
   pairwise judged challenges, or compare two instruction files
-  directly.
+  directly. Written in the same strict functional style as the
+  package: effects are `IO` values, errors are `Result`s, and all data
+  is immutable, so `tests/test_optimize.py` can drive whole runs with
+  fake clocks, endpoints, and l2l subprocesses.
 - `judge.txt` — prompt template for the judge calls (`optimize.py`'s
   default `--judge-template`).
 - `rewrite.txt` — prompt template for the rewrite calls (`optimize.py`'s
@@ -54,7 +57,10 @@ python3 tools/optimize.py \
 `optimize.py` drives l2l as a subprocess, using `<python> -m l2l` from
 the repository root by default; pass `--l2l "l2l"` to use an installed
 `l2l` command instead. It requires the same Python 3.14 or newer as
-l2l and only the standard library.
+l2l and needs the `l2l` package importable (run it through `uv run`
+from the repository root, or install the project). Its endpoint calls
+go through l2l's own HTTP transport, so proxy environment variables
+behave exactly as they do for l2l.
 
 Endpoint credentials resolve like l2l's, weakest to strongest:
 
@@ -179,8 +185,11 @@ An evolution round makes at most `1 + 3×chapters` endpoint calls: one
 rewrite, up to one translation per chapter (the incumbent's are usually
 cached after the first round), and two judgments per chapter. Compare
 mode makes at most four calls per chapter: two translations and two
-judgments. Individual requests retry with backoff, and a failed l2l
-run aborts with its stderr preserved under `out/` for inspection.
+judgments. Each request retries up to four times with a 2s/4s/6s
+backoff; a call that exhausts its retries aborts the run with the
+endpoint error, and a failed l2l subprocess aborts with its stderr
+preserved under `out/` as `.err` for inspection (successful runs leave
+no `.err` behind).
 
 Thinking models that spend the whole budget on reasoning return empty
 content; raise `--call-max-tokens` or cap the reasoning, e.g.

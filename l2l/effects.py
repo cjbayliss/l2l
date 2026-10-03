@@ -3,6 +3,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
+import subprocess
 import time
 import tomllib
 from collections.abc import Callable, Mapping
@@ -53,6 +55,10 @@ def write_stdout(stream: TextIO, content: str) -> IO[None]:
 
 def path_exists(path: str) -> IO[bool]:
     return IO(lambda: os.path.exists(path))
+
+
+def path_is_dir(path: str) -> IO[bool]:
+    return IO(lambda: os.path.isdir(path))
 
 
 def cwd() -> IO[str]:
@@ -316,5 +322,101 @@ def remove_file(path: str) -> IO[bool]:
             return True
         except OSError:
             return False
+
+    return IO(thunk)
+
+
+def ensure_directory(path: str) -> IO[None]:
+    def thunk() -> None:
+        os.makedirs(path, exist_ok=True)
+
+    return IO(thunk)
+
+
+def write_text_file(
+    path: str, content: str, description: str
+) -> IO[Result[None, TranslationError]]:
+    def thunk() -> Result[None, TranslationError]:
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(content)
+        except OSError as error:
+            return fail_config("cannot write %s %s: %s" % (description, path, error))
+
+        return Ok(None)
+
+    return IO(thunk)
+
+
+def append_text_file(
+    path: str, content: str, description: str
+) -> IO[Result[None, TranslationError]]:
+    def thunk() -> Result[None, TranslationError]:
+        try:
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(content)
+        except OSError as error:
+            return fail_config("cannot append %s %s: %s" % (description, path, error))
+
+        return Ok(None)
+
+    return IO(thunk)
+
+
+def replace_file(source: str, target: str) -> IO[bool]:
+    def thunk() -> bool:
+        try:
+            os.replace(source, target)
+            return True
+        except OSError:
+            return False
+
+    return IO(thunk)
+
+
+def copy_file(source: str, target: str) -> IO[bool]:
+    def thunk() -> bool:
+        try:
+            shutil.copyfile(source, target)
+            return True
+        except OSError:
+            return False
+
+    return IO(thunk)
+
+
+def entry_paths(directory: str) -> IO[tuple[str, ...]]:
+    def thunk() -> tuple[str, ...]:
+        try:
+            entries = tuple(os.scandir(directory))
+        except OSError:
+            return ()
+
+        return tuple(entry.path for entry in entries if entry.is_file())
+
+    return IO(thunk)
+
+
+@dataclass(frozen=True)
+class ProcessResult:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def run_process(
+    command: tuple[str, ...], stdin_text: str, workdir: str | None
+) -> IO[ProcessResult]:
+    def thunk() -> ProcessResult:
+        completed = subprocess.run(
+            command,
+            input=stdin_text,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=workdir,
+            check=False,
+        )
+        return ProcessResult(completed.returncode, completed.stdout, completed.stderr)
 
     return IO(thunk)
