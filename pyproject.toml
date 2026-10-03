@@ -59,6 +59,7 @@ ignore = [
 [tool.mypy]
 strict = true
 warn_unreachable = true
+explicit_package_bases = true
 python_version = "3.14"
 mypy_path = [".", "tests"]
-files = ["l2l", "tests"]
+files = ["l2l", "tests", "tools"]

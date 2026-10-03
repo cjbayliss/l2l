@@ -5,11 +5,13 @@ on:
     branches: [main]
     paths:
       - 'l2l/**'
+      - 'tools/**'
       - 'tests/**'
       - 'pyproject.toml'
   pull_request:
     paths:
       - 'l2l/**'
+      - 'tools/**'
       - 'tests/**'
       - 'pyproject.toml'
 
