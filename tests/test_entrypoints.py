@@ -26,9 +26,9 @@ def test_python_dash_m_l2l_prints_help() -> None:
 
 
 def test_cli_module_guard_runs_the_program(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "argv", ["l2l/cli.py", "--version"])
+    monkeypatch.setattr(sys, "argv", ["src/l2l/cli.py", "--version"])
     with pytest.raises(SystemExit) as raised:
-        runpy.run_path(str(ROOT / "l2l" / "cli.py"), run_name="__main__")
+        runpy.run_path(str(ROOT / "src" / "l2l" / "cli.py"), run_name="__main__")
 
     assert raised.value.code == 0
 
@@ -36,7 +36,7 @@ def test_cli_module_guard_runs_the_program(monkeypatch: pytest.MonkeyPatch) -> N
 def test_package_main_guard_runs_the_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["l2l", "--version"])
     with pytest.raises(SystemExit) as raised:
-        runpy.run_path(str(ROOT / "l2l" / "__main__.py"), run_name="__main__")
+        runpy.run_path(str(ROOT / "src" / "l2l" / "__main__.py"), run_name="__main__")
 
     assert raised.value.code == 0
 

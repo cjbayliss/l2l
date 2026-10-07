@@ -4,13 +4,13 @@ on:
   push:
     branches: [main]
     paths:
-      - 'l2l/**'
+      - 'src/l2l/**'
       - 'tools/**'
       - 'tests/**'
       - 'pyproject.toml'
   pull_request:
     paths:
-      - 'l2l/**'
+      - 'src/l2l/**'
       - 'tools/**'
       - 'tests/**'
       - 'pyproject.toml'
@@ -25,5 +25,5 @@ jobs:
           enable-cache: true
       - run: uv format --check
       - run: uv run ruff check
-      - run: uv run mypy l2l tests tools
+      - run: uv run mypy
       - run: uv run pytest -q

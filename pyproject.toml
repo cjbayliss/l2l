@@ -1,13 +1,10 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "l2l"
 description = "Translate text between any pair of languages on stdin/stdout using any OpenAI-compatible chat completions endpoint."
+readme = "README.md"
 requires-python = ">=3.14"
+version = "0.8.0"
 dependencies = ["pycurl>=7.45.7"]
-dynamic = ["version"]
 
 [dependency-groups]
 dev = [
@@ -22,14 +19,8 @@ dev = [
 [project.scripts]
 l2l = "l2l.cli:cli"
 
-[tool.setuptools]
-packages = ["l2l"]
-
-[tool.setuptools.dynamic]
-version = { attr = "l2l.__version__" }
-
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 addopts = "--cov=l2l --cov-report=term-missing --cov-fail-under=99"
 
@@ -54,12 +45,16 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # The run-log handle intentionally outlives `open_run_log`; `close_run_log` closes it.
-"l2l/effects.py" = ["SIM115"]
+"src/l2l/effects.py" = ["SIM115"]
 
 [tool.mypy]
 strict = true
 warn_unreachable = true
 explicit_package_bases = true
 python_version = "3.14"
-mypy_path = [".", "tests"]
-files = ["l2l", "tests", "tools"]
+mypy_path = ["src", "tests"]
+files = ["src", "tests", "tools"]
+
+[build-system]
+requires = ["uv_build>=0.12.23,<0.13.0"]
+build-backend = "uv_build"
