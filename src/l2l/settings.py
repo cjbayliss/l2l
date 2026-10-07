@@ -267,3 +267,7 @@ def salt(*parts: str) -> str:
 def pass_salt(pass_definition: PassDefinition, retry_attempt: int = 0) -> str:
     base = salt(CACHE_SALT_VERSION, pass_definition.name, pass_definition.instruction)
     return salt(base, "retry%d" % retry_attempt) if retry_attempt else base
+
+
+def retranslation_salt(pass_definition: PassDefinition) -> str:
+    return salt(pass_salt(pass_definition), "retranslate")

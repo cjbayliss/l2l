@@ -37,6 +37,7 @@ from l2l.settings import (
     Setup,
     pass_salt,
     resolve_call_settings,
+    retranslation_salt,
 )
 from l2l.text import CACHE_SALT_VERSION, cache_key
 
@@ -362,12 +363,24 @@ def test_pass_salt() -> None:
     assert pass_salt(pass_definition) == (CACHE_SALT_VERSION + "\x00p\x00i")
 
 
+def test_retranslation_salt_extends_the_pass_salt() -> None:
+    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
+    assert retranslation_salt(pass_definition) == (
+        pass_salt(pass_definition) + "\x00retranslate"
+    )
+    assert retranslation_salt(pass_definition) != pass_salt(pass_definition)
+
+
 def test_cache_key_variants() -> None:
     base = cache_key("text", "model")
     assert base == cache_key("text", "model")
     assert base != cache_key("text", "model", "salt")
     assert base != cache_key("text", "model", "", "work")
     assert base != cache_key("text", "model", "", "", {"temperature": 1})
+    assert base != cache_key("text", "model", analysis="brief")
+    assert cache_key("text", "model", analysis="brief") == cache_key(
+        "text", "model", analysis="brief"
+    )
 
 
 def test_parse_pass_table_inline() -> None:
