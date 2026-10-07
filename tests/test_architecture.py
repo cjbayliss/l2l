@@ -6,7 +6,7 @@ from collections.abc import Callable
 from itertools import chain
 from pathlib import Path
 
-PACKAGE = Path(__file__).resolve().parents[1] / "l2l"
+PACKAGE = Path(__file__).resolve().parents[1] / "src" / "l2l"
 TESTS = Path(__file__).resolve().parent
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
