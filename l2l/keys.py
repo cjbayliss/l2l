@@ -18,17 +18,17 @@ from l2l.monads import (
     Just,
     Maybe,
     Nothing,
-    Ref,
+    Reference,
     io_and_then,
     io_bind,
     io_map,
     io_pure,
     maybe_either,
     maybe_or,
-    modify_ref_with,
-    read_ref,
+    modify_reference_with,
+    read_reference,
     repeat_until,
-    write_ref,
+    write_reference,
 )
 
 POLL_SECONDS = 0.1
@@ -50,29 +50,29 @@ def open_tty() -> IO[Maybe[int]]:
 
     def from_stdin() -> Maybe[int]:
         try:
-            fd = sys.stdin.fileno()
+            file_descriptor = sys.stdin.fileno()
         except AttributeError, OSError, ValueError:
             return NOTHING
 
-        return Just(fd) if os.isatty(fd) else NOTHING
+        return Just(file_descriptor) if os.isatty(file_descriptor) else NOTHING
 
     return IO(lambda: maybe_or(from_tty_device(), from_stdin()))
 
 
-def tty_attributes(fd: int) -> IO[Maybe[TermiosState]]:
+def tty_attributes(file_descriptor: int) -> IO[Maybe[TermiosState]]:
     def thunk() -> Maybe[TermiosState]:
         try:
-            return Just(tuple(termios.tcgetattr(fd)))
+            return Just(tuple(termios.tcgetattr(file_descriptor)))
         except OSError, termios.error:
             return NOTHING
 
     return IO(thunk)
 
 
-def enter_cbreak(fd: int) -> IO[bool]:
+def enter_cbreak(file_descriptor: int) -> IO[bool]:
     def thunk() -> bool:
         try:
-            tty.setcbreak(fd)
+            tty.setcbreak(file_descriptor)
         except OSError, termios.error:
             return False
 
@@ -87,24 +87,26 @@ def no_op() -> None:
 
 @dataclass(frozen=True)
 class TabListener:
-    fd: int
+    file_descriptor: int
     saved: TermiosState
     toggle: Callable[[], None]
     halt: threading.Event = field(
         default_factory=threading.Event, repr=False, compare=False
     )
-    thread: Ref[threading.Thread | None] = field(
-        default_factory=lambda: Ref(None), repr=False, compare=False
+    thread: Reference[threading.Thread | None] = field(
+        default_factory=lambda: Reference(None), repr=False, compare=False
     )
-    restored: Ref[bool] = field(
-        default_factory=lambda: Ref(False), repr=False, compare=False
+    restored: Reference[bool] = field(
+        default_factory=lambda: Reference(False), repr=False, compare=False
     )
 
     def listen_action(self) -> IO[None]:
         def thunk() -> None:
             try:
-                ready, _, _ = select.select([self.fd], [], [], POLL_SECONDS)
-                if ready and is_toggle_key(os.read(self.fd, 1)):
+                ready, _, _ = select.select(
+                    [self.file_descriptor], [], [], POLL_SECONDS
+                )
+                if ready and is_toggle_key(os.read(self.file_descriptor, 1)):
                     self.toggle()
             except OSError, termios.error:
                 self.halt.set()
@@ -125,9 +127,9 @@ class TabListener:
 
                 return IO(thunk)
 
-            return io_bind(write_ref(self.thread, thread), boot)
+            return io_bind(write_reference(self.thread, thread), boot)
 
-        return io_bind(read_ref(self.thread), launched)
+        return io_bind(read_reference(self.thread), launched)
 
     def restore(self) -> IO[None]:
         def claim(restored: bool) -> tuple[bool, bool]:
@@ -137,11 +139,13 @@ class TabListener:
             def thunk() -> None:
                 if should_restore:
                     with contextlib.suppress(OSError, termios.error):
-                        termios.tcsetattr(self.fd, termios.TCSADRAIN, list(self.saved))
+                        termios.tcsetattr(
+                            self.file_descriptor, termios.TCSADRAIN, list(self.saved)
+                        )
 
             return IO(thunk)
 
-        return io_bind(modify_ref_with(self.restored, claim), apply)
+        return io_bind(modify_reference_with(self.restored, claim), apply)
 
     def stop(self) -> IO[None]:
         def halt_worker(worker: threading.Thread | None) -> IO[None]:
@@ -152,14 +156,16 @@ class TabListener:
 
             return IO(thunk)
 
-        return io_and_then(io_bind(read_ref(self.thread), halt_worker), self.restore())
+        return io_and_then(
+            io_bind(read_reference(self.thread), halt_worker), self.restore()
+        )
 
 
 def start_tab_listener(console: Console, toggle: Callable[[], None]) -> IO[IO[None]]:
     if not console.status.live:
         return io_pure(IO(no_op))
 
-    def attach(fd: int) -> IO[IO[None]]:
+    def attach(file_descriptor: int) -> IO[IO[None]]:
         def with_attributes(attributes: Maybe[TermiosState]) -> IO[IO[None]]:
             if isinstance(attributes, Nothing):
                 return io_pure(IO(no_op))
@@ -168,14 +174,18 @@ def start_tab_listener(console: Console, toggle: Callable[[], None]) -> IO[IO[No
                 if not entered:
                     return io_pure(IO(no_op))
 
-                listener = TabListener(fd=fd, saved=attributes.value, toggle=toggle)
+                listener = TabListener(
+                    file_descriptor=file_descriptor,
+                    saved=attributes.value,
+                    toggle=toggle,
+                )
                 return io_map(listener.start(), lambda _: listener.stop())
 
-            return io_bind(enter_cbreak(fd), with_cbreak)
+            return io_bind(enter_cbreak(file_descriptor), with_cbreak)
 
-        return io_bind(tty_attributes(fd), with_attributes)
+        return io_bind(tty_attributes(file_descriptor), with_attributes)
 
-    def with_tty(fd: Maybe[int]) -> IO[IO[None]]:
-        return maybe_either(fd, attach, lambda: io_pure(IO(no_op)))
+    def with_tty(file_descriptor: Maybe[int]) -> IO[IO[None]]:
+        return maybe_either(file_descriptor, attach, lambda: io_pure(IO(no_op)))
 
     return io_bind(open_tty(), with_tty)

@@ -21,7 +21,7 @@ from l2l.effects import (
     entry_paths,
     load_toml,
     path_exists,
-    path_is_dir,
+    path_is_directory,
     read_text_file,
     replace_file,
     run_process,
@@ -67,8 +67,8 @@ PROMPT_TOKEN = "<<<CURRENT_PROMPT>>>"
 HISTORY_TOKEN = "<<<HISTORY>>>"
 CRITIQUES_TOKEN = "<<<CRITIQUES>>>"
 
-TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(TOOLS_DIR)
+TOOLS_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(TOOLS_DIRECTORY)
 SEED_VERSION = "v0"
 CHAT_ATTEMPTS = 4
 VERDICT_ATTEMPTS = 3
@@ -104,7 +104,7 @@ class BaseConfig:
 @dataclass(frozen=True)
 class Options:
     base_config: str
-    workdir: str
+    working_directory: str
     seed: str | None
     rounds: int
     stall: int
@@ -124,23 +124,23 @@ class Options:
     rewrite_temperature: float
     translator_temperature: float
     call_timeout: float
-    call_max_tokens: int
+    call_maximum_tokens: int
     history_depth: int
     judge_extra: Mapping[str, Any]
     rewrite_extra: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
-class Env:
+class OptimizationEnvironment:
     options: Options
     base: BaseConfig
     api: Api
-    workdir: str
+    working_directory: str
     environment: Mapping[str, str]
     chapters: tuple[str, ...]
     judge_template: str
     rewrite_template: str
-    l2l_cmd: tuple[str, ...]
+    l2l_command: tuple[str, ...]
     opener: OpenEndpoint
     sleep: Sleep
     say: Reporter
@@ -181,8 +181,8 @@ class ChapterJudging:
 
 @dataclass(frozen=True)
 class CompareTally:
-    a: int = 0
-    b: int = 0
+    a_wins: int = 0
+    b_wins: int = 0
     tie: int = 0
     rounds: tuple[dict[str, Any], ...] = ()
 
@@ -195,17 +195,18 @@ def hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
-def directory(workdir: str, name: str) -> str:
-    return os.path.join(workdir, name)
+def join_directory(working_directory: str, name: str) -> str:
+    return os.path.join(working_directory, name)
 
 
 def text_stem(path: str) -> str:
     return os.path.basename(path).removesuffix(".txt")
 
 
-def output_path(workdir: str, version: str, chapter: str) -> str:
+def output_path(working_directory: str, version: str, chapter: str) -> str:
     return os.path.join(
-        directory(directory(workdir, "out"), version), text_stem(chapter) + ".en.txt"
+        join_directory(join_directory(working_directory, "out"), version),
+        text_stem(chapter) + ".en.txt",
     )
 
 
@@ -213,14 +214,14 @@ def chat_payload(
     model: str,
     content: str,
     temperature: float,
-    max_tokens: int,
+    maximum_tokens: int,
     extra: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
         "model": model,
         "messages": [{"role": "user", "content": content}],
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_tokens": maximum_tokens,
         **dict(extra),
     }
 
@@ -519,7 +520,7 @@ def history_window(history: tuple[dict[str, Any], ...], depth_limit: int) -> str
 
 
 def select_chapters(
-    paths: tuple[str, ...], selector: str, chapters_dir: str
+    paths: tuple[str, ...], selector: str, chapters_directory: str
 ) -> Result[tuple[str, ...], TranslationError]:
     by_stem = {text_stem(path): path for path in paths}
 
@@ -530,7 +531,9 @@ def select_chapters(
             if not name or name in selected:
                 continue
             if name not in by_stem:
-                return fail_config("unknown chapter %r in %s" % (name, chapters_dir))
+                return fail_config(
+                    "unknown chapter %r in %s" % (name, chapters_directory)
+                )
             selected = {**selected, name: by_stem[name]}
         if not selected:
             return fail_config(
@@ -542,9 +545,9 @@ def select_chapters(
 
 
 def discover_chapters(
-    chapters_dir: str,
+    chapters_directory: str,
 ) -> IO[Result[tuple[str, ...], TranslationError]]:
-    holdout = os.path.join(chapters_dir, "holdout.txt")
+    holdout = os.path.join(chapters_directory, "holdout.txt")
 
     def with_holdout(
         chapters: tuple[str, ...],
@@ -566,17 +569,17 @@ def discover_chapters(
             )
         )
         if len(chapters) < 2:
-            return fail_config("need at least two chapters in %s" % chapters_dir)
+            return fail_config("need at least two chapters in %s" % chapters_directory)
         return Ok(chapters)
 
     def with_directory(
-        is_dir: bool,
+        is_directory: bool,
     ) -> IO[Result[tuple[str, ...], TranslationError]]:
-        if not is_dir:
+        if not is_directory:
             return io_result(
                 fail_config(
                     "missing %s (expected chapter .txt files plus holdout.txt)"
-                    % chapters_dir
+                    % chapters_directory
                 )
             )
 
@@ -594,16 +597,16 @@ def discover_chapters(
 
             return io_map(path_exists(holdout), with_presence)
 
-        return io_bind(entry_paths(chapters_dir), with_entries)
+        return io_bind(entry_paths(chapters_directory), with_entries)
 
-    return io_bind(path_is_dir(chapters_dir), with_directory)
+    return io_bind(path_is_directory(chapters_directory), with_directory)
 
 
 def compare_chapters(
-    workdir: str, options: Options
+    working_directory: str, options: Options
 ) -> IO[Result[tuple[str, ...], TranslationError]]:
-    chapters_dir = directory(workdir, "chapters")
-    holdout = os.path.join(chapters_dir, "holdout.txt")
+    chapters_directory = join_directory(working_directory, "chapters")
+    holdout = os.path.join(chapters_directory, "holdout.txt")
 
     def with_holdout(present: bool) -> Result[tuple[str, ...], TranslationError]:
         if not present:
@@ -615,11 +618,13 @@ def compare_chapters(
     ) -> IO[Result[tuple[str, ...], TranslationError]]:
         if isinstance(paths, Err) or options.chapters is None:
             return io_result(paths)
-        return io_result(select_chapters(paths.value, options.chapters, chapters_dir))
+        return io_result(
+            select_chapters(paths.value, options.chapters, chapters_directory)
+        )
 
     if options.holdout:
         return io_map(path_exists(holdout), with_holdout)
-    return io_bind(discover_chapters(chapters_dir), discovered)
+    return io_bind(discover_chapters(chapters_directory), discovered)
 
 
 def read_jsonl(path: str) -> IO[tuple[dict[str, Any], ...]]:
@@ -635,7 +640,7 @@ def read_jsonl(path: str) -> IO[tuple[dict[str, Any], ...]]:
     return io_map(read_text_file(path, "ledger"), lines)
 
 
-def parse_params(
+def parse_parameters(
     raw: str | None, flag: str
 ) -> Result[dict[str, Any], TranslationError]:
     if not raw:
@@ -663,7 +668,7 @@ def build_options(
 ) -> Options:
     return Options(
         base_config=str(raw.base_config),
-        workdir=str(raw.workdir),
+        working_directory=str(raw.working_directory),
         seed=optional(raw.seed),
         rounds=int(raw.rounds),
         stall=int(raw.stall),
@@ -683,7 +688,7 @@ def build_options(
         rewrite_temperature=float(raw.rewrite_temperature),
         translator_temperature=float(raw.translator_temperature),
         call_timeout=float(raw.call_timeout),
-        call_max_tokens=int(raw.call_max_tokens),
+        call_maximum_tokens=int(raw.call_maximum_tokens),
         history_depth=int(raw.history_depth),
         judge_extra=judge_extra,
         rewrite_extra=rewrite_extra,
@@ -709,6 +714,7 @@ def parse_arguments(argv: Sequence[str]) -> Result[Options, TranslationError]:
         "--workdir",
         type=str,
         required=True,
+        dest="working_directory",
         help="experiment directory holding chapters/, prompts/, out/, judge/",
     )
     parser.add_argument(
@@ -763,20 +769,26 @@ def parse_arguments(argv: Sequence[str]) -> Result[Options, TranslationError]:
     parser.add_argument(
         "--judge-template",
         type=str,
-        default=os.path.join(TOOLS_DIR, "judge.txt"),
+        default=os.path.join(TOOLS_DIRECTORY, "judge.txt"),
     )
     parser.add_argument(
         "--rewrite-template",
         type=str,
-        default=os.path.join(TOOLS_DIR, "rewrite.txt"),
+        default=os.path.join(TOOLS_DIRECTORY, "rewrite.txt"),
     )
     parser.add_argument("--judge-temperature", type=float, default=0.0)
     parser.add_argument("--rewrite-temperature", type=float, default=0.8)
     parser.add_argument("--translator-temperature", type=float, default=0.0)
     parser.add_argument("--call-timeout", type=float, default=600.0)
-    parser.add_argument("--call-max-tokens", type=int, default=32768)
+    parser.add_argument(
+        "--call-max-tokens",
+        type=int,
+        default=32768,
+        dest="call_maximum_tokens",
+    )
     parser.add_argument(
         "--judge-params",
+        dest="judge_parameters",
         help=(
             "JSON object merged into judge request bodies, e.g. "
             '\'{"reasoning": {"effort": "low"}}\' for thinking models'
@@ -784,6 +796,7 @@ def parse_arguments(argv: Sequence[str]) -> Result[Options, TranslationError]:
     )
     parser.add_argument(
         "--rewrite-params",
+        dest="rewrite_parameters",
         help="JSON object merged into rewrite request bodies",
     )
     parser.add_argument("--history-depth", type=int, default=6)
@@ -813,8 +826,8 @@ def parse_arguments(argv: Sequence[str]) -> Result[Options, TranslationError]:
             ),
         )
     )
-    judge_extra = parse_params(raw.judge_params, "judge-params")
-    rewrite_extra = parse_params(raw.rewrite_params, "rewrite-params")
+    judge_extra = parse_parameters(raw.judge_parameters, "judge-params")
+    rewrite_extra = parse_parameters(raw.rewrite_parameters, "rewrite-params")
 
     def with_first(first: dict[str, Any]) -> Result[Options, TranslationError]:
         def with_second(second: dict[str, Any]) -> Options:
@@ -836,8 +849,8 @@ def endpoint_config(api: Api, timeout: float) -> Config:
         api_key=api.api_key,
         model="",
         timeout=timeout,
-        max_tokens=0,
-        params=MappingProxyType({}),
+        maximum_tokens=0,
+        parameters=MappingProxyType({}),
     )
 
 
@@ -888,7 +901,7 @@ def chain_result[T, R](
 
 
 def complete(
-    env: Env,
+    optimization_environment: OptimizationEnvironment,
     model: str,
     content: str,
     temperature: float,
@@ -896,7 +909,11 @@ def complete(
     label: str,
 ) -> IO[Result[str, TranslationError]]:
     payload = chat_payload(
-        model, content, temperature, env.options.call_max_tokens, extra
+        model,
+        content,
+        temperature,
+        optimization_environment.options.call_maximum_tokens,
+        extra,
     )
 
     def at(index: int) -> IO[Result[str, TranslationError]]:
@@ -911,20 +928,26 @@ def complete(
                 return at(index + 1)
 
             return io_bind(
-                env.warn(
+                optimization_environment.warn(
                     "%s: attempt %d/%d failed (%s)"
                     % (label, index, CHAT_ATTEMPTS, describe(outcome.error))
                 ),
-                lambda _: io_and_then(IO(lambda: env.sleep(2.0 * index)), waited(None)),
+                lambda _: io_and_then(
+                    IO(lambda: optimization_environment.sleep(2.0 * index)),
+                    waited(None),
+                ),
             )
 
-        return io_bind(env.opener(payload), decided)
+        return io_bind(optimization_environment.opener(payload), decided)
 
     return at(1)
 
 
 def judge_call(
-    env: Env, model: str, prompt: str, label: str
+    optimization_environment: OptimizationEnvironment,
+    model: str,
+    prompt: str,
+    label: str,
 ) -> IO[Result[dict[str, Any], TranslationError]]:
     def at(index: int) -> IO[Result[dict[str, Any], TranslationError]]:
         def decided(
@@ -945,25 +968,30 @@ def judge_call(
 
             if index >= VERDICT_ATTEMPTS:
                 return io_bind(
-                    env.warn("%s: giving up; recording an error verdict" % label),
+                    optimization_environment.warn(
+                        "%s: giving up; recording an error verdict" % label
+                    ),
                     bail,
                 )
 
             return io_bind(
-                env.warn(
+                optimization_environment.warn(
                     "%s: attempt %d/%d unusable verdict (%s)"
                     % (label, index, VERDICT_ATTEMPTS, describe(verdict_outcome.error))
                 ),
-                lambda _: io_and_then(IO(lambda: env.sleep(2.0 * index)), waited(None)),
+                lambda _: io_and_then(
+                    IO(lambda: optimization_environment.sleep(2.0 * index)),
+                    waited(None),
+                ),
             )
 
         return io_bind(
             complete(
-                env,
+                optimization_environment,
                 model,
                 prompt,
-                env.options.judge_temperature,
-                env.options.judge_extra,
+                optimization_environment.options.judge_temperature,
+                optimization_environment.options.judge_extra,
                 label,
             ),
             decided,
@@ -973,7 +1001,7 @@ def judge_call(
 
 
 def judge_chapter(
-    env: Env,
+    optimization_environment: OptimizationEnvironment,
     source_text: str,
     incumbent_text: str,
     candidate_text: str,
@@ -984,9 +1012,11 @@ def judge_chapter(
         left: str, right: str, label: str
     ) -> IO[Result[dict[str, Any], TranslationError]]:
         return judge_call(
-            env,
-            env.options.judge_model,
-            fill_judge(env.judge_template, source_text, left, right),
+            optimization_environment,
+            optimization_environment.options.judge_model,
+            fill_judge(
+                optimization_environment.judge_template, source_text, left, right
+            ),
             "judge r%d/%s (%s)" % (round_no, chapter, label),
         )
 
@@ -1023,14 +1053,17 @@ def judge_chapter(
 
 
 def rewrite_prompt(
-    env: Env,
+    optimization_environment: OptimizationEnvironment,
     current_prompt: str,
     history_text: str,
     critiques: str,
     round_no: int,
 ) -> IO[Result[str, TranslationError]]:
     prompt_text = fill_rewrite(
-        env.rewrite_template, current_prompt, history_text, critiques
+        optimization_environment.rewrite_template,
+        current_prompt,
+        history_text,
+        critiques,
     )
 
     def decided(
@@ -1045,20 +1078,23 @@ def rewrite_prompt(
 
     return io_map(
         complete(
-            env,
-            env.options.rewrite_model or "",
+            optimization_environment,
+            optimization_environment.options.rewrite_model or "",
             prompt_text,
-            env.options.rewrite_temperature,
-            env.options.rewrite_extra,
+            optimization_environment.options.rewrite_temperature,
+            optimization_environment.options.rewrite_extra,
             "rewrite r%d" % round_no,
         ),
         decided,
     )
 
 
-def previous_critiques(env: Env, round_no: int) -> IO[str]:
+def previous_critiques(
+    optimization_environment: OptimizationEnvironment, round_no: int
+) -> IO[str]:
     feedback_previous = os.path.join(
-        directory(env.workdir, "judge"), "r%d-feedback.txt" % (round_no - 1)
+        join_directory(optimization_environment.working_directory, "judge"),
+        "r%d-feedback.txt" % (round_no - 1),
     )
 
     def with_exists(exists: bool) -> IO[str]:
@@ -1075,10 +1111,15 @@ def previous_critiques(env: Env, round_no: int) -> IO[str]:
 
 
 def candidate_prompt(
-    env: Env, state: RunState, current: str, history_text: str, critiques: str
+    optimization_environment: OptimizationEnvironment,
+    state: RunState,
+    current: str,
+    history_text: str,
+    critiques: str,
 ) -> IO[Result[str, TranslationError]]:
     candidate_path = os.path.join(
-        directory(env.workdir, "prompts"), "v%d.txt" % state.round_no
+        join_directory(optimization_environment.working_directory, "prompts"),
+        "v%d.txt" % state.round_no,
     )
 
     def persisted(prompt: str) -> IO[Result[str, TranslationError]]:
@@ -1096,15 +1137,21 @@ def candidate_prompt(
 
     def asked(_: None) -> IO[Result[str, TranslationError]]:
         return io_bind(
-            rewrite_prompt(env, current, history_text, critiques, state.round_no),
+            rewrite_prompt(
+                optimization_environment,
+                current,
+                history_text,
+                critiques,
+                state.round_no,
+            ),
             chain_result(persisted),
         )
 
     def announced(_: None) -> IO[Result[str, TranslationError]]:
         return io_bind(
-            env.say(
+            optimization_environment.say(
                 "round %d: asking %s for a new instruction"
-                % (state.round_no, env.options.rewrite_model)
+                % (state.round_no, optimization_environment.options.rewrite_model)
             ),
             asked,
         )
@@ -1114,7 +1161,9 @@ def candidate_prompt(
             return read_text_file(candidate_path, "candidate instruction")
 
         return io_bind(
-            env.say("round %d: reusing %s" % (state.round_no, candidate_path)),
+            optimization_environment.say(
+                "round %d: reusing %s" % (state.round_no, candidate_path)
+            ),
             announced_reuse,
         )
 
@@ -1126,15 +1175,21 @@ def candidate_prompt(
     def with_critiques(critiques: str) -> IO[Result[str, TranslationError]]:
         return io_bind(path_exists(candidate_path), decide)
 
-    return io_bind(previous_critiques(env, state.round_no), with_critiques)
+    return io_bind(
+        previous_critiques(optimization_environment, state.round_no), with_critiques
+    )
 
 
 def prepare_version(
-    env: Env, version: str, prompt_text: str
+    optimization_environment: OptimizationEnvironment, version: str, prompt_text: str
 ) -> IO[Result[str, TranslationError]]:
-    base = env.base
-    prompts_dir = directory(env.workdir, "prompts")
-    gen_dir = directory(env.workdir, "gen")
+    base = optimization_environment.base
+    prompts_directory = join_directory(
+        optimization_environment.working_directory, "prompts"
+    )
+    generation_directory = join_directory(
+        optimization_environment.working_directory, "gen"
+    )
     digest = hash_text(prompt_text)
 
     def target_entry() -> Mapping[str, Any]:
@@ -1144,15 +1199,20 @@ def prepare_version(
             for key, value in original.items()
             if key not in ("instruction", "instruction_file")
         }
-        params = dict(original.get("params") or {})
+        parameters = dict(original.get("params") or {})
         entry = {
             **stripped,
             "name": "%s-%s" % (base.target_name, digest[:10]),
             "instruction_file": "../prompts/%s.txt" % version,
-            "params": {**params, "temperature": env.options.translator_temperature},
+            "params": {
+                **parameters,
+                "temperature": optimization_environment.options.translator_temperature,
+            },
         }
-        if env.options.translator_model:
-            return MappingProxyType({**entry, "model": env.options.translator_model})
+        if optimization_environment.options.translator_model:
+            return MappingProxyType(
+                {**entry, "model": optimization_environment.options.translator_model}
+            )
         return MappingProxyType(entry)
 
     passes = tuple(
@@ -1176,7 +1236,7 @@ def prepare_version(
 
             return io_bind(
                 write_text_file(
-                    os.path.join(gen_dir, version + ".toml"),
+                    os.path.join(generation_directory, version + ".toml"),
                     config_text,
                     "generated config",
                 ),
@@ -1188,7 +1248,7 @@ def prepare_version(
     def with_config_text(config_text: str) -> IO[Result[str, TranslationError]]:
         return io_bind(
             write_text_file(
-                os.path.join(prompts_dir, version + ".txt"),
+                os.path.join(prompts_directory, version + ".txt"),
                 prompt_text,
                 "instruction file",
             ),
@@ -1201,13 +1261,19 @@ def prepare_version(
         )
 
     return io_bind(
-        io_and_then(ensure_directory(prompts_dir), ensure_directory(gen_dir)),
+        io_and_then(
+            ensure_directory(prompts_directory), ensure_directory(generation_directory)
+        ),
         with_directories,
     )
 
 
-def seen_digests(env: Env) -> IO[Result[dict[str, str], TranslationError]]:
-    prompts_dir = directory(env.workdir, "prompts")
+def seen_digests(
+    optimization_environment: OptimizationEnvironment,
+) -> IO[Result[dict[str, str], TranslationError]]:
+    prompts_directory = join_directory(
+        optimization_environment.working_directory, "prompts"
+    )
 
     def keep(
         seen: dict[str, str], path: str
@@ -1236,18 +1302,27 @@ def seen_digests(env: Env) -> IO[Result[dict[str, str], TranslationError]]:
             tuple(sorted(path for path in paths if versioned(path))), keep, Ok({})
         )
 
-    return io_bind(entry_paths(prompts_dir), listed)
+    return io_bind(entry_paths(prompts_directory), listed)
 
 
 def translate_chapter(
-    env: Env, version: str, chapter: str
+    optimization_environment: OptimizationEnvironment, version: str, chapter: str
 ) -> IO[Result[None, TranslationError]]:
-    target = output_path(env.workdir, version, chapter)
-    config_path = os.path.join(directory(env.workdir, "gen"), version + ".toml")
+    target = output_path(optimization_environment.working_directory, version, chapter)
+    config_path = os.path.join(
+        join_directory(optimization_environment.working_directory, "gen"),
+        version + ".toml",
+    )
     partial = target + ".partial"
     stderr_path = target + ".err"
-    cache_dir = directory(env.workdir, "cache")
-    command = env.l2l_cmd + (config_path, "--cache-dir", cache_dir)
+    cache_directory = join_directory(
+        optimization_environment.working_directory, "cache"
+    )
+    command = optimization_environment.l2l_command + (
+        config_path,
+        "--cache-dir",
+        cache_directory,
+    )
 
     def ran(result: ProcessResult) -> IO[Result[None, TranslationError]]:
         def with_error_log(
@@ -1287,7 +1362,10 @@ def translate_chapter(
         text_result: Result[str, TranslationError],
     ) -> IO[Result[None, TranslationError]]:
         return result_bind_io(
-            text_result, lambda text: io_bind(env.run_command(command, text), ran)
+            text_result,
+            lambda text: io_bind(
+                optimization_environment.run_command(command, text), ran
+            ),
         )
 
     def with_config(config_exists: bool) -> IO[Result[None, TranslationError]]:
@@ -1307,26 +1385,33 @@ def translate_chapter(
     return io_bind(path_exists(target), with_target)
 
 
-def translate_all(env: Env, version: str) -> IO[Result[None, TranslationError]]:
+def translate_all(
+    optimization_environment: OptimizationEnvironment, version: str
+) -> IO[Result[None, TranslationError]]:
     def step(_: None, chapter: str) -> IO[Result[None, TranslationError]]:
-        return translate_chapter(env, version, chapter)
+        return translate_chapter(optimization_environment, version, chapter)
 
-    return fold_io(env.chapters, step, Ok(None))
+    return fold_io(optimization_environment.chapters, step, Ok(None))
 
 
 def translate_versions(
-    env: Env, first: str, second: str
+    optimization_environment: OptimizationEnvironment, first: str, second: str
 ) -> IO[Result[None, TranslationError]]:
     def after_first(
         initial: Result[None, TranslationError],
     ) -> IO[Result[None, TranslationError]]:
-        return result_bind_io(initial, lambda _: translate_all(env, second))
+        return result_bind_io(
+            initial, lambda _: translate_all(optimization_environment, second)
+        )
 
-    return io_bind(translate_all(env, first), after_first)
+    return io_bind(translate_all(optimization_environment, first), after_first)
 
 
 def round_texts(
-    env: Env, incumbent_version: str, candidate_version: str, chapter: str
+    optimization_environment: OptimizationEnvironment,
+    incumbent_version: str,
+    candidate_version: str,
+    chapter: str,
 ) -> IO[Result[tuple[str, str, str], TranslationError]]:
     def with_source(
         source_result: Result[str, TranslationError],
@@ -1350,7 +1435,11 @@ def round_texts(
 
             return io_map(
                 read_text_file(
-                    output_path(env.workdir, candidate_version, chapter),
+                    output_path(
+                        optimization_environment.working_directory,
+                        candidate_version,
+                        chapter,
+                    ),
                     "translation",
                 ),
                 with_right,
@@ -1358,7 +1447,12 @@ def round_texts(
 
         return io_bind(
             read_text_file(
-                output_path(env.workdir, incumbent_version, chapter), "translation"
+                output_path(
+                    optimization_environment.working_directory,
+                    incumbent_version,
+                    chapter,
+                ),
+                "translation",
             ),
             with_left,
         )
@@ -1394,9 +1488,13 @@ def judging_json(judging: ChapterJudging) -> str:
 
 
 def judge_step(
-    env: Env, round_no: int, incumbent_version: str
+    optimization_environment: OptimizationEnvironment,
+    round_no: int,
+    incumbent_version: str,
 ) -> Callable[[Tally, str], IO[Result[Tally, TranslationError]]]:
-    judge_dir = directory(env.workdir, "judge")
+    judge_directory = join_directory(
+        optimization_environment.working_directory, "judge"
+    )
 
     def step(tally: Tally, chapter: str) -> IO[Result[Tally, TranslationError]]:
         def with_judging(
@@ -1406,7 +1504,7 @@ def judge_step(
                 return io_result(judging_result)
             judging = judging_result.value
             verdict_path = os.path.join(
-                judge_dir, "r%d-%s.json" % (round_no, text_stem(chapter))
+                judge_directory, "r%d-%s.json" % (round_no, text_stem(chapter))
             )
 
             def with_verdict(
@@ -1429,7 +1527,7 @@ def judge_step(
             source_text, incumbent_text, candidate_text = texts.value
             return io_bind(
                 judge_chapter(
-                    env,
+                    optimization_environment,
                     source_text,
                     incumbent_text,
                     candidate_text,
@@ -1440,7 +1538,10 @@ def judge_step(
             )
 
         return io_bind(
-            round_texts(env, incumbent_version, "v%d" % round_no, chapter), with_texts
+            round_texts(
+                optimization_environment, incumbent_version, "v%d" % round_no, chapter
+            ),
+            with_texts,
         )
 
     return step
@@ -1454,17 +1555,24 @@ def append_jsonl(
     )
 
 
-def announce(env: Env, lines: tuple[str, ...]) -> IO[None]:
+def announce(
+    optimization_environment: OptimizationEnvironment, lines: tuple[str, ...]
+) -> IO[None]:
     def run_all(index: int) -> IO[None]:
         if index >= len(lines):
             return io_pure(None)
-        return io_bind(env.say(lines[index]), lambda _: run_all(index + 1))
+        return io_bind(
+            optimization_environment.say(lines[index]), lambda _: run_all(index + 1)
+        )
 
     return run_all(0)
 
 
 def record_duplicate(
-    env: Env, state: RunState, inputs: RoundInputs, duplicate: str
+    optimization_environment: OptimizationEnvironment,
+    state: RunState,
+    inputs: RoundInputs,
+    duplicate: str,
 ) -> IO[Result[RunState, TranslationError]]:
     candidate_version = "v%d" % state.round_no
     ledger_entry = {
@@ -1503,7 +1611,7 @@ def record_duplicate(
                 return Ok(next_state)
 
             return io_map(
-                env.say(
+                optimization_environment.say(
                     "round %d: candidate duplicates %s; skipping judging"
                     % (state.round_no, duplicate)
                 ),
@@ -1512,7 +1620,9 @@ def record_duplicate(
 
         return io_bind(
             append_jsonl(
-                os.path.join(env.workdir, "history.jsonl"),
+                os.path.join(
+                    optimization_environment.working_directory, "history.jsonl"
+                ),
                 history_entry,
                 "history",
             ),
@@ -1520,20 +1630,28 @@ def record_duplicate(
         )
 
     return io_bind(
-        append_jsonl(os.path.join(env.workdir, "ledger.jsonl"), ledger_entry, "ledger"),
+        append_jsonl(
+            os.path.join(optimization_environment.working_directory, "ledger.jsonl"),
+            ledger_entry,
+            "ledger",
+        ),
         with_ledger,
     )
 
 
 def conclude_round(
-    env: Env, state: RunState, inputs: RoundInputs, tally: Tally
+    optimization_environment: OptimizationEnvironment,
+    state: RunState,
+    inputs: RoundInputs,
+    tally: Tally,
 ) -> IO[Result[RunState, TranslationError]]:
-    majority = len(env.chapters) // 2 + 1
+    majority = len(optimization_environment.chapters) // 2 + 1
     promoted = tally.candidate >= majority
     decision = "promoted" if promoted else "kept"
     candidate_version = "v%d" % state.round_no
     feedback_path = os.path.join(
-        directory(env.workdir, "judge"), "r%d-feedback.txt" % state.round_no
+        join_directory(optimization_environment.working_directory, "judge"),
+        "r%d-feedback.txt" % state.round_no,
     )
     ledger_entry = {
         "round": state.round_no,
@@ -1582,7 +1700,7 @@ def conclude_round(
                     return Ok(next_state)
 
                 return io_map(
-                    env.say(
+                    optimization_environment.say(
                         "round %d: candidate %s wins %d, incumbent %s wins %d, "
                         "ties %d -> %s"
                         % (
@@ -1600,7 +1718,9 @@ def conclude_round(
 
             return io_bind(
                 append_jsonl(
-                    os.path.join(env.workdir, "history.jsonl"),
+                    os.path.join(
+                        optimization_environment.working_directory, "history.jsonl"
+                    ),
                     history_entry,
                     "history",
                 ),
@@ -1609,7 +1729,11 @@ def conclude_round(
 
         return io_bind(
             append_jsonl(
-                os.path.join(env.workdir, "ledger.jsonl"), ledger_entry, "ledger"
+                os.path.join(
+                    optimization_environment.working_directory, "ledger.jsonl"
+                ),
+                ledger_entry,
+                "ledger",
             ),
             with_ledger,
         )
@@ -1621,18 +1745,20 @@ def conclude_round(
 
 
 def contest(
-    env: Env, state: RunState, inputs: RoundInputs
+    optimization_environment: OptimizationEnvironment,
+    state: RunState,
+    inputs: RoundInputs,
 ) -> IO[Result[RunState, TranslationError]]:
     candidate_version = "v%d" % state.round_no
 
     def with_tally(tally: Tally) -> IO[Result[RunState, TranslationError]]:
-        return conclude_round(env, state, inputs, tally)
+        return conclude_round(optimization_environment, state, inputs, tally)
 
     def judged(_: None) -> IO[Result[RunState, TranslationError]]:
         return io_bind(
             fold_io(
-                env.chapters,
-                judge_step(env, state.round_no, state.incumbent),
+                optimization_environment.chapters,
+                judge_step(optimization_environment, state.round_no, state.incumbent),
                 Ok(Tally()),
             ),
             chain_result(with_tally),
@@ -1640,28 +1766,38 @@ def contest(
 
     def seeded(_: str) -> IO[Result[RunState, TranslationError]]:
         return io_bind(
-            translate_versions(env, state.incumbent, candidate_version),
+            translate_versions(
+                optimization_environment, state.incumbent, candidate_version
+            ),
             chain_result(judged),
         )
 
     return io_bind(
-        prepare_version(env, state.incumbent, inputs.current_prompt),
+        prepare_version(
+            optimization_environment, state.incumbent, inputs.current_prompt
+        ),
         chain_result(seeded),
     )
 
 
-def evaluate_round(env: Env, state: RunState) -> IO[Result[RunState, TranslationError]]:
-    prompts_dir = directory(env.workdir, "prompts")
+def evaluate_round(
+    optimization_environment: OptimizationEnvironment, state: RunState
+) -> IO[Result[RunState, TranslationError]]:
+    prompts_directory = join_directory(
+        optimization_environment.working_directory, "prompts"
+    )
     candidate_version = "v%d" % state.round_no
-    history_text = history_window(state.history, env.options.history_depth)
+    history_text = history_window(
+        state.history, optimization_environment.options.history_depth
+    )
 
     def decided(
         inputs: RoundInputs, seen: dict[str, str]
     ) -> IO[Result[RunState, TranslationError]]:
         duplicate = seen.get(inputs.digest)
         if duplicate is not None and duplicate != candidate_version:
-            return record_duplicate(env, state, inputs, duplicate)
-        return contest(env, state, inputs)
+            return record_duplicate(optimization_environment, state, inputs, duplicate)
+        return contest(optimization_environment, state, inputs)
 
     def with_seen(
         inputs: RoundInputs,
@@ -1676,7 +1812,9 @@ def evaluate_round(env: Env, state: RunState) -> IO[Result[RunState, Translation
     ) -> Callable[[str], IO[Result[RunState, TranslationError]]]:
         def taken(digest: str) -> IO[Result[RunState, TranslationError]]:
             inputs = RoundInputs(current, candidate, digest)
-            return io_bind(seen_digests(env), chain_result(with_seen(inputs)))
+            return io_bind(
+                seen_digests(optimization_environment), chain_result(with_seen(inputs))
+            )
 
         return taken
 
@@ -1685,7 +1823,7 @@ def evaluate_round(env: Env, state: RunState) -> IO[Result[RunState, Translation
     ) -> Callable[[str], IO[Result[RunState, TranslationError]]]:
         def taken(candidate: str) -> IO[Result[RunState, TranslationError]]:
             return io_bind(
-                prepare_version(env, candidate_version, candidate),
+                prepare_version(optimization_environment, candidate_version, candidate),
                 chain_result(with_digest(current, candidate)),
             )
 
@@ -1696,18 +1834,23 @@ def evaluate_round(env: Env, state: RunState) -> IO[Result[RunState, Translation
     ) -> Callable[[str], IO[Result[RunState, TranslationError]]]:
         def taken(critiques: str) -> IO[Result[RunState, TranslationError]]:
             return io_bind(
-                candidate_prompt(env, state, current, history_text, critiques),
+                candidate_prompt(
+                    optimization_environment, state, current, history_text, critiques
+                ),
                 chain_result(with_candidate(current)),
             )
 
         return taken
 
     def with_current(current: str) -> IO[Result[RunState, TranslationError]]:
-        return io_bind(previous_critiques(env, state.round_no), with_critiques(current))
+        return io_bind(
+            previous_critiques(optimization_environment, state.round_no),
+            with_critiques(current),
+        )
 
     return io_bind(
         read_text_file(
-            os.path.join(prompts_dir, state.incumbent + ".txt"),
+            os.path.join(prompts_directory, state.incumbent + ".txt"),
             "current instruction",
         ),
         chain_result(with_current),
@@ -1715,7 +1858,7 @@ def evaluate_round(env: Env, state: RunState) -> IO[Result[RunState, Translation
 
 
 def next_round(
-    env: Env,
+    optimization_environment: OptimizationEnvironment,
 ) -> Callable[
     [Result[RunState, TranslationError]], IO[Result[RunState, TranslationError]]
 ]:
@@ -1724,15 +1867,17 @@ def next_round(
     ) -> IO[Result[RunState, TranslationError]]:
         if isinstance(outcome, Err):
             return io_result(outcome)
-        return run_rounds(env, outcome.value)
+        return run_rounds(optimization_environment, outcome.value)
 
     return continue_
 
 
-def run_rounds(env: Env, state: RunState) -> IO[Result[RunState, TranslationError]]:
-    stopping = state.stall >= env.options.stall
+def run_rounds(
+    optimization_environment: OptimizationEnvironment, state: RunState
+) -> IO[Result[RunState, TranslationError]]:
+    stopping = state.stall >= optimization_environment.options.stall
 
-    if state.round_no > env.options.rounds or stopping:
+    if state.round_no > optimization_environment.options.rounds or stopping:
 
         def stopped(_: None) -> Result[RunState, TranslationError]:
             return Ok(state)
@@ -1740,26 +1885,42 @@ def run_rounds(env: Env, state: RunState) -> IO[Result[RunState, TranslationErro
         return io_bind(
             io_when_unit(
                 stopping,
-                env.say(
+                optimization_environment.say(
                     "stopping: %d consecutive rounds without promotion" % state.stall
                 ),
             ),
             lambda _: io_result(stopped(None)),
         )
 
-    return io_bind(evaluate_round(env, state), next_round(env))
+    return io_bind(
+        evaluate_round(optimization_environment, state),
+        next_round(optimization_environment),
+    )
 
 
-def read_prompt(env: Env, version: str) -> IO[Result[str, TranslationError]]:
+def read_prompt(
+    optimization_environment: OptimizationEnvironment, version: str
+) -> IO[Result[str, TranslationError]]:
     return read_text_file(
-        os.path.join(directory(env.workdir, "prompts"), version + ".txt"),
+        os.path.join(
+            join_directory(optimization_environment.working_directory, "prompts"),
+            version + ".txt",
+        ),
         "instruction file",
     )
 
 
-def holdout_check(env: Env, final_version: str) -> IO[Result[None, TranslationError]]:
-    holdout = os.path.join(directory(env.workdir, "chapters"), "holdout.txt")
-    report_path = os.path.join(directory(env.workdir, "judge"), "holdout.json")
+def holdout_check(
+    optimization_environment: OptimizationEnvironment, final_version: str
+) -> IO[Result[None, TranslationError]]:
+    holdout = os.path.join(
+        join_directory(optimization_environment.working_directory, "chapters"),
+        "holdout.txt",
+    )
+    report_path = os.path.join(
+        join_directory(optimization_environment.working_directory, "judge"),
+        "holdout.json",
+    )
 
     def with_judging(
         judging_result: Result[ChapterJudging, TranslationError],
@@ -1787,7 +1948,7 @@ def holdout_check(env: Env, final_version: str) -> IO[Result[None, TranslationEr
 
             return io_map(
                 announce(
-                    env,
+                    optimization_environment,
                     (
                         "holdout verdict: %s wins" % winner,
                         "seed shown as A: %s" % judging.first.get("critique"),
@@ -1813,7 +1974,14 @@ def holdout_check(env: Env, final_version: str) -> IO[Result[None, TranslationEr
             return io_result(texts)
         source_text, seed_output, final_output = texts.value
         return io_bind(
-            judge_chapter(env, source_text, seed_output, final_output, "holdout", 0),
+            judge_chapter(
+                optimization_environment,
+                source_text,
+                seed_output,
+                final_output,
+                "holdout",
+                0,
+            ),
             with_judging,
         )
 
@@ -1822,29 +1990,42 @@ def holdout_check(env: Env, final_version: str) -> IO[Result[None, TranslationEr
             seed_outcome: Result[None, TranslationError],
         ) -> IO[Result[None, TranslationError]]:
             return result_bind_io(
-                seed_outcome, lambda _: translate_chapter(env, final_version, holdout)
+                seed_outcome,
+                lambda _: translate_chapter(
+                    optimization_environment, final_version, holdout
+                ),
             )
 
-        return io_bind(translate_chapter(env, SEED_VERSION, holdout), after_seed)
+        return io_bind(
+            translate_chapter(optimization_environment, SEED_VERSION, holdout),
+            after_seed,
+        )
 
     def with_final_text(final_text: str) -> IO[Result[str, TranslationError]]:
         def prepare_final(_: str) -> IO[Result[str, TranslationError]]:
-            return prepare_version(env, final_version, final_text)
+            return prepare_version(optimization_environment, final_version, final_text)
 
         def with_seed_text(seed_text: str) -> IO[Result[str, TranslationError]]:
             return io_bind(
-                prepare_version(env, SEED_VERSION, seed_text),
+                prepare_version(optimization_environment, SEED_VERSION, seed_text),
                 chain_result(prepare_final),
             )
 
-        return io_bind(read_prompt(env, SEED_VERSION), chain_result(with_seed_text))
+        return io_bind(
+            read_prompt(optimization_environment, SEED_VERSION),
+            chain_result(with_seed_text),
+        )
 
     def seeded(_: None) -> IO[Result[str, TranslationError]]:
-        return io_bind(read_prompt(env, final_version), chain_result(with_final_text))
+        return io_bind(
+            read_prompt(optimization_environment, final_version),
+            chain_result(with_final_text),
+        )
 
     def judging(_: None) -> IO[Result[None, TranslationError]]:
         return io_bind(
-            round_texts(env, SEED_VERSION, final_version, holdout), with_texts
+            round_texts(optimization_environment, SEED_VERSION, final_version, holdout),
+            with_texts,
         )
 
     def prepared(_: str) -> IO[Result[None, TranslationError]]:
@@ -1854,7 +2035,9 @@ def holdout_check(env: Env, final_version: str) -> IO[Result[None, TranslationEr
 
 
 def compare_step(
-    env: Env, versions: tuple[str, str], verdict_dir: str
+    optimization_environment: OptimizationEnvironment,
+    versions: tuple[str, str],
+    verdict_directory: str,
 ) -> Callable[[CompareTally, str], IO[Result[CompareTally, TranslationError]]]:
     def step(
         tally: CompareTally, chapter: str
@@ -1873,7 +2056,7 @@ def compare_step(
                 "a_as_a": judging.first,
                 "b_as_a": judging.second,
             }
-            verdict_path = os.path.join(verdict_dir, text_stem(chapter) + ".json")
+            verdict_path = os.path.join(verdict_directory, text_stem(chapter) + ".json")
 
             def with_verdict(
                 written: Result[None, TranslationError],
@@ -1886,7 +2069,7 @@ def compare_step(
 
                 return io_map(
                     announce(
-                        env,
+                        optimization_environment,
                         (
                             "chapter %s: %s wins" % (os.path.basename(chapter), label),
                             "  A shown as A: %s" % judging.first.get("critique"),
@@ -1913,7 +2096,7 @@ def compare_step(
             source_text, left, right = texts.value
             return io_bind(
                 judge_chapter(
-                    env,
+                    optimization_environment,
                     source_text,
                     left,
                     right,
@@ -1925,18 +2108,27 @@ def compare_step(
 
         def judging(_: None) -> IO[Result[CompareTally, TranslationError]]:
             return io_bind(
-                round_texts(env, versions[0], versions[1], chapter), with_texts
+                round_texts(
+                    optimization_environment, versions[0], versions[1], chapter
+                ),
+                with_texts,
             )
 
         def after_first(
             first: Result[None, TranslationError],
         ) -> IO[Result[None, TranslationError]]:
             return result_bind_io(
-                first, lambda _: translate_chapter(env, versions[1], chapter)
+                first,
+                lambda _: translate_chapter(
+                    optimization_environment, versions[1], chapter
+                ),
             )
 
         def translated(_: None) -> IO[Result[None, TranslationError]]:
-            return io_bind(translate_chapter(env, versions[0], chapter), after_first)
+            return io_bind(
+                translate_chapter(optimization_environment, versions[0], chapter),
+                after_first,
+            )
 
         return io_bind(translated(None), chain_result(judging))
 
@@ -1947,37 +2139,40 @@ def record_compare(
     tally: CompareTally, entry: dict[str, Any], side: str
 ) -> CompareTally:
     if side == "a":
-        return replace(tally, a=tally.a + 1, rounds=tally.rounds + (entry,))
+        return replace(tally, a_wins=tally.a_wins + 1, rounds=tally.rounds + (entry,))
     if side == "b":
-        return replace(tally, b=tally.b + 1, rounds=tally.rounds + (entry,))
+        return replace(tally, b_wins=tally.b_wins + 1, rounds=tally.rounds + (entry,))
     return replace(tally, tie=tally.tie + 1, rounds=tally.rounds + (entry,))
 
 
 def summarize_compare(
-    env: Env,
+    optimization_environment: OptimizationEnvironment,
     versions: tuple[str, str],
-    verdict_dir: str,
+    verdict_directory: str,
     paths: tuple[str, str],
 ) -> Callable[[CompareTally], IO[Result[None, TranslationError]]]:
     def finish(tally: CompareTally) -> IO[Result[None, TranslationError]]:
-        majority = len(env.chapters) // 2 + 1
-        if tally.a >= majority:
+        majority = len(optimization_environment.chapters) // 2 + 1
+        if tally.a_wins >= majority:
             winner = "A"
-        elif tally.b >= majority:
+        elif tally.b_wins >= majority:
             winner = "B"
         else:
             winner = "tie"
         summary = {
             "prompt_a": {"path": paths[0], "version": versions[0]},
             "prompt_b": {"path": paths[1], "version": versions[1]},
-            "chapters": tuple(os.path.basename(chapter) for chapter in env.chapters),
-            "a_wins": tally.a,
-            "b_wins": tally.b,
+            "chapters": tuple(
+                os.path.basename(chapter)
+                for chapter in optimization_environment.chapters
+            ),
+            "a_wins": tally.a_wins,
+            "b_wins": tally.b_wins,
             "ties": tally.tie,
             "winner": winner,
             "rounds": tally.rounds,
         }
-        summary_path = os.path.join(verdict_dir, "summary.json")
+        summary_path = os.path.join(verdict_directory, "summary.json")
 
         def with_summary(
             written: Result[None, TranslationError],
@@ -1990,10 +2185,10 @@ def summarize_compare(
 
             return io_map(
                 announce(
-                    env,
+                    optimization_environment,
                     (
                         "compare verdict: A wins %d, B wins %d, ties %d -> %s wins"
-                        % (tally.a, tally.b, tally.tie, winner),
+                        % (tally.a_wins, tally.b_wins, tally.tie, winner),
                         "summary: %s" % summary_path,
                     ),
                 ),
@@ -2013,23 +2208,30 @@ def summarize_compare(
 
 
 def begin_compare(
-    env: Env, paths: tuple[str, str], prompts: tuple[str, str]
+    optimization_environment: OptimizationEnvironment,
+    paths: tuple[str, str],
+    prompts: tuple[str, str],
 ) -> IO[Result[None, TranslationError]]:
     versions = ("cmp-" + hash_text(prompts[0]), "cmp-" + hash_text(prompts[1]))
     if versions[0] == versions[1]:
         return io_result(fail_config("both prompts are identical (%s)" % paths[0]))
-    verdict_dir = os.path.join(
-        env.workdir, "judge", "compare", versions[0] + "-vs-" + versions[1]
+    verdict_directory = os.path.join(
+        optimization_environment.working_directory,
+        "judge",
+        "compare",
+        versions[0] + "-vs-" + versions[1],
     )
 
     def summarize(tally: CompareTally) -> IO[Result[None, TranslationError]]:
-        return summarize_compare(env, versions, verdict_dir, paths)(tally)
+        return summarize_compare(
+            optimization_environment, versions, verdict_directory, paths
+        )(tally)
 
     def judged(_: str) -> IO[Result[None, TranslationError]]:
         return io_bind(
             fold_io(
-                env.chapters,
-                compare_step(env, versions, verdict_dir),
+                optimization_environment.chapters,
+                compare_step(optimization_environment, versions, verdict_directory),
                 Ok(CompareTally()),
             ),
             chain_result(summarize),
@@ -2037,22 +2239,26 @@ def begin_compare(
 
     def with_second(_: str) -> IO[Result[None, TranslationError]]:
         return io_bind(
-            prepare_version(env, versions[1], prompts[1]), chain_result(judged)
+            prepare_version(optimization_environment, versions[1], prompts[1]),
+            chain_result(judged),
         )
 
     def with_first(_: None) -> IO[Result[None, TranslationError]]:
         return io_bind(
-            prepare_version(env, versions[0], prompts[0]), chain_result(with_second)
+            prepare_version(optimization_environment, versions[0], prompts[0]),
+            chain_result(with_second),
         )
 
     def with_directory(_: None) -> IO[Result[None, TranslationError]]:
         return with_first(None)
 
-    return io_bind(ensure_directory(verdict_dir), with_directory)
+    return io_bind(ensure_directory(verdict_directory), with_directory)
 
 
-def run_compare(env: Env) -> IO[Result[None, TranslationError]]:
-    options = env.options
+def run_compare(
+    optimization_environment: OptimizationEnvironment,
+) -> IO[Result[None, TranslationError]]:
+    options = optimization_environment.options
     selected = options.compare or ("", "")
     paths = (os.path.abspath(selected[0]), os.path.abspath(selected[1]))
 
@@ -2063,7 +2269,7 @@ def run_compare(env: Env) -> IO[Result[None, TranslationError]]:
         left: str,
     ) -> Callable[[str], IO[Result[None, TranslationError]]]:
         def taken(right: str) -> IO[Result[None, TranslationError]]:
-            return begin_compare(env, paths, (left, right))
+            return begin_compare(optimization_environment, paths, (left, right))
 
         return taken
 
@@ -2165,12 +2371,12 @@ def repo_run(command: tuple[str, ...], stdin_text: str) -> IO[ProcessResult]:
     return run_process(command, stdin_text, REPO_ROOT)
 
 
-def base_env(
+def base_environment(
     api: Api,
     base: BaseConfig,
-    workdir: str,
+    working_directory: str,
     judge_template: str,
-    l2l_cmd: tuple[str, ...],
+    l2l_command: tuple[str, ...],
     options: Options,
     environment: Mapping[str, str],
     sleep: Sleep,
@@ -2178,17 +2384,17 @@ def base_env(
     warn: Reporter,
     run_command: RunCommand,
     opener: OpenEndpoint | None,
-) -> Env:
-    return Env(
+) -> OptimizationEnvironment:
+    return OptimizationEnvironment(
         options=options,
         base=base,
         api=api,
-        workdir=workdir,
+        working_directory=working_directory,
         environment=environment,
         chapters=(),
         judge_template=judge_template,
         rewrite_template="",
-        l2l_cmd=l2l_cmd,
+        l2l_command=l2l_command,
         opener=(
             curl_endpoint(api, environment, options.call_timeout)
             if opener is None
@@ -2202,15 +2408,16 @@ def base_env(
 
 
 def finish_evolution(
-    env: Env, rounds: IO[Result[RunState, TranslationError]]
+    optimization_environment: OptimizationEnvironment,
+    rounds: IO[Result[RunState, TranslationError]],
 ) -> IO[int]:
     def failed(error: TranslationError) -> IO[int]:
-        return report_failure(env.warn, error)
+        return report_failure(optimization_environment.warn, error)
 
     def with_holdout(final: str) -> Callable[[None], IO[int]]:
         def done(_: None) -> IO[int]:
             return io_bind(
-                holdout_check(env, final),
+                holdout_check(optimization_environment, final),
                 lambda outcome: result_either(outcome, lambda _: io_pure(0), failed),
             )
 
@@ -2221,7 +2428,7 @@ def finish_evolution(
             def holdout_or_stop(_: None) -> IO[int]:
                 if final == SEED_VERSION:
                     return io_bind(
-                        env.say(
+                        optimization_environment.say(
                             "no challenger was ever promoted; holdout check skipped"
                         ),
                         done_zero,
@@ -2229,11 +2436,16 @@ def finish_evolution(
                 return with_holdout(final)(None)
 
             return io_bind(
-                env.say(
+                optimization_environment.say(
                     "final incumbent: %s (%s)"
                     % (
                         final,
-                        os.path.join(directory(env.workdir, "prompts"), final + ".txt"),
+                        os.path.join(
+                            join_directory(
+                                optimization_environment.working_directory, "prompts"
+                            ),
+                            final + ".txt",
+                        ),
                     )
                 ),
                 holdout_or_stop,
@@ -2249,49 +2461,67 @@ def finish_evolution(
     return io_bind(rounds, with_final)
 
 
-def run_and_finish(env: Env) -> IO[int]:
+def run_and_finish(optimization_environment: OptimizationEnvironment) -> IO[int]:
     def resumed(
         loaded: tuple[tuple[dict[str, Any], ...], ...],
     ) -> IO[int]:
         ledger, history = loaded[0], loaded[1]
-        return finish_evolution(env, run_rounds(env, resume_state(history, ledger)))
+        return finish_evolution(
+            optimization_environment,
+            run_rounds(optimization_environment, resume_state(history, ledger)),
+        )
 
     return io_bind(
         io_sequence(
             (
-                read_jsonl(os.path.join(env.workdir, "ledger.jsonl")),
-                read_jsonl(os.path.join(env.workdir, "history.jsonl")),
+                read_jsonl(
+                    os.path.join(
+                        optimization_environment.working_directory, "ledger.jsonl"
+                    )
+                ),
+                read_jsonl(
+                    os.path.join(
+                        optimization_environment.working_directory, "history.jsonl"
+                    )
+                ),
             )
         ),
         resumed,
     )
 
 
-def announce_plan(env: Env) -> IO[int]:
-    per_round = 1 + len(env.chapters) + 2 * len(env.chapters)
+def announce_plan(optimization_environment: OptimizationEnvironment) -> IO[int]:
+    per_round = (
+        1
+        + len(optimization_environment.chapters)
+        + 2 * len(optimization_environment.chapters)
+    )
 
     def done(_: None) -> IO[int]:
-        return run_and_finish(env)
+        return run_and_finish(optimization_environment)
 
     return io_bind(
-        env.say(
+        optimization_environment.say(
             "workdir: %s; chapters: %d; up to %d endpoint calls per round "
             "(1 rewrite + up to %d translations + %d judgments)"
             % (
-                env.workdir,
-                len(env.chapters),
+                optimization_environment.working_directory,
+                len(optimization_environment.chapters),
                 per_round,
-                len(env.chapters),
-                2 * len(env.chapters),
+                len(optimization_environment.chapters),
+                2 * len(optimization_environment.chapters),
             )
         ),
         done,
     )
 
 
-def start_rounds(env: Env) -> IO[int]:
-    seed_path = os.path.join(directory(env.workdir, "prompts"), SEED_VERSION + ".txt")
-    seed = env.options.seed or ""
+def start_rounds(optimization_environment: OptimizationEnvironment) -> IO[int]:
+    seed_path = os.path.join(
+        join_directory(optimization_environment.working_directory, "prompts"),
+        SEED_VERSION + ".txt",
+    )
+    seed = optimization_environment.options.seed or ""
 
     def with_copied(copied: bool) -> Result[None, TranslationError]:
         return (
@@ -2309,31 +2539,31 @@ def start_rounds(env: Env) -> IO[int]:
     def with_seed_present(present: bool) -> IO[int]:
         if not present:
             return report_failure(
-                env.warn,
+                optimization_environment.warn,
                 ConfigError(
                     "missing %s (pass --seed PATH once to create it)" % seed_path
                 ),
             )
-        return announce_plan(env)
+        return announce_plan(optimization_environment)
 
     def seeded(outcome: Result[None, TranslationError]) -> IO[int]:
         if isinstance(outcome, Err):
-            return report_failure(env.warn, outcome.error)
+            return report_failure(optimization_environment.warn, outcome.error)
         return io_bind(path_exists(seed_path), with_seed_present)
 
     return io_bind(io_bind(path_exists(seed_path), copy_seed), seeded)
 
 
-def run_compare_mode(env: Env) -> IO[int]:
+def run_compare_mode(optimization_environment: OptimizationEnvironment) -> IO[int]:
     def failed(error: TranslationError) -> IO[int]:
-        return report_failure(env.warn, error)
+        return report_failure(optimization_environment.warn, error)
 
     def with_chapters(
         chapters_result: Result[tuple[str, ...], TranslationError],
     ) -> IO[int]:
         if isinstance(chapters_result, Err):
             return failed(chapters_result.error)
-        located = replace(env, chapters=chapters_result.value)
+        located = replace(optimization_environment, chapters=chapters_result.value)
 
         def announced(_: None) -> IO[int]:
             return io_bind(
@@ -2341,7 +2571,7 @@ def run_compare_mode(env: Env) -> IO[int]:
                     "workdir: %s; comparing over %d chapter(s); up to %d endpoint "
                     "calls (2 translations + 2 judgments per chapter)"
                     % (
-                        located.workdir,
+                        located.working_directory,
                         len(located.chapters),
                         4 * len(located.chapters),
                     )
@@ -2356,16 +2586,21 @@ def run_compare_mode(env: Env) -> IO[int]:
 
         return announced(None)
 
-    return io_bind(compare_chapters(env.workdir, env.options), with_chapters)
+    return io_bind(
+        compare_chapters(
+            optimization_environment.working_directory, optimization_environment.options
+        ),
+        with_chapters,
+    )
 
 
-def run_evolution_mode(env: Env) -> IO[int]:
+def run_evolution_mode(optimization_environment: OptimizationEnvironment) -> IO[int]:
     def with_chapters(
         chapters_result: Result[tuple[str, ...], TranslationError],
     ) -> IO[int]:
         if isinstance(chapters_result, Err):
-            return report_failure(env.warn, chapters_result.error)
-        located = replace(env, chapters=chapters_result.value)
+            return report_failure(optimization_environment.warn, chapters_result.error)
+        located = replace(optimization_environment, chapters=chapters_result.value)
 
         def with_rewrite(template_result: Result[str, TranslationError]) -> IO[int]:
             if isinstance(template_result, Err):
@@ -2387,23 +2622,28 @@ def run_evolution_mode(env: Env) -> IO[int]:
             with_rewrite,
         )
 
-    return io_bind(discover_chapters(directory(env.workdir, "chapters")), with_chapters)
+    return io_bind(
+        discover_chapters(
+            join_directory(optimization_environment.working_directory, "chapters")
+        ),
+        with_chapters,
+    )
 
 
-def valid_workdir(options: Options) -> IO[Result[str, TranslationError]]:
-    workdir = os.path.abspath(options.workdir)
+def valid_working_directory(options: Options) -> IO[Result[str, TranslationError]]:
+    working_directory = os.path.abspath(options.working_directory)
 
-    def with_is_dir(is_dir: bool) -> Result[str, TranslationError]:
-        if is_dir:
-            return Ok(workdir)
-        return fail_config("workdir is not a directory: %s" % workdir)
+    def with_is_directory(is_directory: bool) -> Result[str, TranslationError]:
+        if is_directory:
+            return Ok(working_directory)
+        return fail_config("workdir is not a directory: %s" % working_directory)
 
     def with_exists(exists: bool) -> IO[Result[str, TranslationError]]:
         if not exists:
-            return io_result(Ok(workdir))
-        return io_map(path_is_dir(workdir), with_is_dir)
+            return io_result(Ok(working_directory))
+        return io_map(path_is_directory(working_directory), with_is_directory)
 
-    return io_bind(path_exists(workdir), with_exists)
+    return io_bind(path_exists(working_directory), with_exists)
 
 
 def enter_workspace(
@@ -2416,10 +2656,10 @@ def enter_workspace(
     say: Reporter,
     warn: Reporter,
 ) -> IO[int]:
-    def entered(workdir_result: Result[str, TranslationError]) -> IO[int]:
-        if isinstance(workdir_result, Err):
-            return report_failure(warn, workdir_result.error)
-        workdir = workdir_result.value
+    def entered(working_directory_result: Result[str, TranslationError]) -> IO[int]:
+        if isinstance(working_directory_result, Err):
+            return report_failure(warn, working_directory_result.error)
+        working_directory = working_directory_result.value
 
         def with_directories(_: None) -> IO[int]:
             return load_workspace(
@@ -2431,15 +2671,15 @@ def enter_workspace(
                 opener,
                 say,
                 warn,
-                workdir,
+                working_directory,
             )
 
         def ensure_rest(_: None) -> IO[None]:
             return io_and_then(
-                ensure_directory(directory(workdir, "prompts")),
+                ensure_directory(join_directory(working_directory, "prompts")),
                 io_and_then(
-                    ensure_directory(directory(workdir, "judge")),
-                    ensure_directory(directory(workdir, "cache")),
+                    ensure_directory(join_directory(working_directory, "judge")),
+                    ensure_directory(join_directory(working_directory, "cache")),
                 ),
             )
 
@@ -2447,10 +2687,11 @@ def enter_workspace(
             return ensure_rest(None)
 
         return io_bind(
-            io_and_then(ensure_directory(workdir), with_root(None)), with_directories
+            io_and_then(ensure_directory(working_directory), with_root(None)),
+            with_directories,
         )
 
-    return io_bind(valid_workdir(options), entered)
+    return io_bind(valid_working_directory(options), entered)
 
 
 def load_workspace(
@@ -2462,10 +2703,10 @@ def load_workspace(
     opener: OpenEndpoint | None,
     say: Reporter,
     warn: Reporter,
-    workdir: str,
+    working_directory: str,
 ) -> IO[int]:
     base_path = os.path.abspath(options.base_config)
-    l2l_cmd = (
+    l2l_command = (
         (python_executable, "-m", "l2l")
         if options.l2l is None
         else tuple(shlex.split(options.l2l))
@@ -2485,12 +2726,12 @@ def load_workspace(
             )
             if failure is not None:
                 return report_failure(warn, failure)
-            env = base_env(
+            optimization_environment = base_environment(
                 api,
                 base,
-                workdir,
+                working_directory,
                 judge_result.value,
-                l2l_cmd,
+                l2l_command,
                 options,
                 environment,
                 sleep,
@@ -2500,9 +2741,9 @@ def load_workspace(
                 opener,
             )
             return (
-                run_compare_mode(env)
+                run_compare_mode(optimization_environment)
                 if options.compare is not None
-                else run_evolution_mode(env)
+                else run_evolution_mode(optimization_environment)
             )
 
         return taken

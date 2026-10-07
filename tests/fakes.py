@@ -16,14 +16,14 @@ from l2l.monads import (
     IO,
     NOTHING,
     Ok,
-    Ref,
+    Reference,
     Result,
     fold_io,
     io_result,
-    modify_ref,
-    new_ref,
-    read_ref,
-    write_ref,
+    modify_reference,
+    new_reference,
+    read_reference,
+    write_reference,
 )
 from l2l.settings import Config, Context, build_settings
 
@@ -34,13 +34,13 @@ def no_sleep(seconds: float) -> None:
 
 def make_sleep_recorder() -> tuple[Sleep, Callable[[], tuple[float, ...]]]:
     initial: tuple[float, ...] = ()
-    recorded: Ref[tuple[float, ...]] = new_ref(initial).run()
+    recorded: Reference[tuple[float, ...]] = new_reference(initial).run()
 
     def sleep(seconds: float) -> None:
-        modify_ref(recorded, lambda current: current + (seconds,)).run()
+        modify_reference(recorded, lambda current: current + (seconds,)).run()
 
     def sleeps() -> tuple[float, ...]:
-        return read_ref(recorded).run()
+        return read_reference(recorded).run()
 
     return sleep, sleeps
 
@@ -174,7 +174,7 @@ def make_context(
     open_http: Callable[[Any, float], Result[Any, TranslationError]],
     cache_directory: str = "",
     use_cache: bool = False,
-    max_tokens: int = 100000,
+    maximum_tokens: int = 100000,
     log: RunLog | None = None,
     stream: bool | None = None,
     verbose: bool = False,
@@ -186,10 +186,10 @@ def make_context(
         api_key="key",
         model="model-x",
         timeout=10.0,
-        max_tokens=max_tokens,
-        params={},
+        maximum_tokens=maximum_tokens,
+        parameters={},
     )
-    write_ref(console.verbose, verbose).run()
+    write_reference(console.verbose, verbose).run()
     return Context(
         config=config,
         settings=build_settings(),

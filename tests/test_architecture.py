@@ -28,14 +28,14 @@ LEVELS: dict[str, int] = {
 
 IO_EDGES = frozenset({"cli", "monads"})
 
-MUTABLE_DATACLASS_EXEMPT = frozenset({("monads", "Ref")})
+MUTABLE_DATACLASS_EXEMPT = frozenset({("monads", "Reference")})
 
 MUTATION_ASSIGNMENT_ALLOWLIST = frozenset(
     {
         ("monads", "io_memoize"),
-        ("monads", "modify_ref"),
-        ("monads", "modify_ref_with"),
-        ("monads", "write_ref"),
+        ("monads", "modify_reference"),
+        ("monads", "modify_reference_with"),
+        ("monads", "write_reference"),
     }
 )
 
@@ -106,7 +106,13 @@ MUTATING_METHODS = frozenset(
 )
 
 REF_HELPERS = frozenset(
-    {"new_ref", "read_ref", "write_ref", "modify_ref", "modify_ref_with"}
+    {
+        "new_reference",
+        "read_reference",
+        "write_reference",
+        "modify_reference",
+        "modify_reference_with",
+    }
 )
 
 THIRD_PARTY_ROOTS = frozenset({"l2l", "pycurl"})
@@ -427,7 +433,7 @@ def test_mutation_assignments_only_where_sanctioned() -> None:
     ]
     assert not problems, (
         "attribute/subscript assignments outside the allowlist: %s; "
-        "derive new values instead (`replace`, tuples, `Ref` in `monads`)"
+        "derive new values instead (`replace`, tuples, `Reference` in `monads`)"
         % "; ".join(problems)
     )
 
@@ -577,7 +583,7 @@ def test_ref_operations_compose_into_io() -> None:
             if isinstance(node, ast.Expr) and is_ref_helper_call(node.value)
         ]
         assert not discarded, (
-            "%s:%d discards a Ref operation result; compose it with "
+            "%s:%d discards a Reference operation result; compose it with "
             "io_bind/io_and_then instead" % (name, discarded[0])
         )
 
@@ -593,7 +599,7 @@ def test_ref_operations_compose_into_io() -> None:
             and is_ref_helper_call(node.func.value)
         ]
         assert not executed, (
-            "%s:%d executes a Ref operation outside the IO edges; hand the "
+            "%s:%d executes a Reference operation outside the IO edges; hand the "
             "IO value to a combinator instead" % (name, executed[0])
         )
 

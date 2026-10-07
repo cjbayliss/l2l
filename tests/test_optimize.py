@@ -32,7 +32,7 @@ from tools.optimize import (
     order_outcome,
     output_path,
     parse_arguments,
-    parse_params,
+    parse_parameters,
     record_compare,
     record_judging,
     render_config,
@@ -65,14 +65,14 @@ BASE_TOML = (
 
 
 def workspace(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
-    workdir = tmp_path / "lab"
-    chapters_dir = workdir / "chapters"
-    chapters_dir.mkdir(parents=True)
+    working_directory = tmp_path / "lab"
+    chapters_directory = working_directory / "chapters"
+    chapters_directory.mkdir(parents=True)
     for name in ("ch1", "ch2"):
-        (chapters_dir / (name + ".txt")).write_text(
+        (chapters_directory / (name + ".txt")).write_text(
             "source of " + name, encoding="utf-8"
         )
-    (chapters_dir / "holdout.txt").write_text("holdout source", encoding="utf-8")
+    (chapters_directory / "holdout.txt").write_text("holdout source", encoding="utf-8")
     base = tmp_path / "base.toml"
     base.write_text(BASE_TOML, encoding="utf-8")
     seed = tmp_path / "seed.txt"
@@ -81,12 +81,12 @@ def workspace(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     judge_template.write_text(JUDGE_TEMPLATE, encoding="utf-8")
     rewrite_template = tmp_path / "rewrite.txt"
     rewrite_template.write_text(REWRITE_TEMPLATE, encoding="utf-8")
-    return workdir, base, seed, judge_template, rewrite_template
+    return working_directory, base, seed, judge_template, rewrite_template
 
 
 def evolve_argv(
     tmp_path: Path,
-    workdir: Path,
+    working_directory: Path,
     base: Path,
     seed: Path,
     judge_template: Path,
@@ -96,7 +96,7 @@ def evolve_argv(
         "--base-config",
         str(base),
         "--workdir",
-        str(workdir),
+        str(working_directory),
         "--seed",
         str(seed),
         "--rounds",
@@ -124,9 +124,13 @@ def version_marker(text: str) -> int:
 
 
 def pick_winner(content: str) -> str:
-    a_text = content.split(" A: ", 1)[1].split(" ||| B: ", 1)[0]
-    b_text = content.split(" ||| B: ", 1)[1].split(" judge", 1)[0]
-    return "A" if version_marker(a_text) >= version_marker(b_text) else "B"
+    candidate_a_text = content.split(" A: ", 1)[1].split(" ||| B: ", 1)[0]
+    candidate_b_text = content.split(" ||| B: ", 1)[1].split(" judge", 1)[0]
+    return (
+        "A"
+        if version_marker(candidate_a_text) >= version_marker(candidate_b_text)
+        else "B"
+    )
 
 
 def verdict_body(reply: str) -> EndpointReply:
@@ -345,12 +349,12 @@ def test_select_chapters_variants() -> None:
 
 
 def test_parse_params_variants() -> None:
-    assert parse_params(None, "judge-params") == Ok({})
-    ok = parse_params('{"a": 1}', "judge-params")
+    assert parse_parameters(None, "judge-params") == Ok({})
+    ok = parse_parameters('{"a": 1}', "judge-params")
     assert isinstance(ok, Ok)
     assert ok.value == {"a": 1}
-    assert isinstance(parse_params("{", "judge-params"), Err)
-    not_object = parse_params("[1]", "judge-params")
+    assert isinstance(parse_parameters("{", "judge-params"), Err)
+    not_object = parse_parameters("[1]", "judge-params")
     assert isinstance(not_object, Err)
     assert "--judge-params must be a JSON object" in describe(not_object.error)
 
@@ -416,16 +420,20 @@ def test_record_judging_and_compare_tallies() -> None:
         "b",
     )
     compared = record_compare(compared, {"chapter": "ch3"}, "tie")
-    assert (compared.a, compared.b, compared.tie) == (1, 1, 1)
+    assert (compared.a_wins, compared.b_wins, compared.tie) == (1, 1, 1)
     _ = judging
 
 
 def test_evolution_flow_promotes_and_checks_holdout(tmp_path: Path) -> None:
-    workdir, base, seed, judge_template, rewrite_template = workspace(tmp_path)
+    working_directory, base, seed, judge_template, rewrite_template = workspace(
+        tmp_path
+    )
     calls: list[Mapping[str, Any]] = []
     launched: list[tuple[str, ...]] = []
     code, stdout, _stderr = run_main(
-        evolve_argv(tmp_path, workdir, base, seed, judge_template, rewrite_template),
+        evolve_argv(
+            tmp_path, working_directory, base, seed, judge_template, rewrite_template
+        ),
         tmp_path,
         make_launcher(launched),
         make_opener(calls),
@@ -437,21 +445,23 @@ def test_evolution_flow_promotes_and_checks_holdout(tmp_path: Path) -> None:
     )
     assert "final incumbent: v1" in stdout
     assert "holdout verdict: v1 wins" in stdout
-    ledger = (workdir / "ledger.jsonl").read_text(encoding="utf-8")
+    ledger = (working_directory / "ledger.jsonl").read_text(encoding="utf-8")
     assert json.loads(ledger.splitlines()[0])["decision"] == "promoted"
-    history = (workdir / "history.jsonl").read_text(encoding="utf-8")
+    history = (working_directory / "history.jsonl").read_text(encoding="utf-8")
     assert json.loads(history.splitlines()[0])["version"] == "v1"
-    assert (workdir / "prompts" / "v1.txt").read_text(encoding="utf-8") == (
+    assert (working_directory / "prompts" / "v1.txt").read_text(encoding="utf-8") == (
         "better: seed instruction"
     )
-    assert (workdir / "out" / "v1" / "ch1.en.txt").read_text(encoding="utf-8") == (
-        "T[v1] source of ch1"
-    )
+    assert (working_directory / "out" / "v1" / "ch1.en.txt").read_text(
+        encoding="utf-8"
+    ) == ("T[v1] source of ch1")
     verdict = json.loads(
-        (workdir / "judge" / "r1-ch1.json").read_text(encoding="utf-8")
+        (working_directory / "judge" / "r1-ch1.json").read_text(encoding="utf-8")
     )
     assert verdict["outcome"] == "candidate"
-    feedback = (workdir / "judge" / "r1-feedback.txt").read_text(encoding="utf-8")
+    feedback = (working_directory / "judge" / "r1-feedback.txt").read_text(
+        encoding="utf-8"
+    )
     assert "ch1.txt [incumbent shown as A]" in feedback
     judge_calls = [call for call in calls if call["model"] == "judge-x"]
     assert len(judge_calls) == 6
@@ -459,7 +469,9 @@ def test_evolution_flow_promotes_and_checks_holdout(tmp_path: Path) -> None:
 
 
 def test_compare_flow_writes_summary(tmp_path: Path) -> None:
-    workdir, base, _seed, judge_template, _rewrite_template = workspace(tmp_path)
+    working_directory, base, _seed, judge_template, _rewrite_template = workspace(
+        tmp_path
+    )
     prompt_a = tmp_path / "a.txt"
     prompt_a.write_text("alpha instruction", encoding="utf-8")
     prompt_b = tmp_path / "b.txt"
@@ -472,8 +484,8 @@ def test_compare_flow_writes_summary(tmp_path: Path) -> None:
     ) -> IO[Result[EndpointReply, TranslationError]]:
         calls.append(payload)
         content = str(payload["messages"][0]["content"])
-        a_text = content.split(" A: ", 1)[1].split(" ||| B: ", 1)[0]
-        winner = "A" if first_version in a_text else "B"
+        candidate_a_text = content.split(" A: ", 1)[1].split(" ||| B: ", 1)[0]
+        winner = "A" if first_version in candidate_a_text else "B"
         return io_result(
             Ok(
                 verdict_body(
@@ -487,7 +499,7 @@ def test_compare_flow_writes_summary(tmp_path: Path) -> None:
             "--base-config",
             str(base),
             "--workdir",
-            str(workdir),
+            str(working_directory),
             "--compare",
             str(prompt_a),
             str(prompt_b),
@@ -506,7 +518,7 @@ def test_compare_flow_writes_summary(tmp_path: Path) -> None:
     assert "chapter ch1.txt: A wins" in stdout
     assert "compare verdict: A wins 1, B wins 0, ties 0 -> A wins" in stdout
     assert "comparing over 1 chapter(s)" in stdout
-    summaries = list((workdir / "judge" / "compare").glob("*/summary.json"))
+    summaries = list((working_directory / "judge" / "compare").glob("*/summary.json"))
     assert len(summaries) == 1
     summary = json.loads(summaries[0].read_text(encoding="utf-8"))
     assert summary["winner"] == "A"
@@ -518,10 +530,14 @@ def test_compare_flow_writes_summary(tmp_path: Path) -> None:
 
 
 def test_duplicate_candidate_skips_judging(tmp_path: Path) -> None:
-    workdir, base, seed, judge_template, rewrite_template = workspace(tmp_path)
+    working_directory, base, seed, judge_template, rewrite_template = workspace(
+        tmp_path
+    )
     calls: list[Mapping[str, Any]] = []
     code, stdout, _stderr = run_main(
-        evolve_argv(tmp_path, workdir, base, seed, judge_template, rewrite_template),
+        evolve_argv(
+            tmp_path, working_directory, base, seed, judge_template, rewrite_template
+        ),
         tmp_path,
         make_launcher([]),
         make_opener(calls, rewrite_reply="same"),
@@ -529,7 +545,7 @@ def test_duplicate_candidate_skips_judging(tmp_path: Path) -> None:
     assert code == 0
     assert "candidate duplicates v0; skipping judging" in stdout
     assert "no challenger was ever promoted; holdout check skipped" in stdout
-    ledger = (workdir / "ledger.jsonl").read_text(encoding="utf-8")
+    ledger = (working_directory / "ledger.jsonl").read_text(encoding="utf-8")
     entry = json.loads(ledger.splitlines()[0])
     assert entry["decision"] == "duplicate"
     assert entry["duplicate_of"] == "v0"
@@ -538,11 +554,15 @@ def test_duplicate_candidate_skips_judging(tmp_path: Path) -> None:
 
 
 def test_unusable_judge_replies_record_error_verdict(tmp_path: Path) -> None:
-    workdir, base, seed, judge_template, rewrite_template = workspace(tmp_path)
+    working_directory, base, seed, judge_template, rewrite_template = workspace(
+        tmp_path
+    )
     stdout = io.StringIO()
     stderr = io.StringIO()
     code = main(
-        evolve_argv(tmp_path, workdir, base, seed, judge_template, rewrite_template),
+        evolve_argv(
+            tmp_path, working_directory, base, seed, judge_template, rewrite_template
+        ),
         environment_for(tmp_path),
         stdout,
         stderr,
@@ -555,12 +575,16 @@ def test_unusable_judge_replies_record_error_verdict(tmp_path: Path) -> None:
     assert "unusable verdict" in stderr.getvalue()
     assert "giving up; recording an error verdict" in stderr.getvalue()
     assert "ties 2 -> kept" in stdout.getvalue()
-    ledger_lines = (workdir / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    ledger_lines = (
+        (working_directory / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    )
     assert json.loads(ledger_lines[0])["decision"] == "kept"
 
 
 def test_transport_failures_retry_then_fail(tmp_path: Path) -> None:
-    workdir, base, seed, judge_template, rewrite_template = workspace(tmp_path)
+    working_directory, base, seed, judge_template, rewrite_template = workspace(
+        tmp_path
+    )
     attempts: list[Mapping[str, Any]] = []
 
     def failing_opener(
@@ -571,7 +595,9 @@ def test_transport_failures_retry_then_fail(tmp_path: Path) -> None:
 
     sleeps: list[float] = []
     code = main(
-        evolve_argv(tmp_path, workdir, base, seed, judge_template, rewrite_template),
+        evolve_argv(
+            tmp_path, working_directory, base, seed, judge_template, rewrite_template
+        ),
         environment_for(tmp_path),
         io.StringIO(),
         io.StringIO(),
@@ -586,26 +612,32 @@ def test_transport_failures_retry_then_fail(tmp_path: Path) -> None:
 
 
 def test_l2l_failure_writes_error_log(tmp_path: Path) -> None:
-    workdir, base, seed, judge_template, rewrite_template = workspace(tmp_path)
+    working_directory, base, seed, judge_template, rewrite_template = workspace(
+        tmp_path
+    )
     code, _stdout, stderr = run_main(
-        evolve_argv(tmp_path, workdir, base, seed, judge_template, rewrite_template),
+        evolve_argv(
+            tmp_path, working_directory, base, seed, judge_template, rewrite_template
+        ),
         tmp_path,
         make_launcher([], returncode=2),
         make_opener([]),
     )
     assert code == 1
     assert "l2l exited with 2" in stderr
-    error_log = workdir / "out" / "v0" / "ch1.en.txt.err"
+    error_log = working_directory / "out" / "v0" / "ch1.en.txt.err"
     assert error_log.read_text(encoding="utf-8") == "boom"
 
 
 def test_missing_seed_fails_with_hint(tmp_path: Path) -> None:
-    workdir, base, _seed, judge_template, rewrite_template = workspace(tmp_path)
+    working_directory, base, _seed, judge_template, rewrite_template = workspace(
+        tmp_path
+    )
     argv = [
         "--base-config",
         str(base),
         "--workdir",
-        str(workdir),
+        str(working_directory),
         "--rounds",
         "1",
         "--judge-model",
@@ -623,10 +655,14 @@ def test_missing_seed_fails_with_hint(tmp_path: Path) -> None:
 
 
 def test_template_token_validation(tmp_path: Path) -> None:
-    workdir, base, seed, _judge_template, rewrite_template = workspace(tmp_path)
+    working_directory, base, seed, _judge_template, rewrite_template = workspace(
+        tmp_path
+    )
     broken = tmp_path / "judge-broken.txt"
     broken.write_text("no tokens here", encoding="utf-8")
-    argv = evolve_argv(tmp_path, workdir, base, seed, broken, rewrite_template)
+    argv = evolve_argv(
+        tmp_path, working_directory, base, seed, broken, rewrite_template
+    )
     code, _stdout, stderr = run_main(argv, tmp_path, make_launcher([]), make_opener([]))
     assert code == 1
     assert "judge template" in stderr
@@ -684,7 +720,7 @@ def test_resolve_api_reports_missing_credentials(tmp_path: Path) -> None:
 
     options = Options(
         base_config="b",
-        workdir=str(tmp_path),
+        working_directory=str(tmp_path),
         seed=None,
         rounds=1,
         stall=1,
@@ -704,7 +740,7 @@ def test_resolve_api_reports_missing_credentials(tmp_path: Path) -> None:
         rewrite_temperature=0.0,
         translator_temperature=0.0,
         call_timeout=1.0,
-        call_max_tokens=10,
+        call_maximum_tokens=10,
         history_depth=1,
         judge_extra={},
         rewrite_extra={},

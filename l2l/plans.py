@@ -31,8 +31,8 @@ from l2l.text import (
 )
 
 
-def verbose_log(ctx: Context, message: str) -> IO[None]:
-    return ctx.console.log_verbose(message)
+def verbose_log(run_context: Context, message: str) -> IO[None]:
+    return run_context.console.log_verbose(message)
 
 
 def transient(error: TranslationError) -> bool:
@@ -143,7 +143,7 @@ def build_pass_user(
     return "\n\n".join(part for part in parts if part)
 
 
-def plan_info_message(
+def plan_information_message(
     pass_definition: PassDefinition,
     work_paragraphs: tuple[str, ...],
     work_groups: tuple[tuple[str, ...], ...],
@@ -250,12 +250,12 @@ class UnitCall:
     key: str
     trailing_separator: str
     model: str
-    params: Mapping[str, Any]
+    parameters: Mapping[str, Any]
 
 
 def build_unit_call(
     model: str,
-    params: Mapping[str, Any],
+    parameters: Mapping[str, Any],
     salt: str,
     separators: tuple[str, ...],
     index: int,
@@ -276,26 +276,26 @@ def build_unit_call(
             model,
             salt,
             work_chunk,
-            overrides=params,
+            overrides=parameters,
             context="\n\n".join(context),
         ),
         trailing_separator=(
             separators[separator_index] if separator_index < len(separators) else ""
         ),
         model=model,
-        params=params,
+        parameters=parameters,
     )
 
 
 def plan_unit_calls(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     plan: tuple[tuple[str, ...], ...],
     work_groups: tuple[tuple[str, ...], ...],
     trailing_separators: tuple[str, ...],
     retry_attempt: int = 0,
 ) -> tuple[UnitCall, ...]:
-    model, params = resolve_call_settings(ctx.config, pass_definition)
+    model, parameters = resolve_call_settings(run_context.config, pass_definition)
     flat_plan = tuple(chain.from_iterable(plan))
     plan_starts = tuple(accumulate(map(len, plan), initial=0))
 
@@ -317,7 +317,7 @@ def plan_unit_calls(
     def call(index: int, work_group: tuple[str, ...]) -> UnitCall:
         return build_unit_call(
             model,
-            params,
+            parameters,
             pass_salt(pass_definition, retry_attempt),
             trailing_separators,
             index,
@@ -332,14 +332,14 @@ def plan_unit_calls(
 
 
 def plan_retranslation_calls(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     source_paragraphs: tuple[str, ...],
     work_paragraphs: tuple[str, ...],
     flagged: tuple[int, ...],
     separators: tuple[str, ...],
 ) -> tuple[UnitCall, ...]:
-    model, params = resolve_call_settings(ctx.config, pass_definition)
+    model, parameters = resolve_call_settings(run_context.config, pass_definition)
 
     def neighbour_context(index: int) -> tuple[str, ...]:
         context: tuple[str, ...] = ()
@@ -354,7 +354,7 @@ def plan_retranslation_calls(
     def call(position: int, index: int) -> UnitCall:
         return build_unit_call(
             model,
-            params,
+            parameters,
             pass_salt(pass_definition),
             separators,
             position,
@@ -369,12 +369,14 @@ def plan_retranslation_calls(
 
 
 def plan_report(
-    ctx: Context,
+    run_context: Context,
     pass_definitions: tuple[PassDefinition, ...],
     text: str,
 ) -> str:
     source_paragraphs, separators = split_paragraphs(text)
-    chunk_plan = make_chunks(source_paragraphs, ctx.settings.chunk_budget_tokens)
+    chunk_plan = make_chunks(
+        source_paragraphs, run_context.settings.chunk_budget_tokens
+    )
     paragraph_plan = tuple((paragraph,) for paragraph in source_paragraphs)
 
     def report_pass(indexed: tuple[int, PassDefinition]) -> tuple[str, ...]:
@@ -399,10 +401,10 @@ def plan_report(
                     source_paragraphs,
                     plan,
                     pass_definition.name,
-                    ctx.settings.chunk_budget_tokens,
+                    run_context.settings.chunk_budget_tokens,
                 )
                 calls = plan_unit_calls(
-                    ctx,
+                    run_context,
                     pass_definition,
                     plan,
                     work_groups,
@@ -447,8 +449,8 @@ def mask_api_key(api_key: str) -> str:
     return api_key[:4] + "..." + api_key[-2:]
 
 
-def params_text(params: Mapping[str, Any]) -> str:
-    return json.dumps(dict(params), sort_keys=True, ensure_ascii=False, default=str)
+def parameters_text(parameters: Mapping[str, Any]) -> str:
+    return json.dumps(dict(parameters), sort_keys=True, ensure_ascii=False, default=str)
 
 
 def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
@@ -457,9 +459,13 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
         "api.base_url: %s" % config.base_url,
         "api.model: %s" % config.model,
         "api.timeout: %g" % config.timeout,
-        "api.max_tokens: %d" % config.max_tokens,
+        "api.max_tokens: %d" % config.maximum_tokens,
         "api.api_key: %s" % mask_api_key(config.api_key),
-        *(("api.params: %s" % params_text(config.params),) if config.params else ()),
+        *(
+            ("api.params: %s" % parameters_text(config.parameters),)
+            if config.parameters
+            else ()
+        ),
     )
     pass_lines = tuple(
         line
@@ -480,8 +486,8 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
                     len(pass_definition.instruction),
                 ),
                 *(
-                    ("  params: %s" % params_text(pass_definition.params),)
-                    if pass_definition.params
+                    ("  params: %s" % parameters_text(pass_definition.parameters),)
+                    if pass_definition.parameters
                     else ()
                 ),
             )

@@ -29,7 +29,7 @@ from l2l.monads import (
     Maybe,
     Nothing,
     Ok,
-    Ref,
+    Reference,
     Result,
     cons,
     cons_all,
@@ -50,10 +50,10 @@ from l2l.monads import (
     maybe_map,
     maybe_or,
     maybe_to_optional,
-    read_ref,
-    ref_collector,
-    ref_gate,
-    ref_write_when,
+    read_reference,
+    reference_collector,
+    reference_gate,
+    reference_write_when,
     result_bind,
     result_map,
 )
@@ -78,7 +78,7 @@ ReasoningLogger = Callable[[str], IO[None]]
 
 
 def build_chat_payload(
-    model: str, system: str, user: str, params: Mapping[str, Any]
+    model: str, system: str, user: str, parameters: Mapping[str, Any]
 ) -> dict[str, Any]:
     return {
         **{
@@ -88,7 +88,7 @@ def build_chat_payload(
                 {"role": "user", "content": user},
             ),
         },
-        **{key: value for key, value in params.items() if value is not None},
+        **{key: value for key, value in parameters.items() if value is not None},
     }
 
 
@@ -448,17 +448,17 @@ def configure_curl(
 
 @dataclass(frozen=True)
 class ResponseTaps:
-    chunks: Ref[tuple[bytes, ...]]
-    header_lines: Ref[tuple[bytes, ...]]
+    chunks: Reference[tuple[bytes, ...]]
+    header_lines: Reference[tuple[bytes, ...]]
     on_header: Callable[[bytes], None]
 
 
 def response_taps() -> ResponseTaps:
-    chunks: Ref[tuple[bytes, ...]] = Ref(())
-    header_lines: Ref[tuple[bytes, ...]] = Ref(())
-    reset_body = ref_write_when(is_status_line, chunks, ())
-    reset_headers = ref_write_when(is_status_line, header_lines, ())
-    collect_header = ref_collector(append_bytes, header_lines)
+    chunks: Reference[tuple[bytes, ...]] = Reference(())
+    header_lines: Reference[tuple[bytes, ...]] = Reference(())
+    reset_body = reference_write_when(is_status_line, chunks, ())
+    reset_headers = reference_write_when(is_status_line, header_lines, ())
+    collect_header = reference_collector(append_bytes, header_lines)
 
     def on_header(line: bytes) -> None:
         reset_body(line)
@@ -507,7 +507,7 @@ class CurlResponse:
             self.timeout,
             self.environment,
             curl,
-            on_chunk=ref_collector(append_bytes, taps.chunks),
+            on_chunk=reference_collector(append_bytes, taps.chunks),
             on_header=taps.on_header,
         )
 
@@ -522,7 +522,8 @@ class CurlResponse:
                 return Ok(b"".join(collected))
 
             return io_map(
-                io_pair(read_ref(taps.chunks), read_ref(taps.header_lines)), decide
+                io_pair(read_reference(taps.chunks), read_reference(taps.header_lines)),
+                decide,
             )
 
         return io_result_bind(curl_transfer(curl, "unreachable"), finish)
@@ -532,14 +533,14 @@ class CurlResponse:
         step: Callable[[Any, bytes], IO[Result[Any, TranslationError]]],
         initial: Result[Any, TranslationError],
     ) -> IO[Result[Any, TranslationError]]:
-        state: Ref[Result[Any, TranslationError]] = Ref(initial)
-        remainder: Ref[bytes] = Ref(b"")
-        error_active: Ref[bool] = Ref(False)
+        state: Reference[Result[Any, TranslationError]] = Reference(initial)
+        remainder: Reference[bytes] = Reference(b"")
+        error_active: Reference[bool] = Reference(False)
         taps = response_taps()
-        gated = ref_gate(error_active, fold_io_push(step, state))
+        gated = reference_gate(error_active, fold_io_push(step, state))
         feed = line_push(gated, remainder)
-        collect = ref_collector(append_bytes, taps.chunks)
-        arm = ref_write_when(is_error_status_line, error_active, True)
+        collect = reference_collector(append_bytes, taps.chunks)
+        arm = reference_write_when(is_error_status_line, error_active, True)
         curl = self.new_curl()
 
         def on_chunk(chunk: bytes) -> None:
@@ -580,14 +581,17 @@ class CurlResponse:
             def drained(_: None) -> IO[Result[Any, TranslationError]]:
                 return io_map(
                     io_pair(
-                        read_ref(state),
-                        io_pair(read_ref(taps.chunks), read_ref(taps.header_lines)),
+                        read_reference(state),
+                        io_pair(
+                            read_reference(taps.chunks),
+                            read_reference(taps.header_lines),
+                        ),
                     ),
                     decide,
                 )
 
             return io_and_then(
-                io_map(read_ref(remainder), emit_remainder), drained(None)
+                io_map(read_reference(remainder), emit_remainder), drained(None)
             )
 
         return io_result_bind(curl_transfer(curl, "interrupted"), finish)
@@ -603,20 +607,20 @@ def curl_open(
 
 
 def verbose_retry_log(
-    ctx: Context, retry_number: int, retries: int, wait: float
+    run_context: Context, retry_number: int, retries: int, wait: float
 ) -> IO[None]:
-    return ctx.console.log_verbose(
+    return run_context.console.log_verbose(
         "l2l: transient failure; retry %d/%d in %.1fs" % (retry_number, retries, wait)
     )
 
 
 def with_retries[T](
-    ctx: Context, attempt: Callable[[], IO[Result[T, TranslationError]]]
+    run_context: Context, attempt: Callable[[], IO[Result[T, TranslationError]]]
 ) -> IO[Result[T, TranslationError]]:
     delays = plan_backoff(
-        ctx.settings.retry_base_delay,
-        ctx.settings.retry_cap,
-        ctx.settings.retry_attempts,
+        run_context.settings.retry_base_delay,
+        run_context.settings.retry_cap,
+        run_context.settings.retry_attempts,
     )
 
     def attempt_at(index: int) -> IO[Result[T, TranslationError]]:
@@ -632,9 +636,9 @@ def with_retries[T](
 
             wait = retry_delay(failure, delays[index])
             return io_bind(
-                verbose_retry_log(ctx, index + 1, len(delays), wait),
+                verbose_retry_log(run_context, index + 1, len(delays), wait),
                 lambda _: io_and_then(
-                    IO(lambda: ctx.sleep(wait)),
+                    IO(lambda: run_context.sleep(wait)),
                     attempt_at(index + 1),
                 ),
             )
@@ -665,10 +669,12 @@ def read_failure(error: Exception) -> Result[tuple[str, Any], TranslationError]:
 
 
 def http_post_json(
-    ctx: Context, payload: Mapping[str, Any]
+    run_context: Context, payload: Mapping[str, Any]
 ) -> IO[Result[dict[str, Any], TranslationError]]:
     def opened() -> Result[Any, TranslationError]:
-        return ctx.open_http(http_request(ctx.config, payload), ctx.config.timeout)
+        return run_context.open_http(
+            http_request(run_context.config, payload), run_context.config.timeout
+        )
 
     def transferred(
         outcome: Result[Any, TranslationError],
@@ -688,21 +694,23 @@ def http_post_json(
     ) -> IO[Result[dict[str, Any], TranslationError]]:
         if isinstance(outcome, Err):
             return io_map(
-                log_error(ctx.log, describe(outcome.error)),
+                log_error(run_context.log, describe(outcome.error)),
                 lambda _: Err(outcome.error),
             )
 
         body, loaded = outcome.value
-        return io_map(log_entry(ctx.log, "RESPONSE", body), lambda _: Ok(loaded))
+        return io_map(
+            log_entry(run_context.log, "RESPONSE", body), lambda _: Ok(loaded)
+        )
 
     return io_bind(
-        io_and_then(log_request(ctx.log, payload), attempt()),
+        io_and_then(log_request(run_context.log, payload), attempt()),
         record,
     )
 
 
 def http_stream(
-    ctx: Context,
+    run_context: Context,
     payload: Mapping[str, Any],
     drive: Callable[[Any], IO[Result[StreamState, TranslationError]]],
 ) -> IO[Result[StreamState, TranslationError]]:
@@ -710,11 +718,11 @@ def http_stream(
         body: Mapping[str, Any], label: str
     ) -> IO[Result[Any, TranslationError]]:
         return io_and_then(
-            log_request(ctx.log, body, label),
+            log_request(run_context.log, body, label),
             IO(
-                lambda: ctx.open_http(
-                    http_request(ctx.config, body, accept="text/event-stream"),
-                    ctx.config.timeout,
+                lambda: run_context.open_http(
+                    http_request(run_context.config, body, accept="text/event-stream"),
+                    run_context.config.timeout,
                 )
             ),
         )
@@ -726,7 +734,7 @@ def http_stream(
             return io_result(opened)
 
         return io_map(
-            log_error(ctx.log, describe(opened.error)),
+            log_error(run_context.log, describe(opened.error)),
             lambda _: opened,
         )
 
@@ -811,23 +819,23 @@ def drive_stream(
 
 
 def collect_stream(
-    ctx: Context, payload: Mapping[str, Any]
+    run_context: Context, payload: Mapping[str, Any]
 ) -> IO[Result[StreamState, TranslationError]]:
     def on_reasoning(text: str) -> IO[None]:
-        return ctx.console.stream_reasoning(text)
+        return run_context.console.stream_reasoning(text)
 
     def note_progress(label: str, count: int) -> IO[None]:
         def continued(_: None) -> IO[None]:
-            return ctx.console.progress(label, count)
+            return run_context.console.progress(label, count)
 
         return (
-            io_and_then(ctx.console.end_raw(), continued(None))
+            io_and_then(run_context.console.end_raw(), continued(None))
             if label == "Working"
-            else ctx.console.progress(label, count)
+            else run_context.console.progress(label, count)
         )
 
     def on_raw_line(raw_line: bytes) -> IO[None]:
-        return run_log_write(ctx.log, raw_line.decode("utf-8", "replace"))
+        return run_log_write(run_context.log, raw_line.decode("utf-8", "replace"))
 
     def conclude(
         outcome: Result[StreamState, TranslationError],
@@ -835,13 +843,13 @@ def collect_stream(
         def recorded(_: None) -> IO[Result[StreamState, TranslationError]]:
             if isinstance(outcome, Err):
                 return io_map(
-                    log_error(ctx.log, describe(outcome.error)),
+                    log_error(run_context.log, describe(outcome.error)),
                     lambda _: outcome,
                 )
 
-            return io_map(run_log_write(ctx.log, "\n"), lambda _: outcome)
+            return io_map(run_log_write(run_context.log, "\n"), lambda _: outcome)
 
-        return io_and_then(ctx.console.end_raw(), recorded(None))
+        return io_and_then(run_context.console.end_raw(), recorded(None))
 
     def handle(error: Exception) -> Result[StreamState, TranslationError]:
         if isinstance(error, TRANSPORT_ERRORS):
@@ -858,7 +866,7 @@ def collect_stream(
             handle,
         )
 
-    return http_stream(ctx, payload, drive)
+    return http_stream(run_context, payload, drive)
 
 
 def log_all(
@@ -870,35 +878,37 @@ def log_all(
     return fold_io(messages, step, Ok(()))
 
 
-def apply_stream_override(ctx: Context, payload: dict[str, Any]) -> dict[str, Any]:
-    if ctx.stream is None:
+def apply_stream_override(
+    run_context: Context, payload: dict[str, Any]
+) -> dict[str, Any]:
+    if run_context.stream is None:
         return payload
 
-    return {**payload, "stream": ctx.stream}
+    return {**payload, "stream": run_context.stream}
 
 
 def chat(
-    ctx: Context,
+    run_context: Context,
     system: str,
     user: str,
     model: str,
-    params: Mapping[str, Any],
+    parameters: Mapping[str, Any],
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
     estimated = estimate_tokens(system) + estimate_tokens(user)
-    if estimated > ctx.config.max_tokens:
-        return io_result(fail_budget(estimated, ctx.config.max_tokens))
+    if estimated > run_context.config.maximum_tokens:
+        return io_result(fail_budget(estimated, run_context.config.maximum_tokens))
 
     payload = apply_stream_override(
-        ctx,
-        build_chat_payload(model, system, user, params),
+        run_context,
+        build_chat_payload(model, system, user, parameters),
     )
     call = with_retries(
-        ctx,
+        run_context,
         lambda: (
-            streamed_call(ctx, payload)
+            streamed_call(run_context, payload)
             if payload.get("stream", True)
-            else plain_call(ctx, payload)
+            else plain_call(run_context, payload)
         ),
     )
 
@@ -906,11 +916,11 @@ def chat(
         reply_result: Result[ChatReply, TranslationError],
     ) -> IO[Result[Translated, TranslationError]]:
         return io_and_then(
-            ctx.console.stop(),
-            conclude_chat(ctx, reply_result, usage, estimated),
+            run_context.console.stop(),
+            conclude_chat(run_context, reply_result, usage, estimated),
         )
 
-    return io_and_then(ctx.console.start("Working"), io_bind(call, stopped))
+    return io_and_then(run_context.console.start("Working"), io_bind(call, stopped))
 
 
 def to_chat_reply(state: StreamState) -> ChatReply:
@@ -925,7 +935,7 @@ def to_chat_reply(state: StreamState) -> ChatReply:
 
 
 def streamed_call(
-    ctx: Context, payload: Mapping[str, Any]
+    run_context: Context, payload: Mapping[str, Any]
 ) -> IO[Result[ChatReply, TranslationError]]:
     full_payload = {
         **payload,
@@ -938,17 +948,17 @@ def streamed_call(
     }
 
     return io_map(
-        collect_stream(ctx, full_payload),
+        collect_stream(run_context, full_payload),
         lambda outcome: result_map(outcome, lambda state: to_chat_reply(state)),
     )
 
 
 def plain_call(
-    ctx: Context,
+    run_context: Context,
     payload: Mapping[str, Any],
 ) -> IO[Result[ChatReply, TranslationError]]:
     return io_bind(
-        http_post_json(ctx, payload),
+        http_post_json(run_context, payload),
         lambda body_result: io_result(result_bind(body_result, plain_reply)),
     )
 
@@ -957,14 +967,14 @@ type RepairOutcome = tuple[str, Usage, bool]
 
 
 def repaired_call(
-    ctx: Context,
+    run_context: Context,
     model: str,
-    params: Mapping[str, Any],
+    parameters: Mapping[str, Any],
     instruction: str,
     initial_user: str,
     validate: Callable[[str], Maybe[str]],
     build_retry_user: Callable[[str, str], str],
-    max_repairs: int,
+    maximum_repairs: int,
     on_repair: Callable[[int, str], IO[None]],
     on_exhausted: Callable[[str, str], IO[None]] | None,
 ) -> Callable[[Usage], IO[Result[RepairOutcome, TranslationError]]]:
@@ -982,7 +992,7 @@ def repaired_call(
             if isinstance(problem, Nothing):
                 return io_result(Ok((reply.text, reply.usage, True)))
 
-            if failed > max_repairs:
+            if failed > maximum_repairs:
                 announce = (
                     on_exhausted(reply.text, problem.value)
                     if on_exhausted is not None
@@ -997,13 +1007,15 @@ def repaired_call(
 
             return io_bind(on_repair(failed, problem.value), continued)
 
-        return io_bind(chat(ctx, instruction, user, model, params, usage), assessed)
+        return io_bind(
+            chat(run_context, instruction, user, model, parameters, usage), assessed
+        )
 
     return lambda usage: attempt(initial_user, 1, usage)
 
 
 def conclude_chat(
-    ctx: Context,
+    run_context: Context,
     reply_result: Result[ChatReply, TranslationError],
     usage: Usage,
     estimated: int,
@@ -1047,6 +1059,6 @@ def conclude_chat(
                 )
             )
 
-        return io_map(log_all(ctx.console, messages), finish)
+        return io_map(log_all(run_context.console, messages), finish)
 
-    return io_bind(read_ref(ctx.console.verbose), conclude)
+    return io_bind(read_reference(run_context.console.verbose), conclude)

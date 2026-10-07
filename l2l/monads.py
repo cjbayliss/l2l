@@ -19,35 +19,37 @@ class Err[E]:
 type Result[T, E] = Ok[T] | Err[E]
 
 
-def result_map[T, E, R](result: Result[T, E], fn: Callable[[T], R]) -> Result[R, E]:
-    return Ok(fn(result.value)) if isinstance(result, Ok) else result
+def result_map[T, E, R](
+    result: Result[T, E], transform: Callable[[T], R]
+) -> Result[R, E]:
+    return Ok(transform(result.value)) if isinstance(result, Ok) else result
 
 
 def result_bind[T, E, R](
-    result: Result[T, E], fn: Callable[[T], Result[R, E]]
+    result: Result[T, E], transform: Callable[[T], Result[R, E]]
 ) -> Result[R, E]:
-    return fn(result.value) if isinstance(result, Ok) else result
+    return transform(result.value) if isinstance(result, Ok) else result
 
 
 def result_bind_io[T, E, R](
-    result: Result[T, E], fn: Callable[[T], IO[Result[R, E]]]
+    result: Result[T, E], transform: Callable[[T], IO[Result[R, E]]]
 ) -> IO[Result[R, E]]:
     if isinstance(result, Err):
         return io_result(result)
 
-    return fn(result.value)
+    return transform(result.value)
 
 
 def result_map_error[T, E, R](
-    result: Result[T, E], fn: Callable[[E], R]
+    result: Result[T, E], transform: Callable[[E], R]
 ) -> Result[T, R]:
-    return result if isinstance(result, Ok) else Err(fn(result.error))
+    return result if isinstance(result, Ok) else Err(transform(result.error))
 
 
 def result_either[T, E, R](
-    result: Result[T, E], on_ok: Callable[[T], R], on_err: Callable[[E], R]
+    result: Result[T, E], on_ok: Callable[[T], R], on_error: Callable[[E], R]
 ) -> R:
-    return on_ok(result.value) if isinstance(result, Ok) else on_err(result.error)
+    return on_ok(result.value) if isinstance(result, Ok) else on_error(result.error)
 
 
 def result_or_else[T, E](result: Result[T, E], fallback: Callable[[], T]) -> T:
@@ -55,7 +57,7 @@ def result_or_else[T, E](result: Result[T, E], fallback: Callable[[], T]) -> T:
 
 
 def result_map2[T, E, R, A](
-    first: Result[T, E], second: Result[R, E], fn: Callable[[T, R], A]
+    first: Result[T, E], second: Result[R, E], transform: Callable[[T, R], A]
 ) -> Result[A, E]:
     if isinstance(first, Err):
         return first
@@ -63,7 +65,7 @@ def result_map2[T, E, R, A](
     if isinstance(second, Err):
         return Err(second.error)
 
-    return Ok(fn(first.value, second.value))
+    return Ok(transform(first.value, second.value))
 
 
 def result_zip[T, E, R](
@@ -137,12 +139,12 @@ def cons_to_tuple[T](items: Cons[T] | None) -> tuple[T, ...]:
 NOTHING: Nothing = Nothing()
 
 
-def maybe_map[T, R](maybe: Maybe[T], fn: Callable[[T], R]) -> Maybe[R]:
-    return Just(fn(maybe.value)) if isinstance(maybe, Just) else maybe
+def maybe_map[T, R](maybe: Maybe[T], transform: Callable[[T], R]) -> Maybe[R]:
+    return Just(transform(maybe.value)) if isinstance(maybe, Just) else maybe
 
 
-def maybe_bind[T, R](maybe: Maybe[T], fn: Callable[[T], Maybe[R]]) -> Maybe[R]:
-    return fn(maybe.value) if isinstance(maybe, Just) else maybe
+def maybe_bind[T, R](maybe: Maybe[T], transform: Callable[[T], Maybe[R]]) -> Maybe[R]:
+    return transform(maybe.value) if isinstance(maybe, Just) else maybe
 
 
 def maybe_either[T, R](
@@ -224,12 +226,12 @@ def io_result[T, E](value: Result[T, E]) -> IO[Result[T, E]]:
     return IO(lambda: value)
 
 
-def io_map[T, R](io_value: IO[T], fn: Callable[[T], R]) -> IO[R]:
-    return IO(lambda: fn(io_value.run()))
+def io_map[T, R](io_value: IO[T], transform: Callable[[T], R]) -> IO[R]:
+    return IO(lambda: transform(io_value.run()))
 
 
-def io_bind[T, R](io_value: IO[T], fn: Callable[[T], IO[R]]) -> IO[R]:
-    return IO(lambda: fn(io_value.run()).run())
+def io_bind[T, R](io_value: IO[T], transform: Callable[[T], IO[R]]) -> IO[R]:
+    return IO(lambda: transform(io_value.run()).run())
 
 
 def io_and_then[T, R](io_value: IO[T], next_value: IO[R]) -> IO[R]:
@@ -332,51 +334,53 @@ def fold_io[S, A, E](
 
 def fold_io_push[A, B, E](
     advance: Callable[[A, B], IO[Result[A, E]]],
-    state: Ref[Result[A, E]],
+    state: Reference[Result[A, E]],
 ) -> Callable[[B], None]:
     def sink(item: B) -> None:
-        outcome = read_ref(state).run()
+        outcome = read_reference(state).run()
         if isinstance(outcome, Ok):
-            write_ref(state, advance(outcome.value, item).run()).run()
+            write_reference(state, advance(outcome.value, item).run()).run()
 
     return sink
 
 
-def ref_collector[A, B](
+def reference_collector[A, B](
     append: Callable[[A, B], A],
-    target: Ref[A],
+    target: Reference[A],
 ) -> Callable[[B], None]:
     def sink(item: B) -> None:
-        write_ref(target, append(read_ref(target).run(), item)).run()
+        write_reference(target, append(read_reference(target).run(), item)).run()
 
     return sink
 
 
-def ref_write_when[E, B](
-    predicate: Callable[[E], bool], target: Ref[B], value: B
+def reference_write_when[E, B](
+    predicate: Callable[[E], bool], target: Reference[B], value: B
 ) -> Callable[[E], None]:
     def consume(item: E) -> None:
         if predicate(item):
-            write_ref(target, value).run()
+            write_reference(target, value).run()
 
     return consume
 
 
-def ref_gate[B](flag: Ref[bool], sink: Callable[[B], None]) -> Callable[[B], None]:
+def reference_gate[B](
+    flag: Reference[bool], sink: Callable[[B], None]
+) -> Callable[[B], None]:
     def consume(item: B) -> None:
-        if not read_ref(flag).run():
+        if not read_reference(flag).run():
             sink(item)
 
     return consume
 
 
 def line_push(
-    sink: Callable[[bytes], None], remainder: Ref[bytes]
+    sink: Callable[[bytes], None], remainder: Reference[bytes]
 ) -> Callable[[bytes], None]:
     def callback(chunk: bytes) -> None:
-        buffer = read_ref(remainder).run() + chunk
+        buffer = read_reference(remainder).run() + chunk
         *lines, rest = buffer.split(b"\n")
-        write_ref(remainder, rest).run()
+        write_reference(remainder, rest).run()
         for line in lines:
             sink(line + b"\n")
 
@@ -384,11 +388,11 @@ def line_push(
 
 
 def io_traverse[S, T, E](
-    items: Iterable[S], fn: Callable[[S], IO[Result[T, E]]]
+    items: Iterable[S], transform: Callable[[S], IO[Result[T, E]]]
 ) -> IO[Result[tuple[T, ...], E]]:
     def step(collected: tuple[T, ...], item: S) -> IO[Result[tuple[T, ...], E]]:
         return io_map(
-            fn(item),
+            transform(item),
             lambda outcome: result_map(outcome, lambda value: collected + (value,)),
         )
 
@@ -396,19 +400,19 @@ def io_traverse[S, T, E](
 
 
 def io_result_map[T, E, R](
-    io_value: IOResult[T, E], fn: Callable[[T], R]
+    io_value: IOResult[T, E], transform: Callable[[T], R]
 ) -> IOResult[R, E]:
-    return io_map(io_value, lambda outcome: result_map(outcome, fn))
+    return io_map(io_value, lambda outcome: result_map(outcome, transform))
 
 
 def io_result_bind[T, E, R](
-    io_value: IOResult[T, E], fn: Callable[[T], IOResult[R, E]]
+    io_value: IOResult[T, E], transform: Callable[[T], IOResult[R, E]]
 ) -> IOResult[R, E]:
-    return io_bind(io_value, lambda outcome: result_bind_io(outcome, fn))
+    return io_bind(io_value, lambda outcome: result_bind_io(outcome, transform))
 
 
 def io_memoize[T](io_value: IO[T]) -> IO[T]:
-    cached: Ref[Maybe[T]] = Ref[Maybe[T]](NOTHING)
+    cached: Reference[Maybe[T]] = Reference[Maybe[T]](NOTHING)
 
     def thunk() -> T:
         with cached.lock:
@@ -423,22 +427,22 @@ def io_memoize[T](io_value: IO[T]) -> IO[T]:
 
 
 @dataclass
-class Ref[T]:
+class Reference[T]:
     value: T
     lock: threading.Lock = field(
         default_factory=threading.Lock, repr=False, compare=False
     )
 
 
-def new_ref[T](value: T) -> IO[Ref[T]]:
-    return IO(lambda: Ref(value))
+def new_reference[T](value: T) -> IO[Reference[T]]:
+    return IO(lambda: Reference(value))
 
 
-def read_ref[T](reference: Ref[T]) -> IO[T]:
+def read_reference[T](reference: Reference[T]) -> IO[T]:
     return IO(lambda: reference.value)
 
 
-def write_ref[T](reference: Ref[T], value: T) -> IO[T]:
+def write_reference[T](reference: Reference[T], value: T) -> IO[T]:
     def thunk() -> T:
         with reference.lock:
             reference.value = value
@@ -447,20 +451,22 @@ def write_ref[T](reference: Ref[T], value: T) -> IO[T]:
     return IO(thunk)
 
 
-def modify_ref[T](reference: Ref[T], fn: Callable[[T], T]) -> IO[T]:
+def modify_reference[T](reference: Reference[T], transform: Callable[[T], T]) -> IO[T]:
     def thunk() -> T:
         with reference.lock:
-            updated = fn(reference.value)
+            updated = transform(reference.value)
             reference.value = updated
             return updated
 
     return IO(thunk)
 
 
-def modify_ref_with[T, R](reference: Ref[T], fn: Callable[[T], tuple[T, R]]) -> IO[R]:
+def modify_reference_with[T, R](
+    reference: Reference[T], transform: Callable[[T], tuple[T, R]]
+) -> IO[R]:
     def thunk() -> R:
         with reference.lock:
-            updated, result = fn(reference.value)
+            updated, result = transform(reference.value)
             reference.value = updated
             return result
 

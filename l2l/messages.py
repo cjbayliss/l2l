@@ -30,7 +30,7 @@ def stage_done_line(
     return "Done."
 
 
-def analysis_info_message(pass_name: str, characters: int, tokens: int) -> str:
+def analysis_information_message(pass_name: str, characters: int, tokens: int) -> str:
     return "l2l: [%s] whole-document analysis (%d characters, ~%d tokens)" % (
         pass_name,
         characters,
@@ -127,7 +127,7 @@ def ascii_llm_message(index: int, total: int) -> str:
     )
 
 
-def retranslate_info_message(pass_name: str, flagged: int, total: int) -> str:
+def retranslate_information_message(pass_name: str, flagged: int, total: int) -> str:
     return "l2l: [%s] %d of %d paragraph(s) look untranslated; retranslating them" % (
         pass_name,
         flagged,

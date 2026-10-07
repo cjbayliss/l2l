@@ -30,7 +30,7 @@ def non_empty(text: str) -> bool:
 
 
 def cache_lookup(
-    ctx: Context,
+    run_context: Context,
     key: str,
     acceptable: Callable[[str], bool] = always_acceptable,
 ) -> IO[Maybe[str]]:
@@ -39,32 +39,37 @@ def cache_lookup(
             cached if isinstance(cached, Just) and acceptable(cached.value) else NOTHING
         )
 
-    if not ctx.use_cache:
+    if not run_context.use_cache:
         return io_pure(NOTHING)
 
-    return io_map(cache_read(ctx.cache_directory, key), checked)
+    return io_map(cache_read(run_context.cache_directory, key), checked)
 
 
-def cache_store(ctx: Context, key: str, value: str, condition: bool) -> IO[None]:
+def cache_store(
+    run_context: Context, key: str, value: str, condition: bool
+) -> IO[None]:
     return io_when_unit(
-        ctx.use_cache and condition, cache_write(ctx.cache_directory, key, value)
+        run_context.use_cache and condition,
+        cache_write(run_context.cache_directory, key, value),
     )
 
 
 def store_translation(
-    ctx: Context,
+    run_context: Context,
     key: str,
     result: Result[Translated, TranslationError],
     acceptable: Callable[[str], bool],
 ) -> IO[Result[Translated, TranslationError]]:
     if isinstance(result, Ok) and acceptable(result.value.text):
-        return io_map(cache_store(ctx, key, result.value.text, True), lambda _: result)
+        return io_map(
+            cache_store(run_context, key, result.value.text, True), lambda _: result
+        )
 
     return io_result(result)
 
 
 def cached_translation(
-    ctx: Context,
+    run_context: Context,
     key: str,
     usage: Usage,
     compute: Callable[[], IO[Result[Translated, TranslationError]]],
@@ -74,7 +79,7 @@ def cached_translation(
     def compute_and_store() -> IO[Result[Translated, TranslationError]]:
         return io_bind(
             compute(),
-            lambda result: store_translation(ctx, key, result, acceptable),
+            lambda result: store_translation(run_context, key, result, acceptable),
         )
 
     def use_cached(cached: Maybe[str]) -> IO[Result[Translated, TranslationError]]:
@@ -83,4 +88,4 @@ def cached_translation(
 
         return compute_and_store()
 
-    return io_bind(cache_lookup(ctx, key, acceptable), use_cached)
+    return io_bind(cache_lookup(run_context, key, acceptable), use_cached)

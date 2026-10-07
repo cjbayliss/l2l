@@ -19,7 +19,7 @@ from l2l.keys import (
     open_tty,
     start_tab_listener,
 )
-from l2l.monads import IO, NOTHING, Just, Ref
+from l2l.monads import IO, NOTHING, Just, Reference
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="requires a POSIX TTY")
 
@@ -179,7 +179,9 @@ def test_start_tab_listener_survives_a_non_tty_fd(
 
 def test_tab_listener_stop_without_start() -> None:
     console, _ = make_console(live=True)
-    listener = TabListener(fd=-1, saved=(), toggle=lambda: None, restored=Ref(True))
+    listener = TabListener(
+        file_descriptor=-1, saved=(), toggle=lambda: None, restored=Reference(True)
+    )
     listener.stop()
 
 
