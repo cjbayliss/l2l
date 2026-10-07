@@ -11,10 +11,13 @@ stop = ["END"]
 
 [[pass]]
 name = "translate"
-ascii = true
-ensure_paragraphs = 2
-retranslate_untranslated = true
-instruction_file = "zh2en.txt"
 mode = "chunk"
+instruction_file = "../prompts/ja2en.txt"
+model = "z-ai/glm-5.3-flash"
 [pass.params]
-reasoning.effort = "high"
+reasoning_effort = "high"
+
+[options]
+ascii = true
+ensure_paragraphs = true
+retranslate_untranslated = true
