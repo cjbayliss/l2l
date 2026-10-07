@@ -1,52 +1,49 @@
-Translate the Chinese web-novel chapter into English.
+Translate the Chinese web-novel chapter into fluent, idiomatic English.
 
 Output contract: reply with the translated text only: no notes,
 comments, or source text. Keep the source's paragraph structure exactly:
 one output paragraph per source paragraph, same order, blank lines
 between; do not merge, split, or reorder. If a chapter title is present,
-render it fully in English at the top: never truncate or add words the
-title does not carry.
+render it fully in English at the top; never truncate it or add words it
+does not carry.
 
 Accuracy:
 
-- Translate every sentence and keep every detail, even minor ones:
-  actions (e.g. she rotates her ankle as she speaks), temporal markers
-  (e.g. 翻过年 = "after the New Year"), and asides. Never summarise,
-  expand, censor, or drop content.
+- Translate every sentence and keep every detail, however minor: actions
+  (e.g. she rotates her ankle as she speaks), temporal markers (翻过年 =
+  "after the New Year"), and asides. Never summarise, expand, censor, or
+  drop content.
 - Before finalising, check every sentence for who does what to whom:
-  attach vocatives to the correct line (a question to Auntie Tian must
-  not read as addressed to Auntie Tian), keep who accuses or rebukes
-  whom exactly as in the source, do not shift subjects between clauses,
-  and do not invent agents or contrasts the source does not state
-  (e.g. 不能让她有机会 is a passive aim, not a promise by the viewpoint
-  character).
+  attach vocatives to the correct line (a question about Auntie Tian
+  must not read as addressed to her), keep who accuses or rebukes whom
+  exactly as in the source, never shift subjects between clauses, and
+  never invent agents or contrasts (不能让她有机会 states an aim, not a
+  promise by the viewpoint character).
 - Resolve possessives and time references explicitly: "a cloak Eric gave
-  her for one of her earlier birthdays": never leave whose birthday
-  ambiguous.
-- Keep one consistent pronoun per character, including non-human
-  speakers (never drift between "it" and "she/he"). Do not flip who does
-  what in contrastive sentences.
-- Render each idiom by its actual meaning with an English phrase of
-  matching force: 玩弄于股掌之中 means the criminal toys with the police
-  at will (not that they blunder into a trap); 杀人诛心 means crushing
-  someone psychologically while defeating them. Use the same rendering
-  for recurring terms on every occurrence, including callbacks
-  (e.g. 粗实 = "rough" when describing skin, "sturdy" only for builds).
+  her for one of her earlier birthdays", never "someone's birthday".
+- One consistent pronoun per character, including non-human speakers
+  (never drift between "it" and "she/he"); never flip who does what in
+  contrastive sentences.
+- Render idioms by meaning with matching force: 玩弄于股掌之中 = the
+  criminal toys with the police at will; 杀人诛心 = crushing someone
+  psychologically while defeating them. Use the same rendering for
+  recurring terms on every occurrence, including callbacks (粗实 =
+  "rough" for skin, "sturdy" only for builds).
 
-Fluency (the incumbent's main weakness):
+Fluency (read the draft aloud and fix any line that sounds like
+translation):
 
-- Read the draft aloud and rewrite any translationese: no doubled words
-  ("steamed buns steamed yesterday" → "the two-grain-flour buns from
-  yesterday"), no stiff comma-spliced constructions ("Beaten into fear,
-  he later learned to submit" → "Beaten into submission"), no opaque
-  literalisms (捡个漏 = "snagged a bargain"; 集邮 about lookalikes =
-  "collecting lookalikes"; 奇怪的 here = "curiously"). Choose the
-  natural English word, not the closest-looking one.
+- No doubled words ("steamed buns steamed yesterday" → "the
+  two-grain-flour buns from yesterday"); no stiff comma-spliced
+  constructions; no opaque literalisms (捡个漏 = "snagged a
+  bargain"; 集邮 about lookalikes = "collecting lookalikes"; 奇怪的 here
+  = "curiously"). Choose the natural English word, not the
+  closest-looking one.
 - Preserve the source's sarcasm and scorn fully: 美梦 with 呵呵 is a
   mocking scoff ("What a pipe dream"), not a softened "lovely dream". Do
   not add tone either: no "gentlemen" for 这三位, no invented flourishes
   like "my foot".
-- No source punctuation artefacts: drop tildes (~), never write "N
+- No source punctuation artefacts: drop tildes (~); never write "N
   times" (use "countless times"); replace separating em-dashes/hyphens
   with commas, colons, semicolons, full stops, or parentheses. Keep
   hyphens only for compounds, number ranges, and interrupted dialogue
