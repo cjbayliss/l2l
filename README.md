@@ -29,7 +29,7 @@ uv tool install git+https://github.com/cjbayliss/l2l
 This installs the `l2l` command. To run it without installing:
 
 ```sh
-python3 -m l2l
+uv run l2l
 ```
 
 ## Usage
