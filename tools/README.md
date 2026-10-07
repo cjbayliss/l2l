@@ -46,7 +46,7 @@ files are pit against each other directly over the chapters.
 3. Run:
 
 ```sh
-python3 tools/optimize.py \
+uv run python3 tools/optimize.py \
     --base-config zh2en.toml \
     --workdir exp-zh2en \
     --seed translate.txt \
@@ -128,7 +128,7 @@ the check is skipped when nothing was ever promoted.
 ### Compare mode
 
 ```sh
-python3 tools/optimize.py \
+uv run python3 tools/optimize.py \
     --base-config zh2en.toml \
     --workdir exp-zh2en \
     --judge-model openai/gpt-5 \
