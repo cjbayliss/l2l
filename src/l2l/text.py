@@ -370,21 +370,40 @@ class SseState:
     pending: tuple[str, ...] = ()
 
 
-def decode_sse_data(data: str) -> dict[str, Any] | None:
-    if not data or data == "[DONE]":
+@dataclass(frozen=True)
+class SseDone:
+    pass
+
+
+@dataclass(frozen=True)
+class SseEvent:
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SseMalformed:
+    data: str
+
+
+type SseFrame = SseDone | SseEvent | SseMalformed | None
+
+
+def decode_sse_data(data: str) -> SseFrame:
+    if not data:
         return None
+
+    if data == "[DONE]":
+        return SseDone()
 
     try:
         loaded = json.loads(data)
     except json.JSONDecodeError:
-        return None
+        return SseMalformed(data)
 
-    return loaded if isinstance(loaded, dict) else None
+    return SseEvent(loaded) if isinstance(loaded, dict) else None
 
 
-def sse_step(
-    state: SseState, raw_line: bytes
-) -> tuple[SseState, dict[str, Any] | None]:
+def sse_step(state: SseState, raw_line: bytes) -> tuple[SseState, SseFrame]:
     line = raw_line.decode("utf-8", "replace").strip("\r\n")
     if line == "":
         if not state.pending:
