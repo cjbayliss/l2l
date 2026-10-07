@@ -16,11 +16,11 @@ code that passes them the first time.
    `io_map`, `io_and_then`, `fold_io`, `io_traverse`, ... and never call
    `.run()` outside `l2l/cli.py` and `tools/optimize.py` (the program
    edges) and `l2l/monads.py` (the combinator runners). Ref operations
-   are never discarded as bare statements and never `.run()` outside
-   the edges — compose them into the IO chain. Raw effect *sources*
+   are never discarded as bare statements and never `.run()` outside the
+   edges — compose them into the IO chain. Raw effect _sources_
    (`Clock`, `Sleep`, terminal probes) are capability callables: inject
-   them as parameters or frozen-field defaults, call them only inside
-   IO thunks, and give any new source an `IO`-returning wrapper (see
+   them as parameters or frozen-field defaults, call them only inside IO
+   thunks, and give any new source an `IO`-returning wrapper (see
    `terminal_size` in `l2l/console.py`).
 
 3. **Errors are values.** Return `Result` (`Ok`/`Err`) or `Maybe`
@@ -35,12 +35,12 @@ code that passes them the first time.
    `Config.params`, `PassDefinition.params`) are wrapped in
    `MappingProxyType` at the point they are stored, and JSON edges
    serialize `dict(mapping)` (`json.dumps` rejects or mis-serializes
-   mapping proxies). Mutable stdlib structures are only materialized
-   at an effect edge when an API demands them (e.g. `termios.tcsetattr`
-   needs a real `list`; store a tuple, convert inside the thunk). Do
-   not call container mutators (`.append`, `.update`, `.sort`, ...) or
-   assign to attributes/subscripts — build new collections instead.
-   The single sanctioned mutable cell is `Ref` (in `monads`), read and
+   mapping proxies). Mutable stdlib structures are only materialized at
+   an effect edge when an API demands them (e.g. `termios.tcsetattr`
+   needs a real `list`; store a tuple, convert inside the thunk). Do not
+   call container mutators (`.append`, `.update`, `.sort`, ...) or
+   assign to attributes/subscripts — build new collections instead. The
+   single sanctioned mutable cell is `Ref` (in `monads`), read and
    written only inside `IO` via
    `new_ref`/`read_ref`/`write_ref`/`modify_ref*`.
 
@@ -54,33 +54,33 @@ code that passes them the first time.
    the modules listed in that file's `EFFECT_IMPORT_ALLOWLIST`; pure
    helpers (`json`, `re`, `hashlib`, `functools`, ...) are unrestricted.
 
-7. **Inject the world.** Take clocks, streams, environment mappings,
-   and other effects as parameters (see `Clock`/`Sleep` in `effects`,
-   `Mapping[str, str]` for the environment) so pure logic stays
-   testable without patching.
+7. **Inject the world.** Take clocks, streams, environment mappings, and
+   other effects as parameters (see `Clock`/`Sleep` in `effects`,
+   `Mapping[str, str]` for the environment) so pure logic stays testable
+   without patching.
 
 8. **House style.** Python 3.14 only (PEP 695 generics, PEP 758
    unparenthesized excepts are fine); standard-library only except the
-   HTTP transport edge, which uses `pycurl` (confined to
-   `l2l/http.py`); printf `%`-style formatting; no comments and no
-   docstrings anywhere in `l2l/` or `tests/` — names must speak for
-   themselves (enforced by `tests/test_architecture.py`).
+   HTTP transport edge, which uses `pycurl` (confined to `l2l/http.py`);
+   printf `%`-style formatting; no comments and no docstrings anywhere
+   in `l2l/` or `tests/` — names must speak for themselves (enforced by
+   `tests/test_architecture.py`).
 
 ## Testing
 
 - Pure functions: plain pytest plus Hypothesis properties
   (`tests/test_properties.py`) where invariants exist.
-- IO composition: fake effects (`tests/fakes.py`), run the composed
-  `IO` once at the end, assert on captured outputs. The optimizer gets
-  the same treatment (`tests/test_optimize.py`): whole runs are driven
+- IO composition: fake effects (`tests/fakes.py`), run the composed `IO`
+  once at the end, assert on captured outputs. The optimizer gets the
+  same treatment (`tests/test_optimize.py`): whole runs are driven
   through fake endpoint openers, l2l subprocesses, and sleep clocks.
 - Architecture: `tests/test_architecture.py` enforces the rules above
   via AST — layering, `IO.run` edges, frozen dataclasses, no
   `global`/`nonlocal`, no mutation outside `Ref`, no `raise`, no
-  comments or docstrings, and effectful imports and builtin calls (`open`, `print`, `eval`, ...)
-  confined to their sanctioned edges. If you add a sanctioned
-  exception, extend the allowlist tables there deliberately — never
-  weaken the checks.
+  comments or docstrings, and effectful imports and builtin calls
+  (`open`, `print`, `eval`, ...) confined to their sanctioned edges. If
+  you add a sanctioned exception, extend the allowlist tables there
+  deliberately — never weaken the checks.
 - The same checks scan `tools/*.py` as a second perimeter:
   `tools/optimize.py` is a program edge (it may call `.run()` and
   `print` only there), its effectful imports (`os`, `sys`, `time`) are
@@ -88,9 +88,8 @@ code that passes them the first time.
   and the `l2l` package (below `l2l.cli`).
 - Additional invariants, also in `tests/test_architecture.py`: `l2l/`
   imports stay stdlib-only plus `pycurl`; `Mapping[...]`-annotated
-  bindings store `MappingProxyType` (or `None`); formatting stays
-  printf `%`-style (no f-strings anywhere in `l2l/`, `tests/`, or
-  `tools/`).
+  bindings store `MappingProxyType` (or `None`); formatting stays printf
+  `%`-style (no f-strings anywhere in `l2l/`, `tests/`, or `tools/`).
 
 ## Before you finish
 
