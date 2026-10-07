@@ -48,9 +48,9 @@ Empty input succeeds without calling the endpoint.
 
 Getting started:
 
-1. Copy `examples/zh2en.toml` (Chinese → English) or
-   `examples/ja2en.toml` (Japanese → English) and the matching `.txt`
-   instruction file.
+1. Copy `docs/configs/zh2en.toml` (Chinese → English) or
+   `docs/configs/ja2en.toml` (Japanese → English) and the matching
+   instruction file from `docs/prompts/`.
 2. Put your API key in the config — or better, in the
    `TRANSLATE_API_KEY` environment variable.
 3. Run `l2l --check-config` to verify your setup, then translate.
@@ -120,7 +120,7 @@ Configuration lives in a TOML file with up to three kinds of table:
 [options]      # global toggles
 ```
 
-A complete example (Chinese fiction to English — see `examples/` for
+A complete example (Chinese fiction to English — see `docs/configs/` for
 working copies):
 
 ```toml
