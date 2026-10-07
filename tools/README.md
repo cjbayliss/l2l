@@ -39,7 +39,7 @@ files are pit against each other directly over the chapters.
 1. Create a workdir with a `chapters/` directory holding at least two
    source `.txt` files plus `holdout.txt`. The holdout stays out of the
    evolution rounds and is translated once, at the end.
-2. Copy an `examples/*.toml` config as the base config. It supplies the
+2. Copy a `docs/configs/*.toml` config as the base config. It supplies the
    `[api]` table and the pass pipeline; the pass whose instruction
    evolves keeps its other settings, while its instruction is replaced
    per version.
