@@ -37,6 +37,9 @@ from l2l.monads import (
 from l2l.text import (
     THINK_CLOSE,
     THINK_OPEN,
+    SseDone,
+    SseEvent,
+    SseMalformed,
     SseState,
     ThinkState,
     Usage,
@@ -173,8 +176,6 @@ def test_ingest_raw_line_ignores_non_dict_chunks() -> None:
         b'data: "x"\n',
         b"\n",
         b": keep-alive\n",
-        b"data: [DONE]\n",
-        b"\n",
     ):
         result = ingest_raw_line(state, raw)
         assert isinstance(result, Ok)
@@ -182,6 +183,7 @@ def test_ingest_raw_line_ignores_non_dict_chunks() -> None:
 
     assert cons_to_tuple(state.contents) == ("keep",)
     assert state.chunk_count == 1
+    assert state.completed is False
 
 
 def test_ingest_raw_line_reports_endpoint_error() -> None:
@@ -200,7 +202,7 @@ def test_sse_step_assembles_frames_on_blank_lines() -> None:
     state, chunk = sse_step(state, b'data: {"choices": []}\n')
     assert chunk is None
     state, chunk = sse_step(state, b"\n")
-    assert chunk == {"choices": []}
+    assert chunk == SseEvent({"choices": []})
 
 
 def test_sse_step_joins_multi_line_data() -> None:
@@ -208,7 +210,7 @@ def test_sse_step_joins_multi_line_data() -> None:
     state, _ = sse_step(state, b'data: {"a": \n')
     state, _ = sse_step(state, b"data:1}\n")
     state, chunk = sse_step(state, b"\r\n")
-    assert chunk == {"a": 1}
+    assert chunk == SseEvent({"a": 1})
 
 
 def test_sse_step_ignores_comments_and_other_fields() -> None:
@@ -222,12 +224,26 @@ def test_sse_step_ignores_blank_lines_without_pending_data() -> None:
     assert sse_step(SseState(), b"\n") == (SseState(), None)
 
 
-def test_sse_step_holds_back_incomplete_json_frames() -> None:
+def test_sse_step_ignores_empty_data_lines() -> None:
+    state, chunk = sse_step(SseState(), b"data:\n")
+    assert chunk is None
+    state, chunk = sse_step(state, b"\n")
+    assert (state, chunk) == (SseState(), None)
+
+
+def test_sse_step_reports_malformed_json_frames() -> None:
     state, chunk = sse_step(SseState(), b"data: not json\n")
     assert chunk is None
     state, chunk = sse_step(state, b"\n")
-    assert chunk is None
+    assert chunk == SseMalformed("not json")
     assert state == SseState()
+
+
+def test_sse_step_marks_the_done_sentinel() -> None:
+    state, chunk = sse_step(SseState(), b"data: [DONE]\n")
+    assert chunk is None
+    state, chunk = sse_step(state, b"\n")
+    assert chunk == SseDone()
 
 
 def test_ingest_raw_line_dispatches_completed_frames() -> None:
@@ -238,6 +254,25 @@ def test_ingest_raw_line_dispatches_completed_frames() -> None:
     result = ingest_raw_line(result.value, b"\n")
     assert isinstance(result, Ok)
     assert result.value.sse == SseState()
+
+
+def test_ingest_raw_line_marks_the_done_sentinel() -> None:
+    state = feed(StreamState(), "keep")
+    result = ingest_raw_line(state, b"data: [DONE]\n")
+    assert isinstance(result, Ok)
+    dispatched = ingest_raw_line(result.value, b"\n")
+    assert isinstance(dispatched, Ok)
+    assert dispatched.value.completed is True
+    assert cons_to_tuple(dispatched.value.contents) == ("keep",)
+
+
+def test_ingest_raw_line_reports_malformed_frames() -> None:
+    state = feed(StreamState(), "keep")
+    result = ingest_raw_line(state, b"data: {broken\n")
+    assert isinstance(result, Ok)
+    dispatched = ingest_raw_line(result.value, b"\n")
+    assert isinstance(dispatched, Err)
+    assert "malformed" in describe(dispatched.error)
 
 
 def test_strip_think_tag() -> None:
@@ -275,6 +310,20 @@ def test_plain_reply_rejects_non_string_content() -> None:
     result = plain_reply(body)
     assert isinstance(result, Err)
     assert "unexpected content type" in describe(result.error)
+
+
+def test_plain_reply_rejects_a_response_truncated_by_length() -> None:
+    body = {"choices": [{"message": {"content": "Partial"}, "finish_reason": "length"}]}
+    result = plain_reply(body)
+    assert isinstance(result, Err)
+    assert "finish_reason=length" in describe(result.error)
+
+
+def test_plain_reply_accepts_a_complete_finish_reason() -> None:
+    body = {"choices": [{"message": {"content": "Done"}, "finish_reason": "stop"}]}
+    result = plain_reply(body)
+    assert isinstance(result, Ok)
+    assert result.value.content == "Done"
 
 
 def test_flatten_content_parts_with_thinking() -> None:
@@ -327,6 +376,31 @@ def test_drive_stream_emits_reasoning_text() -> None:
     assert isinstance(result, Ok)
     assert thoughts == ["Check", " details.\n"]
     assert events == [("Thinking", 1), ("Thinking", 1), ("Working", 1)]
+
+
+def test_drive_stream_accepts_a_completed_stream() -> None:
+    body = FakeStreamResponse(stream_chunks("Hi"))
+    result = drive_stream(body, lambda label, count: io_pure(None)).run()
+    assert isinstance(result, Ok)
+    assert "".join(cons_to_tuple(result.value.contents)) == "Hi"
+    assert result.value.completed is True
+
+
+def test_drive_stream_rejects_a_stream_without_a_completion_event() -> None:
+    body = FakeStreamResponse(stream_chunks("Hi"), terminated=False)
+    result = drive_stream(body, lambda label, count: io_pure(None)).run()
+    assert isinstance(result, Err)
+    assert "without a completion event" in describe(result.error)
+
+
+def test_drive_stream_rejects_a_stream_truncated_by_length() -> None:
+    chunks = stream_chunks("Hi") + [
+        {"choices": [{"delta": {}, "finish_reason": "length"}]}
+    ]
+    body = FakeStreamResponse(chunks)
+    result = drive_stream(body, lambda label, count: io_pure(None)).run()
+    assert isinstance(result, Err)
+    assert "finish_reason=length" in describe(result.error)
 
 
 def test_chat_streams_reasoning_live_when_verbose() -> None:

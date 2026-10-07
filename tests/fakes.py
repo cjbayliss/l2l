@@ -45,9 +45,12 @@ def make_sleep_recorder() -> tuple[Sleep, Callable[[], tuple[float, ...]]]:
     return sleep, sleeps
 
 
+DONE_LINES: tuple[bytes, ...] = (b"data: [DONE]\n", b"\n")
+
+
 class FakeStreamResponse:
-    def __init__(self, chunks: list[dict[str, Any]]) -> None:
-        self._lines = [
+    def __init__(self, chunks: list[dict[str, Any]], terminated: bool = True) -> None:
+        frames = [
             line
             for chunk in chunks
             for line in (
@@ -55,6 +58,7 @@ class FakeStreamResponse:
                 b"\n",
             )
         ]
+        self._lines = frames + (list(DONE_LINES) if terminated else [])
 
     def consume(
         self,
@@ -130,13 +134,16 @@ class FakeCurlHttp:
 
 
 def sse_bytes(chunks: list[dict[str, Any]]) -> tuple[bytes, ...]:
-    return tuple(
-        line
-        for chunk in chunks
-        for line in (
-            b"data: " + json.dumps(chunk).encode("utf-8") + b"\n",
-            b"\n",
+    return (
+        tuple(
+            line
+            for chunk in chunks
+            for line in (
+                b"data: " + json.dumps(chunk).encode("utf-8") + b"\n",
+                b"\n",
+            )
         )
+        + DONE_LINES
     )
 
 

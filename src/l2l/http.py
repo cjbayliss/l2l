@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from types import MappingProxyType
-from typing import Any
+from typing import Any, assert_never
 
 import pycurl
 
@@ -60,6 +60,9 @@ from l2l.monads import (
 from l2l.plans import plan_backoff, retry_delay, transient
 from l2l.settings import Config, Context
 from l2l.text import (
+    SseDone,
+    SseEvent,
+    SseMalformed,
     SseState,
     ThinkState,
     Translated,
@@ -213,15 +216,22 @@ def message_reasoning_texts(message: Mapping[str, Any]) -> tuple[str, ...]:
     return maybe_either(found, lambda text: (text,), tuple)
 
 
-def parse_chunk_delta(chunk: Mapping[str, Any]) -> dict[str, Any]:
+def first_choice_field(payload: Mapping[str, Any], field: str) -> Any:
     try:
-        choices = chunk.get("choices")
-        if not choices:
-            return {}
-
-        return choices[0].get("delta") or {}
+        choices = payload.get("choices")
+        return choices[0].get(field) if choices else None
     except AttributeError, IndexError, KeyError, TypeError:
-        return {}
+        return None
+
+
+def parse_chunk_delta(chunk: Mapping[str, Any]) -> dict[str, Any]:
+    delta = first_choice_field(chunk, "delta")
+    return delta if isinstance(delta, dict) else {}
+
+
+def completion_finish_reason(payload: Mapping[str, Any]) -> str | None:
+    found = first_choice_field(payload, "finish_reason")
+    return found if isinstance(found, str) else None
 
 
 def delta_text(delta: Mapping[str, Any]) -> str:
@@ -251,6 +261,8 @@ class StreamState:
     content_started: bool = False
     think: ThinkState = ThinkState()
     sse: SseState = SseState()
+    finish_reason: str | None = None
+    completed: bool = False
     progress_update: ProgressUpdate | None = None
 
 
@@ -263,6 +275,7 @@ def stream_text(state: StreamState) -> str:
 def stream_step(
     state: StreamState, chunk: Mapping[str, Any]
 ) -> Result[StreamState, TranslationError]:
+    finish_reason = completion_finish_reason(chunk)
     usage_report = chunk.get("usage")
     reported_usage = (
         MappingProxyType(usage_report)
@@ -273,7 +286,14 @@ def stream_step(
     reasoning_found = reasoning_at(delta, keep_raw)
     text = delta_text(delta)
     if isinstance(reasoning_found, Nothing) and not text:
-        return Ok(replace(state, reported_usage=reported_usage, progress_update=None))
+        return Ok(
+            replace(
+                state,
+                reported_usage=reported_usage,
+                finish_reason=finish_reason or state.finish_reason,
+                progress_update=None,
+            )
+        )
 
     think_state, thinking, visible = (
         think_step(state.think, text) if text else (state.think, False, "")
@@ -300,6 +320,9 @@ def stream_step(
             chunk_count=state.chunk_count + thinking_progress + text_progress,
             content_started=state.content_started or bool(text),
             think=think_state,
+            sse=state.sse,
+            finish_reason=finish_reason or state.finish_reason,
+            completed=state.completed,
             progress_update=progress_update,
         )
     )
@@ -308,15 +331,38 @@ def stream_step(
 def ingest_raw_line(
     state: StreamState, raw_line: bytes
 ) -> Result[StreamState, TranslationError]:
-    sse, chunk = sse_step(state.sse, raw_line)
+    sse, frame = sse_step(state.sse, raw_line)
     updated = state if sse == state.sse else replace(state, sse=sse)
-    if chunk is None:
-        return Ok(replace(updated, progress_update=None))
+    match frame:
+        case None:
+            return Ok(replace(updated, progress_update=None))
 
-    if isinstance(chunk.get("error"), dict):
-        return fail_http("stream", str(chunk["error"])[:500])
+        case SseDone():
+            return Ok(replace(updated, completed=True, progress_update=None))
 
-    return stream_step(updated, chunk)
+        case SseMalformed():
+            return fail_http("stream", "malformed SSE data: %r" % frame.data[:200])
+
+        case SseEvent():
+            if isinstance(frame.payload.get("error"), dict):
+                return fail_http("stream", str(frame.payload["error"])[:500])
+
+            return stream_step(updated, frame.payload)
+
+        case other:
+            assert_never(other)
+
+
+def require_completed_stream(
+    state: StreamState,
+) -> Result[StreamState, TranslationError]:
+    if state.finish_reason == "length":
+        return fail_http("stream", "response truncated: finish_reason=length")
+
+    if not (state.completed or state.finish_reason is not None):
+        return fail_http("stream", "stream ended without a completion event")
+
+    return Ok(state)
 
 
 @dataclass(frozen=True)
@@ -332,6 +378,9 @@ def plain_reply(body: Any) -> Result[ChatReply, TranslationError]:
     message_result = extract_message(body)
     if isinstance(message_result, Err):
         return message_result
+
+    if completion_finish_reason(body) == "length":
+        return fail_http("stream", "response truncated: finish_reason=length")
 
     message, content = message_result.value
     texts, thoughts = flatten_content_parts(content)
@@ -813,7 +862,9 @@ def drive_stream(
         if isinstance(outcome, Err):
             return io_result(outcome)
 
-        return io_result(ingest_raw_line(outcome.value, b""))
+        return io_result(
+            result_bind(ingest_raw_line(outcome.value, b""), require_completed_stream)
+        )
 
     return io_bind(response.consume(advance, Ok(StreamState())), flush)
 

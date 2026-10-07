@@ -2,6 +2,7 @@ import json
 from itertools import chain, zip_longest
 from typing import Any
 
+from fakes import DONE_LINES
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
@@ -189,7 +190,7 @@ def sse_bytes(chunks: list[dict[str, Any]]) -> list[bytes]:
     for chunk in chunks:
         lines.append(b"data: " + json.dumps(chunk).encode("utf-8") + b"\n")
         lines.append(b"\n")
-
+    lines.extend(DONE_LINES)
     return lines
 
 

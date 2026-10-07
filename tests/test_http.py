@@ -28,6 +28,7 @@ from l2l.http import (
     http_post_json,
     http_request,
     http_stream,
+    is_error_status_line,
     log_all,
     noproxy_for,
     proxy_for,
@@ -368,6 +369,12 @@ class DyingStreamResponse:
         return io_and_then(fold_io(self._lines, step, initial), IO(die))
 
 
+def test_is_error_status_line_tolerates_malformed_codes() -> None:
+    assert is_error_status_line(b"HTTP/1.1 oops Bad Request\r\n") is False
+    assert is_error_status_line(b"HTTP/1.1 503 Service Unavailable\r\n") is True
+    assert is_error_status_line(b"not a status line\r\n") is False
+
+
 def test_chat_reports_an_interrupted_stream() -> None:
     console, _ = make_console()
     http = FakeHttp([DyingStreamResponse()])
@@ -601,12 +608,75 @@ def test_chat_reports_malformed_stream_frames_as_protocol_errors() -> None:
 
 def test_chat_flushes_a_partial_final_line_from_a_stream() -> None:
     console, _ = make_console()
-    curl = FakeCurl(chunks=(b'data: {"choices": [{"delta": {"content": "Hi"}}]}',))
+    curl = FakeCurl(
+        chunks=(
+            b'data: {"choices": [{"delta": {"content": "Hi"}}]}\n\n',
+            b"data: [DONE]",
+        )
+    )
     http = FakeCurlHttp([curl])
     run_context = make_context(console, http.open)
     result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
     assert isinstance(result, Ok)
     assert result.value.text == "Hi"
+
+
+def test_chat_rejects_a_stream_that_ends_without_a_completion_event() -> None:
+    console, _ = make_console()
+    http = FakeHttp([FakeStreamResponse(stream_chunks("Hi"), terminated=False)])
+    run_context = make_context(console, http.open)
+    result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "stream"
+    assert "without a completion event" in describe(failure)
+
+
+def test_chat_rejects_a_stream_truncated_by_length() -> None:
+    console, _ = make_console()
+    chunks = stream_chunks("Hi") + [
+        {"choices": [{"delta": {}, "finish_reason": "length"}]}
+    ]
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    run_context = make_context(console, http.open)
+    result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "stream"
+    assert "finish_reason=length" in describe(failure)
+
+
+def test_chat_rejects_a_plain_response_truncated_by_length() -> None:
+    console, _ = make_console()
+    body = {"choices": [{"message": {"content": "Partial"}, "finish_reason": "length"}]}
+    http = FakeHttp([FakePlainResponse(body)])
+    run_context = make_context(console, http.open, stream=False)
+    result = chat(run_context, "s", "u", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "stream"
+    assert "finish_reason=length" in describe(failure)
+
+
+def test_chat_reports_malformed_sse_data_as_a_stream_error() -> None:
+    console, _ = make_console()
+    curl = FakeCurl(
+        chunks=(
+            b'data: {"choices": [{"delta": {"content": "Hi"}}]}\n\n',
+            b"data: {truncated json\n\n",
+        )
+    )
+    http = FakeCurlHttp([curl])
+    run_context = make_context(console, http.open)
+    result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "stream"
+    assert "malformed SSE data" in describe(failure)
 
 
 def test_chat_retries_a_stream_that_fails_to_connect() -> None:
