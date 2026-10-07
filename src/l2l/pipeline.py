@@ -6,7 +6,13 @@ from functools import reduce
 from typing import TextIO
 
 from l2l.ascii import enforce_pass_ascii
-from l2l.cache import cache_lookup, cache_store, cached_translation, non_empty
+from l2l.cache import (
+    always_acceptable,
+    cache_lookup,
+    cache_store,
+    cached_translation,
+    non_empty,
+)
 from l2l.console import Console
 from l2l.effects import now, write_stdout
 from l2l.errors import (
@@ -356,6 +362,17 @@ def retranslate_untranslated(
             io_bind(now(run_context.clock), escalate),
         )
 
+    def cacheable_retranslation(index: int) -> Callable[[str], bool]:
+        def cacheable(text: str) -> bool:
+            return not untranslated_paragraph(
+                source_paragraphs[index],
+                text,
+                pair,
+                run_context.settings.ascii_character_map,
+            )
+
+        return cacheable
+
     calls = plan_retranslation_calls(
         run_context,
         pass_definition,
@@ -363,6 +380,7 @@ def retranslate_untranslated(
         paragraphs,
         flagged,
         separators,
+        analysis,
     )
     call_for = dict(zip(flagged, calls, strict=True))
 
@@ -382,7 +400,13 @@ def retranslate_untranslated(
                     pass_definition.name, call.index + 1, call.total
                 ),
             ),
-            run_single_call(run_context, pass_definition, call, analysis, usage),
+            run_single_call(
+                run_context,
+                pass_definition,
+                call,
+                usage,
+                cacheable_retranslation(index),
+            ),
         )
 
     def collect(
@@ -485,7 +509,6 @@ def run_unit(
     run_context: Context,
     pass_definition: PassDefinition,
     call: UnitCall,
-    analysis: str | None,
     usage: Usage,
 ) -> IO[Result[UnitResult, TranslationError]]:
     def unit_tolerance() -> int | None:
@@ -546,7 +569,9 @@ def run_unit(
             call.model,
             call.parameters,
             pass_definition.instruction,
-            build_pass_user(call.source_chunk, call.work_chunk, analysis, call.context),
+            build_pass_user(
+                call.source_chunk, call.work_chunk, call.analysis, call.context
+            ),
             validate,
             build_retry_user,
             run_context.settings.unit_fix_attempts,
@@ -561,8 +586,8 @@ def run_single_call(
     run_context: Context,
     pass_definition: PassDefinition,
     call: UnitCall,
-    analysis: str | None,
     usage: Usage,
+    cacheable: Callable[[str], bool] = always_acceptable,
 ) -> IO[Result[tuple[str, Usage], TranslationError]]:
     def store(
         result: Result[UnitResult, TranslationError],
@@ -574,7 +599,12 @@ def run_single_call(
 
         outcome = result.value
         stored = io_map(
-            cache_store(run_context, call.key, outcome.text, outcome.validated),
+            cache_store(
+                run_context,
+                call.key,
+                outcome.text,
+                outcome.validated and cacheable(outcome.text),
+            ),
             lambda _: verbose_log(
                 run_context,
                 unit_done_message(pass_definition.name, call.index + 1, call.total),
@@ -605,7 +635,7 @@ def run_single_call(
             )
 
         return io_bind(
-            run_unit(run_context, pass_definition, call, analysis, usage),
+            run_unit(run_context, pass_definition, call, usage),
             store,
         )
 
@@ -628,6 +658,7 @@ def run_units(
         plan,
         work_groups,
         trailing_separators,
+        analysis,
         retry_attempt,
     )
 
@@ -645,7 +676,7 @@ def run_units(
                 lambda _: Ok((call.work_chunk + call.trailing_separator, Usage())),
             )
 
-        return run_single_call(run_context, pass_definition, call, analysis, usage)
+        return run_single_call(run_context, pass_definition, call, usage)
 
     def collect(parts: tuple[tuple[str, Usage], ...]) -> UnitsSoFar:
         return UnitsSoFar(

@@ -118,11 +118,23 @@ def test_plan_unit_calls_builds_keys_and_context() -> None:
         plan,
         (("一。",), ("二。",), ("三。",)),
         separators,
+        None,
     )
     assert [call.source_chunk for call in calls] == ["一。", "二。", "三。"]
+    assert [call.analysis for call in calls] == [None, None, None]
     assert [call.context for call in calls] == [("二。",), ("一。", "三。"), ("二。",)]
     assert [call.trailing_separator for call in calls] == ["s1", "s2", ""]
     assert len({call.key for call in calls}) == 3
+    briefed = plan_unit_calls(
+        run_context,
+        paragraph_pass(),
+        plan,
+        (("一。",), ("二。",), ("三。",)),
+        separators,
+        "Brief.",
+    )
+    assert [call.analysis for call in briefed] == ["Brief.", "Brief.", "Brief."]
+    assert [call.key for call in briefed] != [call.key for call in calls]
 
 
 def test_plan_retranslation_calls_targets_flagged_paragraphs() -> None:
@@ -130,7 +142,13 @@ def test_plan_retranslation_calls_targets_flagged_paragraphs() -> None:
     run_context = make_context(console, FakeHttp([]).open)
     sources = ("一。", "二。", "三。")
     calls = plan_retranslation_calls(
-        run_context, paragraph_pass(), sources, sources, (0, 2), ("s1", "s2", "s3")
+        run_context,
+        paragraph_pass(),
+        sources,
+        sources,
+        (0, 2),
+        ("s1", "s2", "s3"),
+        None,
     )
     assert [call.source_chunk for call in calls] == ["一。", "三。"]
     assert [call.work_chunk for call in calls] == ["一。", "三。"]
@@ -139,6 +157,17 @@ def test_plan_retranslation_calls_targets_flagged_paragraphs() -> None:
     assert [call.trailing_separator for call in calls] == ["s1", "s3"]
     assert [call.context for call in calls] == [("二。",), ("二。",)]
     assert len({call.key for call in calls}) == 2
+    plan = (("一。",), ("二。",), ("三。",))
+    unit_calls = plan_unit_calls(
+        run_context,
+        paragraph_pass(),
+        plan,
+        plan,
+        unit_separators(plan, ("s1", "s2", "s3")),
+        None,
+    )
+    assert calls[0].key != unit_calls[0].key
+    assert calls[1].key != unit_calls[2].key
 
 
 def test_fold_io_short_circuits_on_error() -> None:
@@ -608,6 +637,131 @@ def test_retranslation_majority_retry_uses_fresh_cache_keys(tmp_path: Path) -> N
     assert (first_code, second_code) == (0, 0)
     assert (first_calls, second_calls) == (2, 0)
     assert first_output == second_output == "Hello.\n\nWorld.\n"
+
+
+def test_retranslation_does_not_replay_an_echo_cached_by_the_pass(
+    tmp_path: Path,
+) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+
+    def run(replies: list[FakeStreamResponse]) -> tuple[int, str, int]:
+        console, _ = make_console()
+        http = FakeHttp(replies)
+        run_context = make_context(
+            console,
+            http.open,
+            cache_directory=str(cache_directory),
+            use_cache=True,
+        )
+        stdout = io.StringIO()
+        code = run_pipeline(
+            run_context,
+            (paragraph_pass(retranslate_untranslated=True),),
+            "你好。",
+            0.0,
+            stdout,
+        ).run()
+        return code, stdout.getvalue(), len(http.requests)
+
+    first_code, first_output, first_calls = run(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("你好。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+        ]
+    )
+    second_code, second_output, second_calls = run(
+        [FakeStreamResponse(with_usage(stream_chunks("SURPRISE"), USAGE))]
+    )
+    assert (first_code, second_code) == (0, 0)
+    assert (first_calls, second_calls) == (2, 0)
+    assert first_output == second_output == "Hello.\n"
+
+
+def test_failed_retranslation_is_not_cached(tmp_path: Path) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+
+    def run(replies: list[FakeStreamResponse]) -> tuple[int, int]:
+        console, _ = make_console()
+        http = FakeHttp(replies)
+        run_context = make_context(
+            console,
+            http.open,
+            cache_directory=str(cache_directory),
+            use_cache=True,
+        )
+        code = run_pipeline(
+            run_context,
+            (paragraph_pass(retranslate_untranslated=True),),
+            "你好。",
+            0.0,
+            io.StringIO(),
+        ).run()
+        return code, len(http.requests)
+
+    first_code, first_calls = run(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("你好。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("你好。"), USAGE)),
+        ]
+    )
+    second_code, second_calls = run(
+        [FakeStreamResponse(with_usage(stream_chunks("你好。"), USAGE))]
+    )
+    assert (first_code, second_code) == (1, 1)
+    assert (first_calls, second_calls) == (2, 1)
+    assert len(list(cache_directory.glob("*.txt"))) == 1
+
+
+def test_analysis_brief_participates_in_cache_identity(tmp_path: Path) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+
+    def run(
+        analysis_instruction: str, replies: list[FakeStreamResponse]
+    ) -> tuple[int, str, int]:
+        console, _ = make_console()
+        http = FakeHttp(replies)
+        run_context = make_context(
+            console,
+            http.open,
+            cache_directory=str(cache_directory),
+            use_cache=True,
+        )
+        stdout = io.StringIO()
+        code = run_pipeline(
+            run_context,
+            (
+                PassDefinition(
+                    "prep", analysis_instruction, "analysis", {}, None, False
+                ),
+                chunk_pass(),
+            ),
+            "你好。",
+            0.0,
+            stdout,
+        ).run()
+        return code, stdout.getvalue(), len(http.requests)
+
+    first_code, first_output, first_calls = run(
+        "Glossary: 你好 = Alice.",
+        [
+            FakeStreamResponse(with_usage(stream_chunks("Use Alice."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Alice says hello."), USAGE)),
+        ],
+    )
+    second_code, second_output, second_calls = run(
+        "Glossary: 你好 = Bob.",
+        [
+            FakeStreamResponse(with_usage(stream_chunks("Use Bob."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Bob says hello."), USAGE)),
+        ],
+    )
+    assert (first_code, second_code) == (0, 0)
+    assert (first_calls, second_calls) == (2, 2)
+    assert first_output == "Alice says hello.\n"
+    assert second_output == "Bob says hello.\n"
 
 
 def test_retranslation_paragraph_mode_skips_majority_retry() -> None:

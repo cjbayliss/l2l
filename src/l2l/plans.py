@@ -16,6 +16,7 @@ from l2l.settings import (
     Setup,
     pass_salt,
     resolve_call_settings,
+    retranslation_salt,
 )
 from l2l.text import (
     AsciiDrop,
@@ -247,6 +248,7 @@ class UnitCall:
     source_chunk: str
     work_chunk: str
     context: tuple[str, ...]
+    analysis: str | None
     key: str
     trailing_separator: str
     model: str
@@ -264,6 +266,7 @@ def build_unit_call(
     source_chunk: str,
     work_chunk: str,
     context: tuple[str, ...],
+    analysis: str | None,
 ) -> UnitCall:
     return UnitCall(
         index=index,
@@ -271,6 +274,7 @@ def build_unit_call(
         source_chunk=source_chunk,
         work_chunk=work_chunk,
         context=context,
+        analysis=analysis,
         key=cache_key(
             source_chunk,
             model,
@@ -278,6 +282,7 @@ def build_unit_call(
             work_chunk,
             overrides=parameters,
             context="\n\n".join(context),
+            analysis=analysis or "",
         ),
         trailing_separator=(
             separators[separator_index] if separator_index < len(separators) else ""
@@ -293,6 +298,7 @@ def plan_unit_calls(
     plan: tuple[tuple[str, ...], ...],
     work_groups: tuple[tuple[str, ...], ...],
     trailing_separators: tuple[str, ...],
+    analysis: str | None,
     retry_attempt: int = 0,
 ) -> tuple[UnitCall, ...]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
@@ -326,6 +332,7 @@ def plan_unit_calls(
             "\n\n".join(plan[index]) if index < len(plan) else "",
             "\n\n".join(work_group),
             neighbour_context(index),
+            analysis,
         )
 
     return tuple(call(index, group) for index, group in enumerate(work_groups))
@@ -338,6 +345,7 @@ def plan_retranslation_calls(
     work_paragraphs: tuple[str, ...],
     flagged: tuple[int, ...],
     separators: tuple[str, ...],
+    analysis: str | None,
 ) -> tuple[UnitCall, ...]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
 
@@ -355,7 +363,7 @@ def plan_retranslation_calls(
         return build_unit_call(
             model,
             parameters,
-            pass_salt(pass_definition),
+            retranslation_salt(pass_definition),
             separators,
             position,
             index,
@@ -363,6 +371,7 @@ def plan_retranslation_calls(
             source_paragraphs[index],
             work_paragraphs[index],
             neighbour_context(index),
+            analysis,
         )
 
     return tuple(call(position, index) for position, index in enumerate(flagged))
@@ -409,6 +418,7 @@ def plan_report(
                     plan,
                     work_groups,
                     unit_separators(plan, separators),
+                    None,
                 )
                 return (
                     "%s: mode=%s, %d unit(s)"
