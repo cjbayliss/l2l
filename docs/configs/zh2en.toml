@@ -10,11 +10,28 @@ provider = { allow_fallbacks = true, sort = { by = "throughput" } }
 stop = ["END"]
 
 [[pass]]
+name = "analyse"
+mode = "analysis"
+instruction_file = "../prompts/zh2en-analyse.txt"
+[pass.params]
+reasoning.effort = "high"
+
+[[pass]]
 name = "translate"
 ascii = true
 ensure_paragraphs = 2
 retranslate_untranslated = true
-instruction_file = "../prompts/zh2en.txt"
+instruction_file = "../prompts/zh2en-translate.txt"
+mode = "chunk"
+[pass.params]
+reasoning.effort = "high"
+
+[[pass]]
+name = "review"
+ascii = true
+ensure_paragraphs = 2
+retranslate_untranslated = true
+instruction_file = "../prompts/zh2en-review.txt"
 mode = "chunk"
 [pass.params]
 reasoning.effort = "high"
