@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Literal, assert_never
 
 from l2l.effects import (
-    cwd,
+    current_working_directory,
     load_toml,
     path_exists,
     read_text_file,
@@ -33,7 +33,7 @@ from l2l.monads import (
 from l2l.settings import (
     API_SETTING_KEYS,
     DEFAULT_API_SETTINGS,
-    DEFAULT_MAX_TOKENS,
+    DEFAULT_MAXIMUM_TOKENS,
     DEFAULT_TIMEOUT,
     PASS_KEYS,
     Arguments,
@@ -132,7 +132,7 @@ def positive_number_setting(
         return fail_config("%s: [api] %s must be %s" % (path, key, expected))
 
     if whole:
-        return Ok(replace(partial, max_tokens=int(value)))
+        return Ok(replace(partial, maximum_tokens=int(value)))
 
     return Ok(replace(partial, timeout=float(value)))
 
@@ -143,13 +143,13 @@ def timeout_api_setting(
     return positive_number_setting(path, partial, table, "timeout", whole=False)
 
 
-def max_tokens_api_setting(
+def maximum_tokens_api_setting(
     path: str, partial: PartialApiSettings, table: Mapping[str, Any]
 ) -> Result[PartialApiSettings, TranslationError]:
     return positive_number_setting(path, partial, table, "max_tokens", whole=True)
 
 
-def params_api_setting(
+def parameters_api_setting(
     path: str, partial: PartialApiSettings, table: Mapping[str, Any]
 ) -> Result[PartialApiSettings, TranslationError]:
     if "params" not in table:
@@ -162,14 +162,14 @@ def params_api_setting(
     if not is_json_value(value):
         return fail_config("%s: [api] params must contain only JSON values" % path)
 
-    return Ok(replace(partial, params=value))
+    return Ok(replace(partial, parameters=value))
 
 
 API_FIELD_PARSERS = (
     string_api_setting,
     timeout_api_setting,
-    max_tokens_api_setting,
-    params_api_setting,
+    maximum_tokens_api_setting,
+    parameters_api_setting,
 )
 
 
@@ -249,7 +249,7 @@ def env_timeout_setting(
     )
 
 
-def env_max_tokens_setting(
+def environment_maximum_tokens_setting(
     environment: Mapping[str, str], partial: PartialApiSettings
 ) -> Result[PartialApiSettings, TranslationError]:
     parsed = env_positive_setting(
@@ -258,7 +258,7 @@ def env_max_tokens_setting(
     return result_map(
         parsed,
         lambda value: (
-            partial if value is None else replace(partial, max_tokens=int(value))
+            partial if value is None else replace(partial, maximum_tokens=int(value))
         ),
     )
 
@@ -268,7 +268,7 @@ def api_settings_from_environment(
 ) -> Result[PartialApiSettings, TranslationError]:
     return result_bind(
         env_timeout_setting(environment, env_string_settings(environment)),
-        lambda partial: env_max_tokens_setting(environment, partial),
+        lambda partial: environment_maximum_tokens_setting(environment, partial),
     )
 
 
@@ -278,7 +278,7 @@ def api_settings_from_arguments(arguments: Arguments) -> PartialApiSettings:
         api_key=arguments.api_key,
         model=arguments.model,
         timeout=arguments.timeout,
-        max_tokens=arguments.max_tokens,
+        maximum_tokens=arguments.maximum_tokens,
     )
 
 
@@ -305,12 +305,12 @@ def build_config(partial: PartialApiSettings) -> Result[Config, TranslationError
             api_key=str(partial.api_key),
             model=str(partial.model),
             timeout=partial.timeout if partial.timeout is not None else DEFAULT_TIMEOUT,
-            max_tokens=(
-                partial.max_tokens
-                if partial.max_tokens is not None
-                else DEFAULT_MAX_TOKENS
+            maximum_tokens=(
+                partial.maximum_tokens
+                if partial.maximum_tokens is not None
+                else DEFAULT_MAXIMUM_TOKENS
             ),
-            params=MappingProxyType(dict(partial.params or {})),
+            parameters=MappingProxyType(dict(partial.parameters or {})),
         )
     )
 
@@ -473,11 +473,11 @@ def pass_definition_from(
             "%s: [[pass]] %s: model must be a non-empty string" % (path, name)
         )
 
-    params = table.get("params", {})
-    if not isinstance(params, dict):
+    parameters = table.get("params", {})
+    if not isinstance(parameters, dict):
         return fail_config("%s: [[pass]] %s: params must be a table" % (path, name))
 
-    if not is_json_value(params):
+    if not is_json_value(parameters):
         return fail_config(
             "%s: [[pass]] %s: params must contain only JSON values" % (path, name)
         )
@@ -487,7 +487,7 @@ def pass_definition_from(
             name=name,
             instruction=instruction,
             mode=mode,
-            params=MappingProxyType(dict(params)),
+            parameters=MappingProxyType(dict(parameters)),
             model=model.strip() if model else None,
             ascii=ascii_value,
             ensure_paragraphs=ensure_paragraphs_value,
@@ -739,18 +739,22 @@ def resolve_config_path(
     if configured:
         return io_pure(configured)
 
-    def pick(cwd_value: str, user_path: str) -> str | None:
-        local = os.path.join(cwd_value, "l2l.toml")
+    def pick(current_working_directory_value: str, user_path: str) -> str | None:
+        local = os.path.join(current_working_directory_value, "l2l.toml")
         if path_exists(local):
             return local
 
         return user_path if path_exists(user_path) else None
 
     return io_bind(
-        current_directory if current_directory is not None else cwd(),
-        lambda cwd_value: io_bind(
+        current_directory
+        if current_directory is not None
+        else current_working_directory(),
+        lambda current_working_directory_value: io_bind(
             user_config_path(environment),
-            lambda user_path: IO(lambda: pick(cwd_value, user_path)),
+            lambda user_path: IO(
+                lambda: pick(current_working_directory_value, user_path)
+            ),
         ),
     )
 

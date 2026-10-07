@@ -15,12 +15,12 @@ from l2l.effects import (
     file_age,
     load_toml,
     log_paths,
-    path_is_dir,
+    path_is_directory,
     prune_old_logs,
     read_text_file,
     remove_file,
     replace_file,
-    resolve_cache_dir,
+    resolve_cache_directory,
     run_process,
     stream_isatty,
     time_sleep,
@@ -64,13 +64,13 @@ def test_no_append_and_no_close_do_nothing() -> None:
 
 def test_resolve_cache_dir_creates_override(tmp_path: Path) -> None:
     target = tmp_path / "cache"
-    resolved = resolve_cache_dir({}, str(target)).run()
+    resolved = resolve_cache_directory({}, str(target)).run()
     assert resolved == str(target)
     assert target.exists()
 
 
 def test_resolve_cache_dir_defaults_under_xdg(tmp_path: Path) -> None:
-    resolved = resolve_cache_dir({"XDG_CACHE_HOME": str(tmp_path)}).run()
+    resolved = resolve_cache_directory({"XDG_CACHE_HOME": str(tmp_path)}).run()
     assert resolved.startswith(str(tmp_path))
 
 
@@ -93,7 +93,7 @@ def test_cache_entry_paths_includes_tmp_orphans(tmp_path: Path) -> None:
     (tmp_path / "key.txt.tmp").write_text("partial", encoding="utf-8")
     (tmp_path / "note.log").write_text("log", encoding="utf-8")
     paths = cache_entry_paths(str(tmp_path)).run()
-    assert sorted(p.endswith((".txt", ".txt.tmp")) for p in paths) == [True, True]
+    assert sorted(path.endswith((".txt", ".txt.tmp")) for path in paths) == [True, True]
 
 
 def test_cache_entry_paths_tolerates_a_missing_directory(tmp_path: Path) -> None:
@@ -110,7 +110,7 @@ def test_log_paths_lists_log_files(tmp_path: Path) -> None:
     (logs / "run.log").write_text("log", encoding="utf-8")
     (logs / "run.log.tmp").write_text("partial", encoding="utf-8")
     paths = log_paths(str(tmp_path)).run()
-    assert [p.endswith("run.log") for p in paths] == [True]
+    assert [path.endswith("run.log") for path in paths] == [True]
 
 
 def test_file_age_reports_zero_for_missing_files() -> None:
@@ -202,9 +202,9 @@ def test_run_process_captures_streams(tmp_path: Path) -> None:
 def test_path_is_dir_distinguishes_files(tmp_path: Path) -> None:
     target = tmp_path / "thing"
     target.write_text("x", encoding="utf-8")
-    assert path_is_dir(str(target)).run() is False
-    assert path_is_dir(str(tmp_path)).run() is True
-    assert path_is_dir(str(tmp_path / "absent")).run() is False
+    assert path_is_directory(str(target)).run() is False
+    assert path_is_directory(str(tmp_path)).run() is True
+    assert path_is_directory(str(tmp_path / "absent")).run() is False
 
 
 def test_prune_old_logs_removes_only_stale_logs(tmp_path: Path) -> None:

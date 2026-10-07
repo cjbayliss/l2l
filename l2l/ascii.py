@@ -50,13 +50,13 @@ from l2l.text import (
 
 
 def ascii_fix_llm(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     source_paragraph: str,
     output_paragraph: str,
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
-    model, params = resolve_call_settings(ctx.config, pass_definition)
+    model, parameters = resolve_call_settings(run_context.config, pass_definition)
     key = cache_key(
         source_paragraph,
         model,
@@ -64,10 +64,10 @@ def ascii_fix_llm(
             CACHE_SALT_VERSION,
             "ascii-fix",
             pass_definition.name,
-            ctx.settings.ascii_fix_instruction,
+            run_context.settings.ascii_fix_instruction,
         ),
         output_paragraph,
-        overrides=params,
+        overrides=parameters,
     )
 
     def validate(result: str) -> Maybe[str]:
@@ -75,21 +75,22 @@ def ascii_fix_llm(
 
     def on_repair(failed: int, _problem: str) -> IO[None]:
         return verbose_log(
-            ctx, ascii_retry_message(failed, ctx.settings.ascii_fix_attempts)
+            run_context,
+            ascii_retry_message(failed, run_context.settings.ascii_fix_attempts),
         )
 
     def start() -> IO[Result[Translated, TranslationError]]:
         call = repaired_call(
-            ctx,
+            run_context,
             model,
-            params,
-            ctx.settings.ascii_fix_instruction,
+            parameters,
+            run_context.settings.ascii_fix_instruction,
             build_ascii_fix_user(source_paragraph, output_paragraph),
             validate,
             lambda bad_output, _problem: build_ascii_retry_user(
                 source_paragraph, output_paragraph, bad_output
             ),
-            ctx.settings.ascii_fix_attempts - 1,
+            run_context.settings.ascii_fix_attempts - 1,
             on_repair,
             None,
         )
@@ -101,17 +102,17 @@ def ascii_fix_llm(
         )
 
     return cached_translation(
-        ctx,
+        run_context,
         key,
         usage,
         compute=start,
-        hit_log=verbose_log(ctx, ascii_cache_hit_message()),
+        hit_log=verbose_log(run_context, ascii_cache_hit_message()),
         acceptable=str.isascii,
     )
 
 
 def repair_paragraph(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     paragraph: str,
     separator: str,
@@ -120,10 +121,12 @@ def repair_paragraph(
     source_paragraphs: tuple[str, ...],
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
-    mechanical = to_ascii_mechanical(paragraph, ctx.settings.ascii_character_map)
+    mechanical = to_ascii_mechanical(
+        paragraph, run_context.settings.ascii_character_map
+    )
     if mechanical.isascii():
         return io_map(
-            verbose_log(ctx, ascii_mechanical_message(index, total)),
+            verbose_log(run_context, ascii_mechanical_message(index, total)),
             lambda _: Ok(Translated(mechanical + separator, usage)),
         )
 
@@ -135,8 +138,8 @@ def repair_paragraph(
 
         final, drop = drop_non_ascii(
             result.value.text,
-            ctx.settings.ascii_character_map,
-            ctx.settings.ascii_fix_attempts,
+            run_context.settings.ascii_character_map,
+            run_context.settings.ascii_fix_attempts,
             index,
         )
 
@@ -144,16 +147,16 @@ def repair_paragraph(
             return Ok(Translated(final + separator, result.value.usage))
 
         return (
-            io_map(ctx.console.log(ascii_drop_warning(drop.value)), emit)
+            io_map(run_context.console.log(ascii_drop_warning(drop.value)), emit)
             if isinstance(drop, Just)
             else io_result(emit(None))
         )
 
     return io_and_then(
-        verbose_log(ctx, ascii_llm_message(index, total)),
+        verbose_log(run_context, ascii_llm_message(index, total)),
         io_bind(
             ascii_fix_llm(
-                ctx,
+                run_context,
                 pass_definition,
                 (
                     source_paragraphs[index]
@@ -183,16 +186,16 @@ def ascii_collapse(stubborn: int, total: int, floor: int) -> bool:
 
 
 def ensure_ascii_output(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     text: str,
     source_paragraphs: tuple[str, ...],
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
     paragraphs, separators = split_paragraphs(text)
-    stubborn = stubborn_paragraphs(paragraphs, ctx.settings.ascii_character_map)
+    stubborn = stubborn_paragraphs(paragraphs, run_context.settings.ascii_character_map)
     if ascii_collapse(
-        len(stubborn), len(paragraphs), ctx.settings.ascii_collapse_floor
+        len(stubborn), len(paragraphs), run_context.settings.ascii_collapse_floor
     ):
         return io_result(
             fail_ascii_collapse(pass_definition.name, len(stubborn), len(paragraphs))
@@ -208,7 +211,7 @@ def ensure_ascii_output(
 
         return io_map(
             repair_paragraph(
-                ctx,
+                run_context,
                 pass_definition,
                 paragraph,
                 separator,
@@ -239,7 +242,7 @@ def ensure_ascii_output(
 
 
 def enforce_pass_ascii(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     text: str,
     source_paragraphs: tuple[str, ...],
@@ -251,7 +254,7 @@ def enforce_pass_ascii(
     ) -> IO[Result[Translated, TranslationError]]:
         if isinstance(result, Err):
             return io_map(
-                ctx.console.interrupt(),
+                run_context.console.interrupt(),
                 lambda _: fail_ascii(pass_definition.name, result.error),
             )
 
@@ -259,18 +262,20 @@ def enforce_pass_ascii(
 
         def report(ended_at: float) -> IO[Result[Translated, TranslationError]]:
             return io_map(
-                ctx.console.finish(
+                run_context.console.finish(
                     stage_done_line(ended_at - started_at, prompt, completion, cost)
                 ),
                 lambda _: result,
             )
 
-        return io_bind(now(ctx.clock), report)
+        return io_bind(now(run_context.clock), report)
 
     return io_and_then(
-        ctx.console.write_partial("Enforcing ASCII... "),
+        run_context.console.write_partial("Enforcing ASCII... "),
         io_bind(
-            ensure_ascii_output(ctx, pass_definition, text, source_paragraphs, usage),
+            ensure_ascii_output(
+                run_context, pass_definition, text, source_paragraphs, usage
+            ),
             conclude,
         ),
     )

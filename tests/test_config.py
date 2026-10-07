@@ -11,10 +11,10 @@ from l2l.config import (
     document_passes,
     load_instruction_text,
     load_setup,
-    max_tokens_api_setting,
+    maximum_tokens_api_setting,
     merge_api_settings,
     merged_api_settings,
-    params_api_setting,
+    parameters_api_setting,
     parse_options_table,
     parse_pass_table,
     pass_definition_from,
@@ -69,11 +69,11 @@ def test_timeout_api_setting() -> None:
 
 def test_max_tokens_api_setting() -> None:
     base = PartialApiSettings()
-    assert isinstance(max_tokens_api_setting("f", base, {"max_tokens": -1}), Err)
-    assert isinstance(max_tokens_api_setting("f", base, {"max_tokens": 1.5}), Err)
-    result = max_tokens_api_setting("f", base, {"max_tokens": 7})
+    assert isinstance(maximum_tokens_api_setting("f", base, {"max_tokens": -1}), Err)
+    assert isinstance(maximum_tokens_api_setting("f", base, {"max_tokens": 1.5}), Err)
+    result = maximum_tokens_api_setting("f", base, {"max_tokens": 7})
     assert isinstance(result, Ok)
-    assert result.value.max_tokens == 7
+    assert result.value.maximum_tokens == 7
 
 
 def test_document_api_settings_unknown_key() -> None:
@@ -84,10 +84,10 @@ def test_document_api_settings_unknown_key() -> None:
 
 def test_merge_api_settings_params_deep_merge() -> None:
     merged = merge_api_settings(
-        PartialApiSettings(model="a", params={"x": 1, "y": 1}),
-        PartialApiSettings(params={"y": 2, "z": 3}, model="b"),
+        PartialApiSettings(model="a", parameters={"x": 1, "y": 1}),
+        PartialApiSettings(parameters={"y": 2, "z": 3}, model="b"),
     )
-    assert merged == PartialApiSettings(model="b", params={"x": 1, "y": 2, "z": 3})
+    assert merged == PartialApiSettings(model="b", parameters={"x": 1, "y": 2, "z": 3})
 
 
 def test_api_settings_from_environment() -> None:
@@ -102,7 +102,7 @@ def test_api_settings_from_environment() -> None:
     )
     assert isinstance(result, Ok)
     assert result.value.base_url == "http://e"
-    assert result.value.max_tokens == 9
+    assert result.value.maximum_tokens == 9
 
 
 def test_api_settings_from_arguments() -> None:
@@ -112,12 +112,12 @@ def test_api_settings_from_arguments() -> None:
         api_key="k",
         model=None,
         timeout=2.0,
-        max_tokens=None,
+        maximum_tokens=None,
         no_cache=False,
         ensure_paragraphs=False,
         verbose=False,
         show_log_path=False,
-        cache_dir=None,
+        cache_directory=None,
     )
     assert api_settings_from_arguments(arguments) == PartialApiSettings(
         api_key="k", timeout=2.0
@@ -131,12 +131,12 @@ def test_merged_api_settings_precedence() -> None:
         api_key=None,
         model="arg-model",
         timeout=None,
-        max_tokens=None,
+        maximum_tokens=None,
         no_cache=False,
         ensure_paragraphs=False,
         verbose=False,
         show_log_path=False,
-        cache_dir=None,
+        cache_directory=None,
     )
     environment = {
         "TRANSLATE_BASE_URL": "http://env",
@@ -152,7 +152,7 @@ def test_merged_api_settings_precedence() -> None:
     assert config.api_key == "env-key"
     assert config.model == "arg-model"
     assert config.timeout == 5.0
-    assert config.params["a"] == 1
+    assert config.parameters["a"] == 1
 
 
 def test_build_config_missing() -> None:
@@ -267,7 +267,12 @@ def test_apply_default_options() -> None:
         False,
     )
     assert [
-        (p.ascii, p.ensure_paragraphs, p.retranslate_untranslated) for p in applied
+        (
+            pass_definition.ascii,
+            pass_definition.ensure_paragraphs,
+            pass_definition.retranslate_untranslated,
+        )
+        for pass_definition in applied
     ] == [
         (True, True, True),
         (True, False, True),
@@ -279,7 +284,12 @@ def test_apply_default_options() -> None:
         True,
     )
     assert [
-        (p.ascii, p.ensure_paragraphs, p.retranslate_untranslated) for p in applied
+        (
+            pass_definition.ascii,
+            pass_definition.ensure_paragraphs,
+            pass_definition.retranslate_untranslated,
+        )
+        for pass_definition in applied
     ] == [
         (False, True, False),
         (True, False, True),
@@ -308,27 +318,43 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
 
     setup = setup_with({}, True)
     assert setup.ensure_paragraphs
-    assert [p.ensure_paragraphs for p in setup.passes] == [True, False, True]
+    assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
+        True,
+        False,
+        True,
+    ]
 
     setup = setup_with({}, False)
     assert not setup.ensure_paragraphs
-    assert [p.ensure_paragraphs for p in setup.passes] == [False, False, True]
+    assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
+        False,
+        False,
+        True,
+    ]
 
     setup = setup_with({"ensure_paragraphs": 2}, False)
     assert setup.ensure_paragraphs == 2
-    assert [p.ensure_paragraphs for p in setup.passes] == [2, False, True]
+    assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
+        2,
+        False,
+        True,
+    ]
 
     setup = setup_with({"ensure_paragraphs": 2}, True)
     assert setup.ensure_paragraphs == 2
-    assert [p.ensure_paragraphs for p in setup.passes] == [2, False, True]
+    assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
+        2,
+        False,
+        True,
+    ]
 
 
 def test_resolve_call_settings() -> None:
     config = Config("u", "k", "default-model", 1.0, 100, {"a": 1})
     pass_definition = PassDefinition("p", "i", "chunk", {"b": 2}, "pass-model", False)
-    model, params = resolve_call_settings(config, pass_definition)
+    model, parameters = resolve_call_settings(config, pass_definition)
     assert model == "pass-model"
-    assert params == {"a": 1, "b": 2}
+    assert parameters == {"a": 1, "b": 2}
 
 
 def test_pass_salt() -> None:
@@ -422,8 +448,8 @@ def test_setup_report_lists_api_and_passes() -> None:
             api_key="secret-key",
             model="m",
             timeout=30.0,
-            max_tokens=1000,
-            params={"temperature": 1},
+            maximum_tokens=1000,
+            parameters={"temperature": 1},
         ),
         passes=(
             PassDefinition(
@@ -463,7 +489,7 @@ def test_timeout_api_setting_rejects_negative() -> None:
 
 
 def test_max_tokens_api_setting_rejects_float_with_message() -> None:
-    result = max_tokens_api_setting("f", PartialApiSettings(), {"max_tokens": 2.5})
+    result = maximum_tokens_api_setting("f", PartialApiSettings(), {"max_tokens": 2.5})
     assert isinstance(result, Err)
     assert "max_tokens must be a positive integer" in describe(result.error)
 
@@ -575,12 +601,12 @@ def test_load_setup_reports_malformed_toml(tmp_path: Path) -> None:
         api_key=None,
         model=None,
         timeout=None,
-        max_tokens=None,
+        maximum_tokens=None,
         no_cache=False,
         ensure_paragraphs=False,
         verbose=False,
         show_log_path=False,
-        cache_dir=None,
+        cache_directory=None,
     )
     result = load_setup(arguments, {}).run()
     assert isinstance(result, Err)
@@ -588,7 +614,9 @@ def test_load_setup_reports_malformed_toml(tmp_path: Path) -> None:
 
 
 def test_api_params_must_contain_json_values() -> None:
-    result = params_api_setting("f", PartialApiSettings(), {"params": {"t": object()}})
+    result = parameters_api_setting(
+        "f", PartialApiSettings(), {"params": {"t": object()}}
+    )
     assert isinstance(result, Err)
     assert "[api] params must contain only JSON values" in describe(result.error)
 

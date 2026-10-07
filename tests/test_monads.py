@@ -7,7 +7,7 @@ from l2l.monads import (
     Err,
     Just,
     Ok,
-    Ref,
+    Reference,
     Result,
     cons,
     cons_all,
@@ -29,9 +29,9 @@ from l2l.monads import (
     io_when,
     io_when_unit,
     line_push,
-    read_ref,
-    ref_gate,
-    ref_write_when,
+    read_reference,
+    reference_gate,
+    reference_write_when,
     repeat_until,
     result_bind,
     result_either,
@@ -40,7 +40,7 @@ from l2l.monads import (
     result_map_error,
     result_or_else,
     result_zip,
-    write_ref,
+    write_reference,
 )
 
 
@@ -226,7 +226,7 @@ def test_io_result_bind_chains_io_results() -> None:
 
 
 def test_fold_io_push_threads_state_and_stops_on_error() -> None:
-    state: Ref[Result[int, str]] = Ref(Ok(0))
+    state: Reference[Result[int, str]] = Reference(Ok(0))
 
     def advance(total: int, number: int) -> IO[Result[int, str]]:
         if number == 0:
@@ -237,45 +237,45 @@ def test_fold_io_push_threads_state_and_stops_on_error() -> None:
     sink = fold_io_push(advance, state)
     sink(1)
     sink(2)
-    assert read_ref(state).run() == Ok(3)
+    assert read_reference(state).run() == Ok(3)
     sink(0)
-    assert read_ref(state).run() == Err("stopped at 0")
+    assert read_reference(state).run() == Err("stopped at 0")
     sink(5)
-    assert read_ref(state).run() == Err("stopped at 0")
+    assert read_reference(state).run() == Err("stopped at 0")
 
 
 def test_line_push_splits_chunks_into_newline_terminated_lines() -> None:
     lines: list[bytes] = []
-    remainder: Ref[bytes] = Ref(b"")
+    remainder: Reference[bytes] = Reference(b"")
     feed = line_push(lines.append, remainder)
 
     feed(b"ab\nc")
     feed(b"d\n\ne")
 
     assert lines == [b"ab\n", b"cd\n", b"\n"]
-    assert read_ref(remainder).run() == b"e"
+    assert read_reference(remainder).run() == b"e"
 
 
 def test_ref_write_when_sets_the_value_only_on_matching_events() -> None:
     def over_ten(item: int) -> bool:
         return item > 10
 
-    flag: Ref[bool] = Ref(False)
-    consume = ref_write_when(over_ten, flag, True)
+    flag: Reference[bool] = Reference(False)
+    consume = reference_write_when(over_ten, flag, True)
 
     consume(5)
-    assert read_ref(flag).run() is False
+    assert read_reference(flag).run() is False
     consume(11)
-    assert read_ref(flag).run() is True
+    assert read_reference(flag).run() is True
 
 
 def test_ref_gate_drops_items_once_the_flag_is_set() -> None:
     passed: list[int] = []
-    flag: Ref[bool] = Ref(False)
-    consume = ref_gate(flag, passed.append)
+    flag: Reference[bool] = Reference(False)
+    consume = reference_gate(flag, passed.append)
 
     consume(1)
-    write_ref(flag, True).run()
+    write_reference(flag, True).run()
     consume(2)
 
     assert passed == [1]

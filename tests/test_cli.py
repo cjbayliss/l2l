@@ -114,20 +114,20 @@ def test_dry_run_prints_plan_without_calling_endpoint(tmp_path: Path) -> None:
 
 
 def test_cache_prune_removes_old_entries(tmp_path: Path) -> None:
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir()
-    entry = cache_dir / "stale.txt"
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+    entry = cache_directory / "stale.txt"
     entry.write_text("old")
     import os
 
     stale = time.time() - 30 * 86400
     os.utime(entry, (stale, stale))
-    fresh = cache_dir / "fresh.txt"
+    fresh = cache_directory / "fresh.txt"
     fresh.write_text("new")
 
     code, _, stderr = run_l2l(
         tmp_path,
-        [str(tmp_path), "--cache-dir", str(cache_dir), "--cache-prune", "7"],
+        [str(tmp_path), "--cache-dir", str(cache_directory), "--cache-prune", "7"],
     )
     assert code == 0
     assert "pruned 1 cache entry" in stderr

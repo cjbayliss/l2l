@@ -91,14 +91,14 @@ def test_maybe_functor_identity(maybe: Maybe[int]) -> None:
 
 @given(maybe_integers)
 def test_maybe_functor_composition(maybe: Maybe[int]) -> None:
-    def f(value: int) -> int:
+    def double(value: int) -> int:
         return value * 2
 
-    def g(value: int) -> int:
+    def increment(value: int) -> int:
         return value + 1
 
-    assert maybe_map(maybe_map(maybe, g), f) == maybe_map(
-        maybe, lambda value: f(g(value))
+    assert maybe_map(maybe_map(maybe, increment), double) == maybe_map(
+        maybe, lambda value: double(increment(value))
     )
 
 

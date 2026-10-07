@@ -29,7 +29,7 @@ from l2l.console import (
     terminal_size,
     toggle_verbose,
 )
-from l2l.monads import IO, cons_to_tuple, write_ref
+from l2l.monads import IO, cons_to_tuple, write_reference
 
 
 def test_status_line_text_renders_prefix_and_values() -> None:
@@ -330,7 +330,7 @@ def test_log_verbose_hides_until_verbose_is_enabled() -> None:
     console, stream = make_live_console()
     console.log_verbose("hidden").run()
     assert stream.getvalue() == ""
-    write_ref(console.verbose, True).run()
+    write_reference(console.verbose, True).run()
     console.log_verbose("shown").run()
     assert stream.getvalue() == "shown\n"
     assert console.displayed_rows.value == 1
@@ -364,7 +364,7 @@ def test_replay_clamps_erase_to_visible_rows() -> None:
     console, stream = make_live_console()
     console.log("first").run()
     console.log("last").run()
-    write_ref(console.displayed_rows, 50).run()
+    write_reference(console.displayed_rows, 50).run()
     toggle_verbose(console).run()
     assert stream.getvalue() == ("first\nlast\n" + "\x1b[23A\x1b[J" + "first\nlast\n")
 
@@ -393,7 +393,7 @@ def test_stream_reasoning_captures_while_hidden_then_replays() -> None:
 
 def test_toggle_off_mid_raw_clears_only_the_open_row() -> None:
     console, stream = make_live_console()
-    write_ref(console.verbose, True).run()
+    write_reference(console.verbose, True).run()
     console.stream_reasoning("thinking").run()
     assert stream.getvalue() == "thinking"
 
@@ -412,7 +412,7 @@ def test_toggle_off_mid_raw_clears_only_the_open_row() -> None:
 
 def test_toggle_off_erases_shown_reasoning_and_replays_from_events() -> None:
     console, stream = make_live_console()
-    write_ref(console.verbose, True).run()
+    write_reference(console.verbose, True).run()
     console.stream_reasoning("thoughts\n").run()
     console.end_raw().run()
     assert stream.getvalue() == "thoughts\n"
@@ -426,7 +426,7 @@ def test_toggle_off_erases_shown_reasoning_and_replays_from_events() -> None:
 
 def test_toggle_off_erases_all_rows_of_wide_character_reasoning() -> None:
     console, stream = make_live_console()
-    write_ref(console.verbose, True).run()
+    write_reference(console.verbose, True).run()
     console.stream_reasoning("阿" * 120 + "\n").run()
     console.end_raw().run()
     assert stream.getvalue() == "阿" * 120 + "\n"
@@ -437,7 +437,7 @@ def test_toggle_off_erases_all_rows_of_wide_character_reasoning() -> None:
 
 def test_log_commits_open_reasoning_block_before_the_message() -> None:
     console, stream = make_live_console()
-    write_ref(console.verbose, True).run()
+    write_reference(console.verbose, True).run()
     console.stream_reasoning("thinking").run()
     console.log("msg").run()
     assert stream.getvalue() == "thinking" + "\n" + "msg\n"

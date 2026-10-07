@@ -337,8 +337,8 @@ def test_chat_streams_reasoning_live_when_verbose() -> None:
         {"choices": [{"delta": {"content": "Hi"}}]},
     ]
     http = FakeHttp([FakeStreamResponse(with_usage(chunks, USAGE))])
-    ctx = make_context(console, http.open, verbose=True)
-    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    run_context = make_context(console, http.open, verbose=True)
+    result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
     assert isinstance(result, Ok)
     assert result.value.text == "Hi"
     assert stderr.getvalue() == "Check details.\nfinal thought\n"
@@ -351,8 +351,8 @@ def test_chat_hides_streamed_reasoning_without_verbose() -> None:
         {"choices": [{"delta": {"content": "Hi"}}]},
     ]
     http = FakeHttp([FakeStreamResponse(with_usage(chunks, USAGE))])
-    ctx = make_context(console, http.open)
-    result = chat(ctx, "sys", "user text", "m", {}, Usage()).run()
+    run_context = make_context(console, http.open)
+    result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
     assert isinstance(result, Ok)
     assert "secret" not in stderr.getvalue()
     assert [

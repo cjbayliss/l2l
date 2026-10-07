@@ -57,11 +57,11 @@ def path_exists(path: str) -> IO[bool]:
     return IO(lambda: os.path.exists(path))
 
 
-def path_is_dir(path: str) -> IO[bool]:
+def path_is_directory(path: str) -> IO[bool]:
     return IO(lambda: os.path.isdir(path))
 
 
-def cwd() -> IO[str]:
+def current_working_directory() -> IO[str]:
     return IO(os.getcwd)
 
 
@@ -85,7 +85,7 @@ def user_config_path(environment: Mapping[str, str]) -> IO[str]:
     )
 
 
-def resolve_cache_dir(
+def resolve_cache_directory(
     environment: Mapping[str, str], override: str | None = None
 ) -> IO[str]:
     def thunk() -> str:
@@ -176,12 +176,12 @@ class RunLog:
     close: Callable[[], None] = _no_close
 
 
-def run_log_path(cache_directory: str, now_value: float, pid_value: int) -> str:
+def run_log_path(cache_directory: str, now_value: float, process_id_value: int) -> str:
     return os.path.join(
         cache_directory,
         "logs",
         "%s-%d.log"
-        % (time.strftime("%Y%m%d-%H%M%S", time.gmtime(now_value)), pid_value),
+        % (time.strftime("%Y%m%d-%H%M%S", time.gmtime(now_value)), process_id_value),
     )
 
 
@@ -405,7 +405,7 @@ class ProcessResult:
 
 
 def run_process(
-    command: tuple[str, ...], stdin_text: str, workdir: str | None
+    command: tuple[str, ...], stdin_text: str, working_directory: str | None
 ) -> IO[ProcessResult]:
     def thunk() -> ProcessResult:
         completed = subprocess.run(
@@ -414,7 +414,7 @@ def run_process(
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            cwd=workdir,
+            cwd=working_directory,
             check=False,
         )
         return ProcessResult(completed.returncode, completed.stdout, completed.stderr)

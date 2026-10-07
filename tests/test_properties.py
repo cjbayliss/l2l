@@ -135,7 +135,8 @@ def test_split_paragraphs_reconstructs_the_document(
     text, expected = document
     paragraphs, separators = split_paragraphs(text)
     rebuilt = "".join(
-        part + sep for part, sep in zip_longest(paragraphs, separators, fillvalue="")
+        part + separator
+        for part, separator in zip_longest(paragraphs, separators, fillvalue="")
     )
     assert paragraphs == expected
     assert rebuilt == text
@@ -230,8 +231,10 @@ def partial_settings(draw: st.DrawFn) -> PartialApiSettings:
         api_key=draw(OPTIONAL_TEXT),
         model=draw(OPTIONAL_TEXT),
         timeout=draw(OPTIONAL_NUMBER),
-        max_tokens=draw(st.one_of(st.none(), st.integers(min_value=1, max_value=99))),
-        params=draw(
+        maximum_tokens=draw(
+            st.one_of(st.none(), st.integers(min_value=1, max_value=99))
+        ),
+        parameters=draw(
             st.one_of(
                 st.none(),
                 st.dictionaries(
@@ -262,8 +265,8 @@ def test_partial_merge_params_deep_merges(
     base: PartialApiSettings, extra: PartialApiSettings
 ) -> None:
     merged = base.merge(extra)
-    if base.params is not None and extra.params is not None:
-        assert merged.params == {**base.params, **extra.params}
+    if base.parameters is not None and extra.parameters is not None:
+        assert merged.parameters == {**base.parameters, **extra.parameters}
 
 
 @given(

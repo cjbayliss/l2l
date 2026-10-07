@@ -19,13 +19,13 @@ from l2l.errors import (
 )
 from l2l.http import RepairOutcome, chat, repaired_call
 from l2l.messages import (
-    analysis_info_message,
+    analysis_information_message,
     done_in_message,
     paragraph_mismatch_message,
     paragraph_still_differs_message,
     pass_cache_hit_message,
     pass_started_message,
-    retranslate_info_message,
+    retranslate_information_message,
     retranslate_majority_message,
     retranslate_pair_message,
     retranslate_skipped_message,
@@ -61,7 +61,7 @@ from l2l.plans import (
     UnitCall,
     build_pass_user,
     build_unit_retry_user,
-    plan_info_message,
+    plan_information_message,
     plan_retranslation_calls,
     plan_unit_calls,
     resolve_work_groups,
@@ -125,14 +125,14 @@ def untranslated_majority(flagged: int, total: int) -> bool:
 
 
 def run_analysis(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     text: str,
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
-    model, params = resolve_call_settings(ctx.config, pass_definition)
+    model, parameters = resolve_call_settings(run_context.config, pass_definition)
     return io_map(
-        chat(ctx, pass_definition.instruction, text, model, params, usage),
+        chat(run_context, pass_definition.instruction, text, model, parameters, usage),
         lambda result: result_map(
             result,
             lambda translated: Translated(translated.text.strip(), translated.usage),
@@ -141,41 +141,47 @@ def run_analysis(
 
 
 def analyze_document(
-    ctx: Context, pass_definition: PassDefinition, full_text: str, usage: Usage
+    run_context: Context, pass_definition: PassDefinition, full_text: str, usage: Usage
 ) -> IO[Result[Translated, TranslationError]]:
     budget = max(
-        ctx.config.max_tokens
+        run_context.config.maximum_tokens
         - estimate_tokens(pass_definition.instruction)
-        - ctx.settings.analysis_reserve_tokens,
+        - run_context.settings.analysis_reserve_tokens,
         1,
     )
     chunks = make_chunks(
         split_units_to_budget(
             split_paragraphs(full_text)[0],
             budget,
-            ctx.settings.sentence_boundary_characters,
+            run_context.settings.sentence_boundary_characters,
         ),
         budget,
     )
     if len(chunks) > 1:
         return io_result(
-            fail_budget(estimate_tokens(full_text), ctx.config.max_tokens, len(chunks))
+            fail_budget(
+                estimate_tokens(full_text),
+                run_context.config.maximum_tokens,
+                len(chunks),
+            )
         )
 
-    return run_analysis(ctx, pass_definition, full_text, usage)
+    return run_analysis(run_context, pass_definition, full_text, usage)
 
 
 def run_analysis_once(
-    ctx: Context, pass_definition: PassDefinition, full_text: str, usage: Usage
+    run_context: Context, pass_definition: PassDefinition, full_text: str, usage: Usage
 ) -> IO[Result[Translated, TranslationError]]:
-    model, params = resolve_call_settings(ctx.config, pass_definition)
-    key = cache_key(full_text, model, pass_salt(pass_definition), overrides=params)
+    model, parameters = resolve_call_settings(run_context.config, pass_definition)
+    key = cache_key(full_text, model, pass_salt(pass_definition), overrides=parameters)
     return cached_translation(
-        ctx,
+        run_context,
         key,
         usage,
-        compute=lambda: analyze_document(ctx, pass_definition, full_text, usage),
-        hit_log=verbose_log(ctx, pass_cache_hit_message(pass_definition.name)),
+        compute=lambda: analyze_document(
+            run_context, pass_definition, full_text, usage
+        ),
+        hit_log=verbose_log(run_context, pass_cache_hit_message(pass_definition.name)),
     )
 
 
@@ -194,7 +200,7 @@ def log_stage(
 
 
 def finish_pass_stage(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     previous_usage: Usage,
     next_state: State,
@@ -205,12 +211,16 @@ def finish_pass_stage(
     def after_stage(ended_at: float) -> IO[StateResult]:
         def concluded(_: None) -> IO[StateResult]:
             return conclude_state(
-                ctx, pass_definition, next_state, source_paragraphs, retry_same_mode
+                run_context,
+                pass_definition,
+                next_state,
+                source_paragraphs,
+                retry_same_mode,
             )
 
         return io_bind(
             log_stage(
-                ctx.console,
+                run_context.console,
                 "Done",
                 started_at,
                 ended_at,
@@ -220,11 +230,11 @@ def finish_pass_stage(
             concluded,
         )
 
-    return io_bind(now(ctx.clock), after_stage)
+    return io_bind(now(run_context.clock), after_stage)
 
 
 def conclude_state(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     state: State,
     source_paragraphs: tuple[str, ...],
@@ -240,7 +250,7 @@ def conclude_state(
         def enforce(ascii_started: float) -> IO[StateResult]:
             return io_map(
                 enforce_pass_ascii(
-                    ctx,
+                    run_context,
                     pass_definition,
                     current.text,
                     source_paragraphs,
@@ -255,7 +265,7 @@ def conclude_state(
                 ),
             )
 
-        return io_bind(now(ctx.clock), enforce)
+        return io_bind(now(run_context.clock), enforce)
 
     if not pass_definition.retranslate_untranslated:
         return ascii_stage(state)
@@ -271,7 +281,7 @@ def conclude_state(
     def retranslation_stage(retranslation_started: float) -> IO[StateResult]:
         return io_bind(
             retranslate_untranslated(
-                ctx,
+                run_context,
                 pass_definition,
                 state.text,
                 source_paragraphs,
@@ -283,11 +293,11 @@ def conclude_state(
             after_retranslation,
         )
 
-    return io_bind(now(ctx.clock), retranslation_stage)
+    return io_bind(now(run_context.clock), retranslation_stage)
 
 
 def retranslate_untranslated(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     text: str,
     source_paragraphs: tuple[str, ...],
@@ -300,7 +310,7 @@ def retranslate_untranslated(
     if len(paragraphs) != len(source_paragraphs):
         return io_bind(
             verbose_log(
-                ctx,
+                run_context,
                 retranslate_skipped_message(
                     pass_definition.name, len(paragraphs), len(source_paragraphs)
                 ),
@@ -315,7 +325,7 @@ def retranslate_untranslated(
             zip(source_paragraphs, paragraphs, strict=True)
         )
         if untranslated_paragraph(
-            source, output, pair, ctx.settings.ascii_character_map
+            source, output, pair, run_context.settings.ascii_character_map
         )
     )
     if not flagged:
@@ -338,16 +348,16 @@ def retranslate_untranslated(
             return io_map(retry(usage, retry_started), lifted)
 
         return io_and_then(
-            ctx.console.log(
+            run_context.console.log(
                 retranslate_majority_message(
                     pass_definition.name, len(flagged), len(paragraphs)
                 )
             ),
-            io_bind(now(ctx.clock), escalate),
+            io_bind(now(run_context.clock), escalate),
         )
 
     calls = plan_retranslation_calls(
-        ctx,
+        run_context,
         pass_definition,
         source_paragraphs,
         paragraphs,
@@ -367,12 +377,12 @@ def retranslate_untranslated(
 
         return io_and_then(
             verbose_log(
-                ctx,
+                run_context,
                 retranslate_unit_message(
                     pass_definition.name, call.index + 1, call.total
                 ),
             ),
-            run_single_call(ctx, pass_definition, call, analysis, usage),
+            run_single_call(run_context, pass_definition, call, analysis, usage),
         )
 
     def collect(
@@ -386,7 +396,7 @@ def retranslate_untranslated(
                 source_paragraphs[index],
                 body,
                 pair,
-                ctx.settings.ascii_character_map,
+                run_context.settings.ascii_character_map,
             ):
                 return fail_untranslated(pass_definition.name, index, excerpt(body))
 
@@ -401,19 +411,19 @@ def retranslate_untranslated(
         result: Result[Translated, TranslationError],
     ) -> IO[Result[Translated, TranslationError]]:
         if isinstance(result, Err):
-            return io_map(ctx.console.interrupt(), lambda _: result)
+            return io_map(run_context.console.interrupt(), lambda _: result)
 
         prompt, completion, cost = usage_delta(usage, result.value.usage)
 
         def report(ended_at: float) -> IO[Result[Translated, TranslationError]]:
             return io_map(
-                ctx.console.finish(
+                run_context.console.finish(
                     stage_done_line(ended_at - started_at, prompt, completion, cost)
                 ),
                 lambda _: result,
             )
 
-        return io_bind(now(ctx.clock), report)
+        return io_bind(now(run_context.clock), report)
 
     def start(_: None) -> IO[Result[Translated, TranslationError]]:
         return io_map(
@@ -422,20 +432,20 @@ def retranslate_untranslated(
         )
 
     return io_and_then(
-        ctx.console.log(
-            retranslate_info_message(
+        run_context.console.log(
+            retranslate_information_message(
                 pass_definition.name, len(flagged), len(paragraphs)
             )
         ),
         io_bind(
-            ctx.console.log(retranslate_pair_message(pair)),
+            run_context.console.log(retranslate_pair_message(pair)),
             lambda _: io_bind(start(None), conclude),
         ),
     )
 
 
 def run_analysis_pass(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     state: State,
     started_at: float,
@@ -449,7 +459,7 @@ def run_analysis_pass(
 
         outcome = analysis_result.value
         return finish_pass_stage(
-            ctx,
+            run_context,
             pass_definition,
             state.usage,
             State(text=state.text, analysis=outcome.text, usage=outcome.usage),
@@ -459,20 +469,20 @@ def run_analysis_pass(
 
     return io_bind(
         verbose_log(
-            ctx,
-            analysis_info_message(
+            run_context,
+            analysis_information_message(
                 pass_definition.name, len(state.text), estimate_tokens(state.text)
             ),
         ),
         lambda _: io_bind(
-            run_analysis_once(ctx, pass_definition, state.text, state.usage),
+            run_analysis_once(run_context, pass_definition, state.text, state.usage),
             after_analysis,
         ),
     )
 
 
 def run_unit(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     call: UnitCall,
     analysis: str | None,
@@ -489,7 +499,7 @@ def run_unit(
     def validate(output: str) -> Maybe[str]:
         return maybe_or(
             unit_output_problem(
-                call.source_chunk, output, ctx.settings, unit_tolerance()
+                call.source_chunk, output, run_context.settings, unit_tolerance()
             ),
             script_mismatch_problem(call.source_chunk, call.work_chunk, output),
         )
@@ -501,24 +511,24 @@ def run_unit(
 
     def on_repair(failed: int, problem: str) -> IO[None]:
         return verbose_log(
-            ctx,
+            run_context,
             unit_failed_validation_attempt(
                 pass_definition.name,
                 call.index + 1,
                 call.total,
                 problem,
                 failed,
-                ctx.settings.unit_fix_attempts,
+                run_context.settings.unit_fix_attempts,
             ),
         )
 
     def on_exhausted(bad_output: str, problem: str) -> IO[None]:
-        return ctx.console.log(
+        return run_context.console.log(
             unit_failed_validation_final(
                 pass_definition.name,
                 call.index + 1,
                 call.total,
-                ctx.settings.unit_fix_attempts,
+                run_context.settings.unit_fix_attempts,
                 problem,
             )
         )
@@ -532,14 +542,14 @@ def run_unit(
 
     return io_map(
         repaired_call(
-            ctx,
+            run_context,
             call.model,
-            call.params,
+            call.parameters,
             pass_definition.instruction,
             build_pass_user(call.source_chunk, call.work_chunk, analysis, call.context),
             validate,
             build_retry_user,
-            ctx.settings.unit_fix_attempts,
+            run_context.settings.unit_fix_attempts,
             on_repair,
             on_exhausted,
         )(usage),
@@ -548,7 +558,7 @@ def run_unit(
 
 
 def run_single_call(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     call: UnitCall,
     analysis: str | None,
@@ -564,9 +574,9 @@ def run_single_call(
 
         outcome = result.value
         stored = io_map(
-            cache_store(ctx, call.key, outcome.text, outcome.validated),
+            cache_store(run_context, call.key, outcome.text, outcome.validated),
             lambda _: verbose_log(
-                ctx,
+                run_context,
                 unit_done_message(pass_definition.name, call.index + 1, call.total),
             ),
         )
@@ -586,7 +596,7 @@ def run_single_call(
         if isinstance(cached, Just):
             return io_map(
                 verbose_log(
-                    ctx,
+                    run_context,
                     unit_cache_hit_message(
                         pass_definition.name, call.index + 1, call.total
                     ),
@@ -595,15 +605,15 @@ def run_single_call(
             )
 
         return io_bind(
-            run_unit(ctx, pass_definition, call, analysis, usage),
+            run_unit(run_context, pass_definition, call, analysis, usage),
             store,
         )
 
-    return io_bind(cache_lookup(ctx, call.key, acceptable=non_empty), proceed)
+    return io_bind(cache_lookup(run_context, call.key, acceptable=non_empty), proceed)
 
 
 def run_units(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     work_groups: tuple[tuple[str, ...], ...],
     plan: tuple[tuple[str, ...], ...],
@@ -613,7 +623,12 @@ def run_units(
     retry_attempt: int = 0,
 ) -> IO[Result[UnitsSoFar, TranslationError]]:
     calls = plan_unit_calls(
-        ctx, pass_definition, plan, work_groups, trailing_separators, retry_attempt
+        run_context,
+        pass_definition,
+        plan,
+        work_groups,
+        trailing_separators,
+        retry_attempt,
     )
 
     def unit_part(
@@ -622,7 +637,7 @@ def run_units(
         if not call.source_chunk:
             return io_map(
                 verbose_log(
-                    ctx,
+                    run_context,
                     unit_no_source_message(
                         pass_definition.name, call.index + 1, call.total
                     ),
@@ -630,7 +645,7 @@ def run_units(
                 lambda _: Ok((call.work_chunk + call.trailing_separator, Usage())),
             )
 
-        return run_single_call(ctx, pass_definition, call, analysis, usage)
+        return run_single_call(run_context, pass_definition, call, analysis, usage)
 
     def collect(parts: tuple[tuple[str, Usage], ...]) -> UnitsSoFar:
         return UnitsSoFar(
@@ -645,7 +660,7 @@ def run_units(
 
 
 def run_text_pass_once(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     state: State,
     started_at: float,
@@ -669,7 +684,7 @@ def run_text_pass_once(
         work_paragraphs,
         plan,
         pass_definition.name,
-        ctx.settings.chunk_budget_tokens,
+        run_context.settings.chunk_budget_tokens,
     )
 
     def proceed(_: None) -> IO[StateResult]:
@@ -685,7 +700,7 @@ def run_text_pass_once(
                 usage=units_result.value.usage,
             )
             return finish_pass_stage(
-                ctx,
+                run_context,
                 pass_definition,
                 state.usage,
                 next_state,
@@ -696,11 +711,12 @@ def run_text_pass_once(
 
         return io_and_then(
             verbose_log(
-                ctx, plan_info_message(pass_definition, work_paragraphs, work_groups)
+                run_context,
+                plan_information_message(pass_definition, work_paragraphs, work_groups),
             ),
             io_bind(
                 run_units(
-                    ctx,
+                    run_context,
                     pass_definition,
                     work_groups,
                     plan,
@@ -714,13 +730,13 @@ def run_text_pass_once(
         )
 
     reported_warning: IO[None] = maybe_either(
-        warning, ctx.console.log, lambda: io_pure(None)
+        warning, run_context.console.log, lambda: io_pure(None)
     )
     return io_bind(reported_warning, proceed)
 
 
 def run_text_pass(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     state: State,
     started_at: float,
@@ -750,7 +766,7 @@ def run_text_pass(
                 )
 
         return run_text_pass_once(
-            ctx,
+            run_context,
             pass_to_run,
             current_state,
             attempt_started,
@@ -784,7 +800,7 @@ def run_text_pass(
             return io_result(result)
 
         return io_map(
-            ctx.console.log(
+            run_context.console.log(
                 paragraph_still_differs_message(
                     pass_definition.name, count, len(source_paragraphs)
                 )
@@ -806,7 +822,7 @@ def run_text_pass(
 
             case _:
                 return io_map(
-                    ctx.console.log(mismatch_message(count, "continuing")),
+                    run_context.console.log(mismatch_message(count, "continuing")),
                     lambda _: result,
                 )
 
@@ -822,19 +838,19 @@ def run_text_pass(
             )
 
         return io_and_then(
-            ctx.console.log(
+            run_context.console.log(
                 mismatch_message(
                     count, "re-running the pass with one call per paragraph"
                 )
             ),
-            io_bind(now(ctx.clock), retry_at),
+            io_bind(now(run_context.clock), retry_at),
         )
 
     return io_bind(attempt(pass_definition, state, started_at, escalate=True), check)
 
 
 def run_pass(
-    ctx: Context,
+    run_context: Context,
     pass_definition: PassDefinition,
     state: State,
     started_at: float,
@@ -846,12 +862,12 @@ def run_pass(
     match pass_definition.mode:
         case "analysis":
             return run_analysis_pass(
-                ctx, pass_definition, state, started_at, source_paragraphs
+                run_context, pass_definition, state, started_at, source_paragraphs
             )
 
         case _:
             return run_text_pass(
-                ctx,
+                run_context,
                 pass_definition,
                 state,
                 started_at,
@@ -863,7 +879,7 @@ def run_pass(
 
 
 def run_passes(
-    ctx: Context,
+    run_context: Context,
     pass_definitions: tuple[PassDefinition, ...],
     state: State,
     source_paragraphs: tuple[str, ...],
@@ -878,13 +894,13 @@ def run_passes(
 
         def launch(stage_started: float) -> IO[StateResult]:
             return io_and_then(
-                ctx.console.log(
+                run_context.console.log(
                     pass_started_message(
                         number, len(pass_definitions), pass_definition.name
                     )
                 ),
                 run_pass(
-                    ctx,
+                    run_context,
                     pass_definition,
                     current_state,
                     stage_started,
@@ -895,13 +911,13 @@ def run_passes(
                 ),
             )
 
-        return io_bind(now(ctx.clock), launch)
+        return io_bind(now(run_context.clock), launch)
 
     return fold_io(enumerate(pass_definitions, 1), step, Ok(state))
 
 
 def run_pipeline(
-    ctx: Context,
+    run_context: Context,
     pass_definitions: tuple[PassDefinition, ...],
     text: str,
     started: float,
@@ -911,18 +927,18 @@ def run_pipeline(
 
     def conclude(result: StateResult) -> IO[int]:
         if isinstance(result, Err):
-            return io_map(ctx.console.log(describe(result.error)), lambda _: 1)
+            return io_map(run_context.console.log(describe(result.error)), lambda _: 1)
 
-        return finish_output(ctx, result.value, started, stdout)
+        return finish_output(run_context, result.value, started, stdout)
 
     return io_bind(
         run_passes(
-            ctx,
+            run_context,
             pass_definitions,
             State(text=text, analysis=None, usage=Usage()),
             source_paragraphs,
             separators,
-            make_chunks(source_paragraphs, ctx.settings.chunk_budget_tokens),
+            make_chunks(source_paragraphs, run_context.settings.chunk_budget_tokens),
             tuple((paragraph,) for paragraph in source_paragraphs),
         ),
         conclude,
@@ -930,7 +946,7 @@ def run_pipeline(
 
 
 def finish_output(
-    ctx: Context,
+    run_context: Context,
     state: State,
     started: float,
     stdout: TextIO,
@@ -941,7 +957,7 @@ def finish_output(
 
             def after_done(_: None) -> IO[int]:
                 return io_map(
-                    ctx.console.log(
+                    run_context.console.log(
                         usage_line(
                             "TOTAL",
                             elapsed,
@@ -954,10 +970,10 @@ def finish_output(
                 )
 
             return io_bind(
-                verbose_log(ctx, done_in_message(elapsed)),
+                verbose_log(run_context, done_in_message(elapsed)),
                 after_done,
             )
 
-        return io_bind(now(ctx.clock), report_total)
+        return io_bind(now(run_context.clock), report_total)
 
     return io_bind(write_stdout(stdout, state.text), after_write)

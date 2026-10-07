@@ -18,8 +18,8 @@ class Config:
     api_key: str
     model: str
     timeout: float
-    max_tokens: int
-    params: Mapping[str, Any]
+    maximum_tokens: int
+    parameters: Mapping[str, Any]
 
 
 PassMode = Literal["analysis", "chunk", "paragraph"]
@@ -30,7 +30,7 @@ class PassDefinition:
     name: str
     instruction: str
     mode: PassMode
-    params: Mapping[str, Any]
+    parameters: Mapping[str, Any]
     model: str | None
     ascii: bool | None
     ensure_paragraphs: bool | int | None = None
@@ -60,12 +60,12 @@ class Arguments:
     api_key: str | None
     model: str | None
     timeout: float | None
-    max_tokens: int | None
+    maximum_tokens: int | None
     no_cache: bool
     ensure_paragraphs: bool
     verbose: bool
     show_log_path: bool
-    cache_dir: str | None
+    cache_directory: str | None
     check_config: bool = False
     dry_run: bool = False
     stream: bool | None = None
@@ -196,7 +196,7 @@ PASS_KEYS = (
 
 
 DEFAULT_TIMEOUT = 120.0
-DEFAULT_MAX_TOKENS = 100000
+DEFAULT_MAXIMUM_TOKENS = 100000
 
 
 @dataclass(frozen=True)
@@ -205,28 +205,30 @@ class PartialApiSettings:
     api_key: str | None = None
     model: str | None = None
     timeout: float | None = None
-    max_tokens: int | None = None
-    params: Mapping[str, Any] | None = None
+    maximum_tokens: int | None = None
+    parameters: Mapping[str, Any] | None = None
 
     def merge(self, extra: PartialApiSettings) -> PartialApiSettings:
-        if self.params is not None and extra.params is not None:
-            params: Mapping[str, Any] | None = MappingProxyType(
-                {**self.params, **extra.params}
+        if self.parameters is not None and extra.parameters is not None:
+            parameters: Mapping[str, Any] | None = MappingProxyType(
+                {**self.parameters, **extra.parameters}
             )
-        elif extra.params is None:
-            params = self.params
+        elif extra.parameters is None:
+            parameters = self.parameters
         else:
-            params = MappingProxyType(dict(extra.params))
+            parameters = MappingProxyType(dict(extra.parameters))
 
         return PartialApiSettings(
             base_url=extra.base_url if extra.base_url is not None else self.base_url,
             api_key=extra.api_key if extra.api_key is not None else self.api_key,
             model=extra.model if extra.model is not None else self.model,
             timeout=extra.timeout if extra.timeout is not None else self.timeout,
-            max_tokens=(
-                extra.max_tokens if extra.max_tokens is not None else self.max_tokens
+            maximum_tokens=(
+                extra.maximum_tokens
+                if extra.maximum_tokens is not None
+                else self.maximum_tokens
             ),
-            params=params,
+            parameters=parameters,
         )
 
 
@@ -235,8 +237,8 @@ DEFAULT_API_SETTINGS = PartialApiSettings(
     api_key="",
     model="",
     timeout=DEFAULT_TIMEOUT,
-    max_tokens=DEFAULT_MAX_TOKENS,
-    params=MappingProxyType({}),
+    maximum_tokens=DEFAULT_MAXIMUM_TOKENS,
+    parameters=MappingProxyType({}),
 )
 
 
@@ -244,7 +246,7 @@ def resolve_call_settings(
     config: Config, pass_definition: PassDefinition
 ) -> tuple[str, Mapping[str, Any]]:
     return (pass_definition.model or config.model), MappingProxyType(
-        {**config.params, **pass_definition.params}
+        {**config.parameters, **pass_definition.parameters}
     )
 
 

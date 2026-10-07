@@ -21,7 +21,7 @@ from l2l.effects import (
     prune_old_logs,
     read_stdin,
     remove_file,
-    resolve_cache_dir,
+    resolve_cache_directory,
     stream_isatty,
     time_sleep,
     write_stdout,
@@ -34,7 +34,7 @@ from l2l.monads import (
     NOTHING,
     Err,
     Ok,
-    Ref,
+    Reference,
     Result,
     fold_io,
     io_and_then,
@@ -91,11 +91,13 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
     parser.add_argument(
         "--max-tokens",
         type=int,
+        dest="maximum_tokens",
         help="request token budget; overrides [api] max_tokens and "
         "TRANSLATE_MAX_TOKENS",
     )
     parser.add_argument(
         "--cache-dir",
+        dest="cache_directory",
         help="translation cache directory (default: $XDG_CACHE_HOME/l2l)",
     )
     parser.add_argument(
@@ -159,12 +161,12 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         api_key=parsed.api_key,
         model=parsed.model,
         timeout=parsed.timeout,
-        max_tokens=parsed.max_tokens,
+        maximum_tokens=parsed.maximum_tokens,
         no_cache=parsed.no_cache,
         ensure_paragraphs=parsed.ensure_paragraphs,
         verbose=parsed.verbose,
         show_log_path=parsed.show_log_path,
-        cache_dir=parsed.cache_dir,
+        cache_directory=parsed.cache_directory,
         check_config=parsed.check_config,
         dry_run=parsed.dry_run,
         stream=parsed.stream,
@@ -237,7 +239,9 @@ def with_console_io(
     verbose: bool = False,
 ) -> IO[int]:
     def with_live(live: bool) -> IO[int]:
-        return bound(Console(stderr, StatusLine(stderr, live), verbose=Ref(verbose)))
+        return bound(
+            Console(stderr, StatusLine(stderr, live), verbose=Reference(verbose))
+        )
 
     return io_bind(stream_isatty(stderr), with_live)
 
@@ -277,9 +281,13 @@ def dry_run_program(
     text: str,
     stdout: TextIO,
 ) -> IO[int]:
-    planning_ctx = build_context(parsed, setup, console, clock, open_http, sleep)
+    planning_run_context = build_context(
+        parsed, setup, console, clock, open_http, sleep
+    )
     return io_map(
-        write_stdout(stdout, plan_report(planning_ctx, setup.passes, text) + "\n"),
+        write_stdout(
+            stdout, plan_report(planning_run_context, setup.passes, text) + "\n"
+        ),
         lambda _: 0,
     )
 
@@ -319,7 +327,7 @@ def prune_program(
                 lambda _: 2,
             )
 
-        def with_cache_dir(cache_directory: str) -> IO[int]:
+        def with_cache_directory(cache_directory: str) -> IO[int]:
             def removed(count: int, path: str) -> IO[Result[int, TranslationError]]:
                 def maybe_remove(age: float) -> IO[Result[int, TranslationError]]:
                     if age <= days * 86400.0:
@@ -351,7 +359,10 @@ def prune_program(
                 report,
             )
 
-        return io_bind(resolve_cache_dir(environment, parsed.cache_dir), with_cache_dir)
+        return io_bind(
+            resolve_cache_directory(environment, parsed.cache_directory),
+            with_cache_directory,
+        )
 
     return with_console_io(stderr, with_console)
 
@@ -381,7 +392,7 @@ def run_main_program(
                 )
 
             def with_started(started: float) -> IO[int]:
-                def with_cache_dir(cache_directory: str) -> IO[int]:
+                def with_cache_directory(cache_directory: str) -> IO[int]:
                     def with_log(log: RunLog) -> IO[int]:
                         announced: IO[None] = maybe_either(
                             log.path,
@@ -443,7 +454,8 @@ def run_main_program(
                     return io_bind(open_run_log(cache_directory, clock), with_log)
 
                 return io_bind(
-                    resolve_cache_dir(environment, parsed.cache_dir), with_cache_dir
+                    resolve_cache_directory(environment, parsed.cache_directory),
+                    with_cache_directory,
                 )
 
             return io_bind(now(clock), with_started)
