@@ -861,6 +861,18 @@ def test_run_pipeline_translates() -> None:
     assert "TOTAL" in stderr.getvalue()
 
 
+def test_run_pipeline_logs_finished_units_when_verbose() -> None:
+    console, stderr = make_console()
+    chunks = with_usage(stream_chunks("Hello."), USAGE)
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    run_context = make_context(console, http.open, verbose=True)
+    stdout = io.StringIO()
+    code = run_pipeline(run_context, (chunk_pass(),), "你好。", 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n"
+    assert "l2l: [translate] unit 1/1 done" in stderr.getvalue()
+
+
 def test_run_pipeline_total_elapsed_measures_since_started() -> None:
     console, stderr = make_console()
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])

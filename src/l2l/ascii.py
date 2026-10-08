@@ -26,8 +26,8 @@ from l2l.monads import (
     io_bind,
     io_map,
     io_result,
+    io_result_map,
     io_traverse,
-    result_map,
 )
 from l2l.plans import (
     ascii_drop_warning,
@@ -94,12 +94,9 @@ def ascii_fix_llm(
             on_repair,
             None,
         )
-        return io_map(
+        return io_result_map(
             call(usage),
-            lambda outcome: result_map(
-                outcome,
-                lambda repaired: Translated(repaired.text, repaired.usage),
-            ),
+            lambda repaired: Translated(repaired.text, repaired.usage),
         )
 
     return cached_translation(
@@ -210,7 +207,7 @@ def ensure_ascii_output(
         if paragraph.isascii():
             return io_result(Ok((paragraph + separator, Usage())))
 
-        return io_map(
+        return io_result_map(
             repair_paragraph(
                 run_context,
                 pass_definition,
@@ -221,12 +218,9 @@ def ensure_ascii_output(
                 source_paragraphs,
                 usage,
             ),
-            lambda result: result_map(
-                result,
-                lambda translated: (
-                    translated.text,
-                    Usage(*usage_delta(usage, translated.usage)),
-                ),
+            lambda translated: (
+                translated.text,
+                Usage(*usage_delta(usage, translated.usage)),
             ),
         )
 
@@ -236,10 +230,7 @@ def ensure_ascii_output(
             reduce(usage_add, (delta for _, delta in parts), usage),
         )
 
-    return io_map(
-        io_traverse(enumerate(paragraphs), paragraph_part),
-        lambda result: result_map(result, collect),
-    )
+    return io_result_map(io_traverse(enumerate(paragraphs), paragraph_part), collect)
 
 
 def enforce_pass_ascii(

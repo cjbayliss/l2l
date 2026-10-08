@@ -59,10 +59,10 @@ from l2l.monads import (
     io_pure,
     io_result,
     io_result_bind,
+    io_result_map,
     io_traverse,
     maybe_either,
     maybe_or,
-    result_bind,
     result_map,
 )
 from l2l.plans import (
@@ -146,12 +146,9 @@ def run_analysis(
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
-    return io_map(
+    return io_result_map(
         chat(run_context, pass_definition.instruction, text, model, parameters, usage),
-        lambda result: result_map(
-            result,
-            lambda translated: Translated(translated.text.strip(), translated.usage),
-        ),
+        lambda translated: Translated(translated.text.strip(), translated.usage),
     )
 
 
@@ -263,7 +260,7 @@ def conclude_state(
             return io_result(Ok(current))
 
         def enforce(ascii_started: float) -> IO[StateResult]:
-            return io_map(
+            return io_result_map(
                 enforce_pass_ascii(
                     run_context,
                     pass_definition,
@@ -272,15 +269,12 @@ def conclude_state(
                     current.usage,
                     ascii_started,
                 ),
-                lambda result: result_map(
-                    result,
-                    lambda translated: State(
-                        translated.text,
-                        state.analysis,
-                        translated.usage,
-                        state.validated,
-                        state.problem,
-                    ),
+                lambda translated: State(
+                    translated.text,
+                    state.analysis,
+                    translated.usage,
+                    state.validated,
+                    state.problem,
                 ),
             )
 
@@ -471,9 +465,9 @@ def retranslate_untranslated(
         return io_bind(now(run_context.clock), report)
 
     def start(_: None) -> IO[Result[Translated, TranslationError]]:
-        return io_map(
+        return io_result_bind(
             io_traverse(enumerate(paragraphs), part),
-            lambda result: result_bind(result, collect),
+            lambda units: io_result(collect(units)),
         )
 
     return io_and_then(
@@ -632,14 +626,14 @@ def run_single_call(
             )
 
         outcome = result.value
-        stored = io_map(
+        stored = io_and_then(
             cache_store(
                 run_context,
                 call.key,
                 outcome.text,
                 outcome.validated and cacheable(outcome.text),
             ),
-            lambda _: verbose_log(
+            verbose_log(
                 run_context,
                 unit_done_message(pass_definition.name, call.index + 1, call.total),
             ),
@@ -738,10 +732,7 @@ def run_units(
             first_unvalidated_problem(units),
         )
 
-    return io_map(
-        io_traverse(calls, unit_part),
-        lambda result: result_map(result, collect),
-    )
+    return io_result_map(io_traverse(calls, unit_part), collect)
 
 
 def run_text_pass_once(

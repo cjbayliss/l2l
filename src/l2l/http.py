@@ -44,6 +44,7 @@ from l2l.monads import (
     io_pure,
     io_result,
     io_result_bind,
+    io_result_map,
     line_push,
     maybe_either,
     maybe_from_optional,
@@ -55,7 +56,6 @@ from l2l.monads import (
     reference_gate,
     reference_write_when,
     result_bind,
-    result_map,
 )
 from l2l.plans import plan_backoff, retry_delay, transient
 from l2l.settings import Config, Context
@@ -998,10 +998,7 @@ def streamed_call(
         ),
     }
 
-    return io_map(
-        collect_stream(run_context, full_payload),
-        lambda outcome: result_map(outcome, lambda state: to_chat_reply(state)),
-    )
+    return io_result_map(collect_stream(run_context, full_payload), to_chat_reply)
 
 
 def plain_call(

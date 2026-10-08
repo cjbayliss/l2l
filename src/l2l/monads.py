@@ -391,10 +391,7 @@ def io_traverse[S, T, E](
     items: Iterable[S], transform: Callable[[S], IO[Result[T, E]]]
 ) -> IO[Result[tuple[T, ...], E]]:
     def step(collected: tuple[T, ...], item: S) -> IO[Result[tuple[T, ...], E]]:
-        return io_map(
-            transform(item),
-            lambda outcome: result_map(outcome, lambda value: collected + (value,)),
-        )
+        return io_result_map(transform(item), lambda value: collected + (value,))
 
     return fold_io(items, step, Ok(()))
 
