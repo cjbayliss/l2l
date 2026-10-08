@@ -24,6 +24,7 @@ from l2l.monads import (
     io_pair,
     io_pure,
     io_result,
+    io_result_bind,
     io_sequence,
     result_bind,
     result_bind_io,
@@ -715,13 +716,10 @@ def read_document(
     if not exists:
         return io_result(Ok({}))
 
-    return io_map(
+    return io_result_bind(
         load_toml(path or "", description),
-        lambda result: result_bind(
-            result,
-            lambda document: result_map(
-                validate_document(path or "", document), lambda _: document
-            ),
+        lambda document: io_result(
+            result_map(validate_document(path or "", document), lambda _: document)
         ),
     )
 

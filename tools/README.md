@@ -1,27 +1,34 @@
 # tools
 
-Development tools for l2l. Each script runs directly rather than being
+Development tools for l2l. Each tool runs directly rather than being
 installed, and composes the `l2l` package it ships with:
 
 ```sh
-uv run python3 tools/optimize.py ...
+uv run python3 -m tools.optimize ...
 ```
 
-- `optimize.py` — evolve a translation instruction through rounds of
+- `optimize/` — evolve a translation instruction through rounds of
   pairwise judged challenges, or compare two instruction files directly.
   Written in the same strict functional style as the package: effects
   are `IO` values, errors are `Result`s, and all data is immutable, so
   `tests/test_optimize.py` can drive whole runs with fake clocks,
-  endpoints, and l2l subprocesses.
-- `judge.txt` — prompt template for the judge calls (`optimize.py`'s
+  endpoints, and l2l subprocesses. The tool is a package of small
+  modules: `options` parses the command line, `replies` interprets
+  endpoint and judge replies, `configuration` renders and loads TOML
+  configs, `endpoint` talks to the chat completions API, `chapters`,
+  `locations`, and `state` describe the workspace, `judging`,
+  `instructions`, and `translations` run the calls of one round, and
+  `rounds`, `compare`, and `main` compose the evolution loop, the direct
+  comparison mode, and the process entry point.
+- `judge.txt` — prompt template for the judge calls (`optimize`'s
   default `--judge-template`).
-- `rewrite.txt` — prompt template for the rewrite calls (`optimize.py`'s
+- `rewrite.txt` — prompt template for the rewrite calls (`optimize`'s
   default `--rewrite-template`).
 
-## optimize.py
+## optimize
 
-`optimize.py` improves an l2l instruction file automatically. Each round
-a _rewriter_ model proposes a challenger instruction from the judges'
+`optimize` improves an l2l instruction file automatically. Each round a
+_rewriter_ model proposes a challenger instruction from the judges'
 critiques of the previous round. The incumbent and the challenger both
 translate every chapter in the workdir, and a _judge_ model scores the
 two translations in a double-blind pairing: every judgment runs twice
@@ -45,7 +52,7 @@ files are pit against each other directly over the chapters.
 3. Run:
 
 ```sh
-uv run python3 tools/optimize.py \
+uv run python3 -m tools.optimize \
     --base-config zh2en.toml \
     --workdir exp-zh2en \
     --seed translate.txt \
@@ -53,10 +60,10 @@ uv run python3 tools/optimize.py \
     --rewriter-model z-ai/glm-5.3-flash
 ```
 
-`optimize.py` drives l2l as a subprocess, using `<python> -m l2l` from
-the repository root by default; pass `--l2l "l2l"` to use an installed
-`l2l` command instead. It requires the same Python 3.14 or newer as l2l
-and needs the `l2l` package importable (run it through `uv run` from the
+`optimize` drives l2l as a subprocess, using `<python> -m l2l` from the
+repository root by default; pass `--l2l "l2l"` to use an installed `l2l`
+command instead. It requires the same Python 3.14 or newer as l2l and
+needs the `l2l` package importable (run it through `uv run` from the
 repository root, or install the project). Its endpoint calls go through
 l2l's own HTTP transport, so proxy environment variables behave exactly
 as they do for l2l.
@@ -127,7 +134,7 @@ check is skipped when nothing was ever promoted.
 ### Compare mode
 
 ```sh
-uv run python3 tools/optimize.py \
+uv run python3 -m tools.optimize \
     --base-config zh2en.toml \
     --workdir exp-zh2en \
     --judge-model openai/gpt-5 \

@@ -118,10 +118,17 @@ REF_HELPERS = frozenset(
 THIRD_PARTY_ROOTS = frozenset({"l2l", "pycurl"})
 
 
-TOOL_IO_EDGES = frozenset({"optimize"})
+TOOL_IO_EDGES = frozenset({"main"})
 
 TOOL_EFFECT_IMPORT_ALLOWLIST: dict[str, frozenset[str]] = {
-    "optimize": frozenset({"os", "sys", "time"})
+    "chapters": frozenset({"os"}),
+    "compare": frozenset({"os"}),
+    "instructions": frozenset({"os"}),
+    "judging": frozenset({"os"}),
+    "locations": frozenset({"os"}),
+    "main": frozenset({"os", "sys", "time"}),
+    "rounds": frozenset({"os"}),
+    "translations": frozenset({"os"}),
 }
 
 TOOL_BUILTIN_CALL_EDGES: dict[str, frozenset[str]] = {
@@ -131,7 +138,7 @@ TOOL_BUILTIN_CALL_EDGES: dict[str, frozenset[str]] = {
     "exec": frozenset(),
     "input": frozenset(),
     "open": frozenset(),
-    "print": frozenset({"optimize"}),
+    "print": frozenset({"main"}),
 }
 
 
@@ -145,7 +152,9 @@ def module_names() -> frozenset[str]:
 
 def tool_module_names() -> frozenset[str]:
     return frozenset(
-        path.stem for path in TOOLS.glob("*.py") if path.stem != "__init__"
+        path.stem
+        for path in (TOOLS / "optimize").glob("*.py")
+        if path.stem not in ("__init__", "__main__")
     )
 
 
@@ -155,8 +164,8 @@ def parse_module(name: str) -> ast.Module:
 
 
 def parse_tool_module(name: str) -> ast.Module:
-    source = (TOOLS / (name + ".py")).read_text(encoding="utf-8")
-    return ast.parse(source, filename="tools/" + name + ".py")
+    source = (TOOLS / "optimize" / (name + ".py")).read_text(encoding="utf-8")
+    return ast.parse(source, filename="tools/optimize/" + name + ".py")
 
 
 def scanned() -> list[tuple[str, ast.Module]]:
@@ -318,7 +327,24 @@ def test_layers_cover_every_module() -> None:
 
 
 def test_tools_cover_expected_modules() -> None:
-    assert tool_module_names() == frozenset({"optimize"})
+    assert tool_module_names() == frozenset(
+        {
+            "chapters",
+            "compare",
+            "configuration",
+            "endpoint",
+            "environment",
+            "instructions",
+            "judging",
+            "locations",
+            "main",
+            "options",
+            "replies",
+            "rounds",
+            "state",
+            "translations",
+        }
+    )
 
 
 def test_tool_imports_stay_sanctioned() -> None:
