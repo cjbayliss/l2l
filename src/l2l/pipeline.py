@@ -58,6 +58,7 @@ from l2l.monads import (
     io_map,
     io_pure,
     io_result,
+    io_result_bind,
     io_traverse,
     maybe_either,
     maybe_or,
@@ -65,9 +66,11 @@ from l2l.monads import (
     result_map,
 )
 from l2l.plans import (
+    PassPlan,
     UnitCall,
     build_pass_user,
     build_unit_retry_user,
+    pass_chunk_plans,
     plan_information_message,
     plan_retranslation_calls,
     plan_unit_calls,
@@ -748,7 +751,7 @@ def run_text_pass_once(
     started_at: float,
     source_paragraphs: tuple[str, ...],
     separators: tuple[str, ...],
-    chunk_plan: tuple[tuple[str, ...], ...],
+    chunk_plan: PassPlan,
     paragraph_plan: tuple[tuple[str, ...], ...],
     retry_attempt: int = 0,
     retry_same_mode: PassRetry | None = None,
@@ -758,7 +761,7 @@ def run_text_pass_once(
             plan = paragraph_plan
 
         case _:
-            plan = chunk_plan
+            plan = chunk_plan.chunks
 
     work_paragraphs, _ = split_paragraphs(state.text)
     work_groups, warning = resolve_work_groups(
@@ -766,7 +769,7 @@ def run_text_pass_once(
         work_paragraphs,
         plan,
         pass_definition.name,
-        run_context.settings.chunk_budget_tokens,
+        chunk_plan.chunk_budget,
     )
 
     def proceed(_: None) -> IO[StateResult]:
@@ -830,7 +833,7 @@ def run_text_pass(
     started_at: float,
     source_paragraphs: tuple[str, ...],
     separators: tuple[str, ...],
-    chunk_plan: tuple[tuple[str, ...], ...],
+    chunk_plan: PassPlan,
     paragraph_plan: tuple[tuple[str, ...], ...],
 ) -> IO[StateResult]:
     def attempt(
@@ -944,7 +947,7 @@ def run_pass(
     started_at: float,
     source_paragraphs: tuple[str, ...],
     separators: tuple[str, ...],
-    chunk_plan: tuple[tuple[str, ...], ...],
+    chunk_plan: PassPlan,
     paragraph_plan: tuple[tuple[str, ...], ...],
 ) -> IO[StateResult]:
     match pass_definition.mode:
@@ -992,7 +995,7 @@ def run_passes(
     state: State,
     source_paragraphs: tuple[str, ...],
     separators: tuple[str, ...],
-    chunk_plan: tuple[tuple[str, ...], ...],
+    chunk_plans: tuple[PassPlan, ...],
     paragraph_plan: tuple[tuple[str, ...], ...],
 ) -> IO[StateResult]:
     def step(
@@ -1015,7 +1018,7 @@ def run_passes(
                         stage_started,
                         source_paragraphs,
                         separators,
-                        chunk_plan,
+                        chunk_plans[number - 1],
                         paragraph_plan,
                     ),
                     lambda result: conclude_pass_result(
@@ -1044,15 +1047,23 @@ def run_pipeline(
 
         return finish_output(run_context, result.value, started, stdout)
 
-    return io_bind(
-        run_passes(
+    def launch(chunk_plans: tuple[PassPlan, ...]) -> IO[StateResult]:
+        return run_passes(
             run_context,
             pass_definitions,
             State(text=text, analysis=None, usage=Usage()),
             source_paragraphs,
             separators,
-            make_chunks(source_paragraphs, run_context.settings.chunk_budget_tokens),
+            chunk_plans,
             tuple((paragraph,) for paragraph in source_paragraphs),
+        )
+
+    return io_bind(
+        io_result_bind(
+            io_result(
+                pass_chunk_plans(run_context, pass_definitions, source_paragraphs)
+            ),
+            launch,
         ),
         conclude,
     )

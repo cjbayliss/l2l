@@ -1812,7 +1812,10 @@ def test_plan_report_lists_units_and_keys() -> None:
     report = plan_report(run_context, (chunk_pass(), paragraph_pass()), text)
     lines = report.splitlines()
     assert lines[0] == "source: 8 character(s), 2 paragraph(s), ~7 tokens"
-    assert lines[1] == "pass 1/2 [translate]: mode=chunk, 1 unit(s)"
+    assert (
+        lines[1]
+        == "pass 1/2 [translate]: mode=chunk, 1 unit(s), source budget ~3500 tokens"
+    )
     assert "unit 1/1: ~7 source tokens, cache key " in lines[2]
     assert lines[3] == "pass 2/2 [translate]: mode=paragraph, 2 unit(s)"
     assert "unit 1/2:" in lines[4] and "unit 2/2:" in lines[5]
@@ -1824,6 +1827,89 @@ def test_plan_report_reports_analysis_pass() -> None:
     analysis = PassDefinition("prep", "Brief.", "analysis", {}, None, False)
     report = plan_report(run_context, (analysis,), "你好。")
     assert "pass 1/1 [prep]: mode=analysis, 1 call with the whole document" in report
+
+
+def test_chunk_planning_splits_paragraphs_to_request_budget() -> None:
+    console, stderr = make_console()
+    paragraph = "a" * 600
+    text = paragraph + "\n\n" + paragraph
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("One."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Two."), USAGE)),
+        ]
+    )
+    run_context = make_context(console, http.open, maximum_tokens=200)
+    stdout = io.StringIO()
+    code = run_pipeline(run_context, (chunk_pass(),), text, 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "One.\n\nTwo.\n"
+    assert len(http.requests) == 2
+    assert json.loads(http.requests[0].body)["messages"][1]["content"] == paragraph
+    assert json.loads(http.requests[1].body)["messages"][1]["content"] == paragraph
+    assert "budget" not in stderr.getvalue()
+
+
+def test_chunk_planning_fails_fast_on_oversized_paragraph() -> None:
+    console, stderr = make_console()
+    http = FakeHttp([])
+    run_context = make_context(console, http.open, maximum_tokens=200)
+    code = run_pipeline(
+        run_context, (chunk_pass(),), "a" * 1200, 0.0, io.StringIO()
+    ).run()
+    assert code == 1
+    assert http.requests == []
+    logged = stderr.getvalue()
+    assert "pass [translate] failed" in logged
+    assert "over the 200-token budget" in logged
+
+
+def test_plan_report_exposes_budget_violations() -> None:
+    console, _ = make_console()
+    run_context = make_context(console, FakeHttp([]).open, maximum_tokens=200)
+    report = plan_report(run_context, (chunk_pass(),), "a" * 1200)
+    assert "source budget ~183 tokens" in report
+    assert (
+        "warning: [translate] paragraph 1 is ~300 source tokens, "
+        "over the ~183-token source budget" in report
+    )
+
+
+def test_plan_report_reserves_draft_space_in_later_passes() -> None:
+    console, _ = make_console()
+    run_context = make_context(console, FakeHttp([]).open, maximum_tokens=400)
+    paragraph = "a" * 400
+    text = paragraph + "\n\n" + paragraph
+    report = plan_report(run_context, (chunk_pass(), chunk_pass("polish")), text)
+    assert (
+        "pass 1/2 [translate]: mode=chunk, 1 unit(s), source budget ~383 tokens"
+        in report
+    )
+    assert (
+        "pass 2/2 [polish]: mode=chunk, 2 unit(s), source budget ~191 tokens" in report
+    )
+
+
+def test_later_pass_with_draft_splits_to_request_budget() -> None:
+    console, stderr = make_console()
+    paragraph = "a" * 400
+    text = paragraph + "\n\n" + paragraph
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("One.\n\nTwo."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("One."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Two."), USAGE)),
+        ]
+    )
+    run_context = make_context(console, http.open, maximum_tokens=400)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        run_context, (chunk_pass(), chunk_pass("polish")), text, 0.0, stdout
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "One.\n\nTwo.\n"
+    assert len(http.requests) == 3
+    assert "budget" not in stderr.getvalue()
 
 
 def test_resolve_work_groups_regroups_paragraph_mode_independently() -> None:

@@ -75,7 +75,7 @@ Getting started:
 | `--show-log-path`, `-l`    | Print the run log's path to stderr at startup.                                                                         |
 | `--stream` / `--no-stream` | Force streamed or plain responses. Default follows `api.params.stream`.                                                |
 | `--check-config`           | Print the resolved configuration and exit without translating.                                                         |
-| `--dry-run`                | Print the per-pass call plan (units, token estimates, cache keys) and exit without calling the endpoint.               |
+| `--dry-run`                | Print the per-pass call plan (units, token estimates, cache keys, per-pass source budgets) and exit without calling the endpoint; warns when a paragraph cannot fit in a single request. |
 | `--version`                | Print the version and exit.                                                                                            |
 
 Precedence, from weakest to strongest:
@@ -203,7 +203,12 @@ Optional per-pass keys:
 Modes:
 
 - **`chunk`** — translates paragraphs grouped into token-budgeted
-  chunks. The default, and cheapest for long documents.
+  chunks. The default, and cheapest for long documents. Each pass
+  derives its chunk size from the actual request budget: `max_tokens`
+  minus the pass instruction, any analysis brief from an earlier pass,
+  and room for the draft when a previous pass produced text, capped at
+  3,500 source tokens per call. A single paragraph too large for one
+  request fails the run up front instead of mid-pass.
 - **`paragraph`** — translates each paragraph with its own call,
   including neighbouring source paragraphs as read-only context to
   anchor short or ambiguous units (title-only lines, ellipses, …).
