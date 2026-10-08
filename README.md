@@ -70,6 +70,7 @@ Getting started:
 | `--cache-prune DAYS`       | Delete cache entries older than DAYS days and exit.                                                                    |
 | `--log-keep DAYS`          | Delete run logs older than DAYS days at startup (default 30; `0` keeps every log).                                     |
 | `--ensure-paragraphs`      | Enforce the paragraph count after each pass (strict). Equivalent to `ensure_paragraphs = true`; see `[options]` below. |
+| `--best-effort`            | Keep the last reply and continue when a unit still fails validation after all repair attempts (default: fail the run with exit code 1). Unvalidated replies are never cached. |
 | `--verbose`, `-v`          | Print chunking, cache, timing, and reasoning diagnostics to stderr.                                                    |
 | `--show-log-path`, `-l`    | Print the run log's path to stderr at startup.                                                                         |
 | `--stream` / `--no-stream` | Force streamed or plain responses. Default follows `api.params.stream`.                                                |

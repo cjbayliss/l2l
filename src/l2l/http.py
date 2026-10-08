@@ -1014,7 +1014,12 @@ def plain_call(
     )
 
 
-type RepairOutcome = tuple[str, Usage, bool]
+@dataclass(frozen=True)
+class RepairOutcome:
+    text: str
+    usage: Usage
+    validated: bool
+    problem: str | None = None
 
 
 def repaired_call(
@@ -1041,7 +1046,7 @@ def repaired_call(
             reply = reply_result.value
             problem = validate(reply.text)
             if isinstance(problem, Nothing):
-                return io_result(Ok((reply.text, reply.usage, True)))
+                return io_result(Ok(RepairOutcome(reply.text, reply.usage, True)))
 
             if failed > maximum_repairs:
                 announce = (
@@ -1049,7 +1054,12 @@ def repaired_call(
                     if on_exhausted is not None
                     else io_pure(None)
                 )
-                return io_map(announce, lambda _: Ok((reply.text, reply.usage, False)))
+                return io_map(
+                    announce,
+                    lambda _: Ok(
+                        RepairOutcome(reply.text, reply.usage, False, problem.value)
+                    ),
+                )
 
             def continued(_: None) -> IO[Result[RepairOutcome, TranslationError]]:
                 return attempt(

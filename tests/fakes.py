@@ -187,6 +187,7 @@ def make_context(
     verbose: bool = False,
     clock: Callable[[], float] = time.time,
     sleep: Sleep = no_sleep,
+    best_effort: bool = False,
 ) -> Context:
     config = Config(
         base_url="http://endpoint.test/v1",
@@ -208,6 +209,7 @@ def make_context(
         clock=clock,
         sleep=sleep,
         stream=stream,
+        best_effort=best_effort,
     )
 
 

@@ -71,6 +71,7 @@ class Arguments:
     stream: bool | None = None
     cache_prune: int | None = None
     log_keep: int = 30
+    best_effort: bool = False
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,7 @@ class Context:
     clock: Clock
     sleep: Sleep
     stream: bool | None = None
+    best_effort: bool = False
 
 
 def build_settings() -> Settings:

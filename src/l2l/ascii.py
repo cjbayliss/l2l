@@ -97,7 +97,8 @@ def ascii_fix_llm(
         return io_map(
             call(usage),
             lambda outcome: result_map(
-                outcome, lambda repaired: Translated(repaired[0], repaired[1])
+                outcome,
+                lambda repaired: Translated(repaired.text, repaired.usage),
             ),
         )
 

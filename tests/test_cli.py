@@ -176,6 +176,70 @@ def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:
     assert "TOTAL" in stderr.getvalue()
 
 
+def test_strict_validation_failure_ends_the_cli_run(tmp_path: Path) -> None:
+    bad = "One.\n\nTwo."
+    chunks = [
+        *stream_chunks(bad),
+        {"choices": [{"delta": {}}], "usage": USAGE},
+    ]
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(write_config(tmp_path)),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--no-cache",
+            "--ensure-paragraphs",
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 1
+    assert stdout.getvalue() == ""
+    logged = stderr.getvalue()
+    assert "failed validation 2 time(s)" in logged
+    assert "pass [translate] failed" in logged
+    assert "still failed validation after 2 repair attempt(s)" in logged
+    assert len(http.requests) == 6
+
+
+def test_best_effort_flag_keeps_the_unvalidated_reply(tmp_path: Path) -> None:
+    bad = "One.\n\nTwo."
+    chunks = [
+        *stream_chunks(bad),
+        {"choices": [{"delta": {}}], "usage": USAGE},
+    ]
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(write_config(tmp_path)),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--no-cache",
+            "--ensure-paragraphs",
+            "--best-effort",
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == bad + "\n"
+    logged = stderr.getvalue()
+    assert "failed validation 2 time(s)" in logged
+    assert "Keeping the last reply, uncached" in logged
+    assert len(http.requests) == 6
+
+
 def test_plain_call_end_to_end(tmp_path: Path) -> None:
     body = {
         "choices": [{"message": {"content": "Plain."}}],

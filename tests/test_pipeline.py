@@ -953,13 +953,13 @@ def test_ensure_paragraphs_reports_a_failed_retry_attempt() -> None:
     assert len(requests) == 6
 
 
-def test_ensure_paragraphs_continues_when_paragraph_mode_still_differs() -> None:
+def test_best_effort_paragraph_pass_continues_when_counts_still_differ() -> None:
     console, stderr = make_console()
     stubborn = "One.\n\nTwo."
     http = FakeHttp(
         [FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE))] * 3
     )
-    run_context = make_context(console, http.open)
+    run_context = make_context(console, http.open, best_effort=True)
     stdout = io.StringIO()
     merged = PassDefinition("translate", "T.", "paragraph", {}, None, False, True)
     code = run_pipeline(run_context, (merged,), "你好。", 0.0, stdout).run()
@@ -969,6 +969,27 @@ def test_ensure_paragraphs_continues_when_paragraph_mode_still_differs() -> None
     assert "failed validation 2 time(s)" in logged
     assert "output has 2 paragraph(s), source has 1" in logged
     assert "continuing" in logged
+    assert len(http.requests) == 3
+
+
+def test_strict_paragraph_pass_fails_when_counts_still_differ() -> None:
+    console, stderr = make_console()
+    stubborn = "One.\n\nTwo."
+    http = FakeHttp(
+        [FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE))] * 3
+    )
+    run_context = make_context(console, http.open)
+    stdout = io.StringIO()
+    merged = PassDefinition("translate", "T.", "paragraph", {}, None, False, True)
+    code = run_pipeline(run_context, (merged,), "你好。", 0.0, stdout).run()
+    assert code == 1
+    assert stdout.getvalue() == ""
+    logged = stderr.getvalue()
+    assert "failed validation 2 time(s)" in logged
+    assert "continuing" in logged
+    assert "pass [translate] failed" in logged
+    assert "still failed validation after 2 repair attempt(s)" in logged
+    assert "--best-effort" in logged
     assert len(http.requests) == 3
 
 
@@ -1198,7 +1219,7 @@ def test_ensure_paragraphs_retries_pass_in_paragraph_mode() -> None:
     assert len(http.requests) == 5
 
 
-def test_ensure_paragraphs_warns_when_retry_still_differs() -> None:
+def test_ensure_paragraphs_best_effort_warns_when_retry_still_differs() -> None:
     console, stderr = make_console()
     stubborn = "One.\n\nTwo.\n\nThree."
     hello = "Hello.\n\nSurprise."
@@ -1213,7 +1234,7 @@ def test_ensure_paragraphs_warns_when_retry_still_differs() -> None:
             FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
         ]
     )
-    run_context = make_context(console, http.open)
+    run_context = make_context(console, http.open, best_effort=True)
     stdout = io.StringIO()
     code = run_pipeline(
         run_context,
@@ -1228,6 +1249,34 @@ def test_ensure_paragraphs_warns_when_retry_still_differs() -> None:
     assert "still differs (3 vs 2)" in logged
     assert "continuing" in logged
     assert len(http.requests) == 7
+
+
+def test_strict_chunk_pass_escalates_before_failing_on_exhaustion() -> None:
+    console, stderr = make_console()
+    stubborn = "One.\n\nTwo.\n\nThree."
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE)),
+        ]
+    )
+    run_context = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        run_context,
+        (chunk_pass(ensure_paragraphs=True),),
+        "你好。\n\n世界。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 1
+    assert stdout.getvalue() == ""
+    logged = stderr.getvalue()
+    assert "re-running the pass with one call per paragraph" in logged
+    assert "failed validation 2 time(s)" in logged
+    assert "pass [translate] failed" in logged
+    assert len(http.requests) == 9
 
 
 def test_unit_validation_repairs_hallucinated_paragraph(tmp_path: Path) -> None:
@@ -1272,7 +1321,7 @@ def test_unit_validation_repairs_hallucinated_paragraph(tmp_path: Path) -> None:
     assert cached[0].read_text(encoding="utf-8") == "Chapter 4: Ruined."
 
 
-def test_unit_validation_gives_up_warns_and_skips_cache(tmp_path: Path) -> None:
+def test_unit_validation_strict_mode_fails_and_skips_cache(tmp_path: Path) -> None:
     console, stderr = make_console()
     cache_directory = tmp_path / "cache"
     cache_directory.mkdir()
@@ -1289,6 +1338,37 @@ def test_unit_validation_gives_up_warns_and_skips_cache(tmp_path: Path) -> None:
     )
     stdout = io.StringIO()
     code = run_pipeline(run_context, (paragraph_pass(),), "你好。", 0.0, stdout).run()
+    assert code == 1
+    assert stdout.getvalue() == ""
+    logged = stderr.getvalue()
+    assert "failed validation 2 time(s)" in logged
+    assert "pass [translate] failed" in logged
+    assert "still failed validation after 2 repair attempt(s)" in logged
+    assert len(http.requests) == 3
+    assert list(cache_directory.glob("*.txt")) == []
+
+
+def test_unit_validation_best_effort_warns_and_skips_cache(tmp_path: Path) -> None:
+    console, stderr = make_console()
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+    bad = "One.\n\nTwo."
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks(bad), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(bad), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(bad), USAGE)),
+        ]
+    )
+    run_context = make_context(
+        console,
+        http.open,
+        cache_directory=str(cache_directory),
+        use_cache=True,
+        best_effort=True,
+    )
+    stdout = io.StringIO()
+    code = run_pipeline(run_context, (paragraph_pass(),), "你好。", 0.0, stdout).run()
     assert code == 0
     assert stdout.getvalue() == "One.\n\nTwo.\n"
     logged = stderr.getvalue()
@@ -1296,6 +1376,28 @@ def test_unit_validation_gives_up_warns_and_skips_cache(tmp_path: Path) -> None:
     assert "uncached" in logged
     assert len(http.requests) == 3
     assert list(cache_directory.glob("*.txt")) == []
+
+
+def test_strict_mode_fails_the_run_on_empty_replies() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks(""), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(""), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(""), USAGE)),
+        ]
+    )
+    run_context = make_context(console, http.open)
+    stdout = io.StringIO()
+    merged = PassDefinition("translate", "T.", "paragraph", {}, None, False, True)
+    code = run_pipeline(run_context, (merged,), "你好。", 0.0, stdout).run()
+    assert code == 1
+    assert stdout.getvalue() == ""
+    logged = stderr.getvalue()
+    assert "the reply was empty" in logged
+    assert "pass [translate] failed" in logged
+    assert "still failed validation after 2 repair attempt(s)" in logged
+    assert len(http.requests) == 3
 
 
 def test_unit_validation_repairs_dropped_chunk_paragraph() -> None:

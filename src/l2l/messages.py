@@ -39,12 +39,16 @@ def analysis_information_message(pass_name: str, characters: int, tokens: int) -
 
 
 def unit_failed_validation_final(
-    pass_name: str, index: int, total: int, attempts: int, problem: str
+    pass_name: str, index: int, total: int, attempts: int, problem: str, kept: bool
 ) -> str:
-    return (
-        "l2l: [%s] unit %d/%d failed validation %d time(s); "
-        "last problem: %s. Keeping the last reply, uncached"
-        % (pass_name, index, total, attempts, problem)
+    kept_note = " Keeping the last reply, uncached" if kept else ""
+    return "l2l: [%s] unit %d/%d failed validation %d time(s); last problem: %s.%s" % (
+        pass_name,
+        index,
+        total,
+        attempts,
+        problem,
+        kept_note,
     )
 
 

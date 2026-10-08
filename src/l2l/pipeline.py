@@ -19,6 +19,7 @@ from l2l.errors import (
     TranslationError,
     describe,
     fail_budget,
+    fail_invalid_output,
     fail_pass,
     fail_unit,
     fail_untranslated,
@@ -106,6 +107,8 @@ class State:
     text: str
     analysis: str | None
     usage: Usage
+    validated: bool = True
+    problem: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,12 +116,15 @@ class UnitResult:
     text: str
     validated: bool
     usage: Usage
+    problem: str | None = None
 
 
 @dataclass(frozen=True)
 class UnitsSoFar:
     outputs: tuple[str, ...]
     usage: Usage
+    validated: bool
+    problem: str | None
 
 
 StateResult = Result[State, TranslationError]
@@ -266,7 +272,11 @@ def conclude_state(
                 lambda result: result_map(
                     result,
                     lambda translated: State(
-                        translated.text, state.analysis, translated.usage
+                        translated.text,
+                        state.analysis,
+                        translated.usage,
+                        state.validated,
+                        state.problem,
                     ),
                 ),
             )
@@ -282,7 +292,15 @@ def conclude_state(
         if isinstance(result, Err):
             return io_result(Err(result.error))
 
-        return ascii_stage(State(result.value.text, state.analysis, result.value.usage))
+        return ascii_stage(
+            State(
+                result.value.text,
+                state.analysis,
+                result.value.usage,
+                state.validated,
+                state.problem,
+            )
+        )
 
     def retranslation_stage(retranslation_started: float) -> IO[StateResult]:
         return io_bind(
@@ -386,12 +404,12 @@ def retranslate_untranslated(
 
     def part(
         indexed: tuple[int, str],
-    ) -> IO[Result[tuple[str, Usage], TranslationError]]:
+    ) -> IO[Result[UnitResult, TranslationError]]:
         index, paragraph = indexed
         call = call_for.get(index)
         if call is None:
             separator = separators[index] if index < len(separators) else ""
-            return io_result(Ok((paragraph + separator, Usage())))
+            return io_result(Ok(UnitResult(paragraph + separator, True, Usage())))
 
         return io_and_then(
             verbose_log(
@@ -410,9 +428,9 @@ def retranslate_untranslated(
         )
 
     def collect(
-        parts: tuple[tuple[str, Usage], ...],
+        units: tuple[UnitResult, ...],
     ) -> Result[Translated, TranslationError]:
-        texts = tuple(text for text, _ in parts)
+        texts = tuple(unit.text for unit in units)
         for index in flagged:
             separator = separators[index] if index < len(separators) else ""
             body = texts[index].removesuffix(separator)
@@ -427,7 +445,7 @@ def retranslate_untranslated(
         return Ok(
             Translated(
                 "".join(texts),
-                reduce(usage_add, (delta for _, delta in parts), usage),
+                reduce(usage_add, (unit.usage for unit in units), usage),
             )
         )
 
@@ -486,7 +504,13 @@ def run_analysis_pass(
             run_context,
             pass_definition,
             state.usage,
-            State(text=state.text, analysis=outcome.text, usage=outcome.usage),
+            State(
+                text=state.text,
+                analysis=outcome.text,
+                usage=outcome.usage,
+                validated=state.validated,
+                problem=state.problem,
+            ),
             started_at,
             source_paragraphs,
         )
@@ -553,6 +577,7 @@ def run_unit(
                 call.total,
                 run_context.settings.unit_fix_attempts,
                 problem,
+                run_context.best_effort,
             )
         )
 
@@ -560,7 +585,13 @@ def run_unit(
         outcome: Result[RepairOutcome, TranslationError],
     ) -> Result[UnitResult, TranslationError]:
         return result_map(
-            outcome, lambda repaired: UnitResult(repaired[0], repaired[2], repaired[1])
+            outcome,
+            lambda repaired: UnitResult(
+                repaired.text,
+                repaired.validated,
+                repaired.usage,
+                repaired.problem,
+            ),
         )
 
     return io_map(
@@ -588,10 +619,10 @@ def run_single_call(
     call: UnitCall,
     usage: Usage,
     cacheable: Callable[[str], bool] = always_acceptable,
-) -> IO[Result[tuple[str, Usage], TranslationError]]:
+) -> IO[Result[UnitResult, TranslationError]]:
     def store(
         result: Result[UnitResult, TranslationError],
-    ) -> IO[Result[tuple[str, Usage], TranslationError]]:
+    ) -> IO[Result[UnitResult, TranslationError]]:
         if isinstance(result, Err):
             return io_result(
                 fail_unit(pass_definition.name, call.index + 1, result.error)
@@ -613,16 +644,18 @@ def run_single_call(
         return io_map(
             stored,
             lambda _: Ok(
-                (
+                UnitResult(
                     outcome.text + call.trailing_separator,
+                    outcome.validated,
                     Usage(*usage_delta(usage, outcome.usage)),
+                    outcome.problem,
                 )
             ),
         )
 
     def proceed(
         cached: Maybe[str],
-    ) -> IO[Result[tuple[str, Usage], TranslationError]]:
+    ) -> IO[Result[UnitResult, TranslationError]]:
         if isinstance(cached, Just):
             return io_map(
                 verbose_log(
@@ -631,7 +664,9 @@ def run_single_call(
                         pass_definition.name, call.index + 1, call.total
                     ),
                 ),
-                lambda _: Ok((cached.value + call.trailing_separator, Usage())),
+                lambda _: Ok(
+                    UnitResult(cached.value + call.trailing_separator, True, Usage())
+                ),
             )
 
         return io_bind(
@@ -664,7 +699,7 @@ def run_units(
 
     def unit_part(
         call: UnitCall,
-    ) -> IO[Result[tuple[str, Usage], TranslationError]]:
+    ) -> IO[Result[UnitResult, TranslationError]]:
         if not call.source_chunk:
             return io_map(
                 verbose_log(
@@ -673,15 +708,31 @@ def run_units(
                         pass_definition.name, call.index + 1, call.total
                     ),
                 ),
-                lambda _: Ok((call.work_chunk + call.trailing_separator, Usage())),
+                lambda _: Ok(
+                    UnitResult(call.work_chunk + call.trailing_separator, True, Usage())
+                ),
             )
 
         return run_single_call(run_context, pass_definition, call, usage)
 
-    def collect(parts: tuple[tuple[str, Usage], ...]) -> UnitsSoFar:
+    def first_unvalidated_problem(
+        units: tuple[UnitResult, ...],
+    ) -> str | None:
+        return next(
+            (
+                unit.problem
+                for unit in units
+                if not unit.validated and unit.problem is not None
+            ),
+            None,
+        )
+
+    def collect(units: tuple[UnitResult, ...]) -> UnitsSoFar:
         return UnitsSoFar(
-            tuple(text for text, _ in parts),
-            reduce(usage_add, (delta for _, delta in parts), usage),
+            tuple(unit.text for unit in units),
+            reduce(usage_add, (unit.usage for unit in units), usage),
+            all(unit.validated for unit in units),
+            first_unvalidated_problem(units),
         )
 
     return io_map(
@@ -729,6 +780,12 @@ def run_text_pass_once(
                 text=ensure_blank_line_separators("".join(units_result.value.outputs)),
                 analysis=state.analysis,
                 usage=units_result.value.usage,
+                validated=state.validated and units_result.value.validated,
+                problem=(
+                    units_result.value.problem
+                    if units_result.value.problem is not None
+                    else state.problem
+                ),
             )
             return finish_pass_stage(
                 run_context,
@@ -909,6 +966,26 @@ def run_pass(
             )
 
 
+def conclude_pass_result(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    result: StateResult,
+) -> StateResult:
+    if isinstance(result, Err):
+        return result
+
+    if result.value.validated or run_context.best_effort:
+        return result
+
+    return fail_pass(
+        pass_definition.name,
+        fail_invalid_output(
+            run_context.settings.unit_fix_attempts,
+            result.value.problem or "the output failed validation",
+        ).error,
+    )
+
+
 def run_passes(
     run_context: Context,
     pass_definitions: tuple[PassDefinition, ...],
@@ -930,15 +1007,20 @@ def run_passes(
                         number, len(pass_definitions), pass_definition.name
                     )
                 ),
-                run_pass(
-                    run_context,
-                    pass_definition,
-                    current_state,
-                    stage_started,
-                    source_paragraphs,
-                    separators,
-                    chunk_plan,
-                    paragraph_plan,
+                io_map(
+                    run_pass(
+                        run_context,
+                        pass_definition,
+                        current_state,
+                        stage_started,
+                        source_paragraphs,
+                        separators,
+                        chunk_plan,
+                        paragraph_plan,
+                    ),
+                    lambda result: conclude_pass_result(
+                        run_context, pass_definition, result
+                    ),
                 ),
             )
 
