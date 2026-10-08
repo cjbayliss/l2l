@@ -1,26 +1,19 @@
 # l2l
 
-**NOTE:** This project is created using an LLM (mostly GLM 5.3 Flash)
+**NOTE:** This project is created using an LLM (mostly GLM 5.3 Flash).
 
 l2l is a command-line translator: it reads text from stdin, translates
-it, and writes the result to stdout, using any OpenAI-compatible chat
-completions endpoint.
+it with any OpenAI-compatible chat completions endpoint, and writes the
+result to stdout.
 
-Your config's instruction defines the translation direction — there are
-no built-in language pairs, so one tool handles Chinese to English,
-Japanese to English, English to German, or any other combination.
+There are no built-in language pairs - the instruction in your config
+defines the direction, so one tool handles any pair. l2l splits text
+into paragraphs and runs them through one or more passes, each a call
+type with its own instruction, model, and parameters. Malformed replies
+are re-asked with corrective feedback, and every result is cached on
+disk so interrupted runs resume cheaply.
 
-l2l splits text into paragraphs and processes units through one or more
-_passes_, each a call type with its own instruction, model, and
-parameters. It validates replies and re-asks with corrective feedback
-when malformed, and caches every result on disk so interrupted runs
-resume cheaply.
-
-## Install
-
-l2l requires **Python 3.14 or newer** and uses `pycurl` (libcurl) for
-its HTTP transport; on platforms without a `pycurl` wheel, installing
-the libcurl development headers first lets pip build it.
+## Installation
 
 ```sh
 uv tool install git+https://github.com/cjbayliss/l2l
@@ -31,6 +24,16 @@ This installs the `l2l` command. To run it without installing:
 ```sh
 uv run l2l
 ```
+
+## Requirements
+
+- Python 3.14 or newer
+- [uv](https://docs.astral.sh/uv/) for the install and test commands
+  below
+- libcurl: l2l uses `pycurl` for HTTP transport; on platforms without a
+  `pycurl` wheel, install the libcurl development headers first so pip
+  can build it
+- An API key for any OpenAI-compatible chat completions endpoint
 
 ## Usage
 
@@ -44,188 +47,218 @@ For example:
 l2l zh2en.toml < chapter1.txt > chapter1.en.txt
 ```
 
-Empty input succeeds without calling the endpoint.
-
-Getting started:
+Empty input succeeds without calling the endpoint. To get started:
 
 1. Copy `docs/configs/zh2en.toml` (Chinese → English) or
-   `docs/configs/ja2en.toml` (Japanese → English) and the matching
-   instruction file from `docs/prompts/`.
-2. Put your API key in the config — or better, in the
+   `docs/configs/ja2en.toml` (Japanese → English), plus the matching
+   instruction files from `docs/prompts/`.
+2. Put your API key in the config - or better, in the
    `TRANSLATE_API_KEY` environment variable.
 3. Run `l2l --check-config` to verify your setup, then translate.
 
-### Command-line options
+### Options
 
-| Option                     | Effect                                                                                                                 |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `CONFIG`                   | Optional path to a TOML config file. See [Config file resolution](#config-file-resolution).                            |
-| `--base-url URL`           | API endpoint. Overrides `[api] base_url` and `TRANSLATE_BASE_URL`.                                                     |
-| `--api-key KEY`            | API key. Overrides `[api] api_key` and `TRANSLATE_API_KEY`.                                                            |
-| `--model MODEL`            | Default model. Overrides `[api] model` and `TRANSLATE_MODEL`.                                                          |
-| `--timeout SECONDS`        | Per-request timeout. Overrides `[api] timeout` and `TRANSLATE_TIMEOUT`.                                                |
-| `--max-tokens N`           | Per-request token budget. Overrides `[api] max_tokens` and `TRANSLATE_MAX_TOKENS`.                                     |
-| `--cache-dir DIR`          | Translation cache directory (default: `$XDG_CACHE_HOME/l2l`, falling back to `~/.cache/l2l`).                          |
-| `--no-cache`               | Bypass the translation cache for this run.                                                                             |
-| `--cache-prune DAYS`       | Delete cache entries older than DAYS days and exit.                                                                    |
-| `--log-keep DAYS`          | Delete run logs older than DAYS days at startup (default 30; `0` keeps every log).                                     |
-| `--ensure-paragraphs`      | Enforce the paragraph count after each pass (strict). Equivalent to `ensure_paragraphs = true`; see `[options]` below. |
-| `--best-effort`            | Keep the last reply and continue when a unit still fails validation after all repair attempts (default: fail the run with exit code 1). Unvalidated replies are never cached. |
-| `--verbose`, `-v`          | Print chunking, cache, timing, and reasoning diagnostics to stderr.                                                    |
-| `--show-log-path`, `-l`    | Print the run log's path to stderr at startup.                                                                         |
-| `--stream` / `--no-stream` | Force streamed or plain responses. Default follows `api.params.stream`.                                                |
-| `--check-config`           | Print the resolved configuration and exit without translating.                                                         |
-| `--dry-run`                | Print the per-pass call plan (units, token estimates, cache keys, per-pass source budgets) and exit without calling the endpoint; warns when a paragraph cannot fit in a single request. |
-| `--version`                | Print the version and exit.                                                                                            |
+- `CONFIG` - optional path to a TOML config file; see
+  [Config file resolution](#config-file-resolution).
+- `--base-url URL` - API endpoint; overrides `[api] base_url` and
+  `TRANSLATE_BASE_URL`.
+- `--api-key KEY` - API key; overrides `[api] api_key` and
+  `TRANSLATE_API_KEY`.
+- `--model MODEL` - default model; overrides `[api] model` and
+  `TRANSLATE_MODEL`.
+- `--timeout SECONDS` - per-request timeout; overrides `[api] timeout`
+  and `TRANSLATE_TIMEOUT`.
+- `--max-tokens N` - per-request token budget; overrides
+  `[api] max_tokens` and `TRANSLATE_MAX_TOKENS`.
+- `--cache-dir DIR` - cache directory (default: `$XDG_CACHE_HOME/l2l`,
+  falling back to `~/.cache/l2l`).
+- `--no-cache` - bypass the translation cache for this run.
+- `--cache-prune DAYS` - delete cache entries older than DAYS days and
+  exit.
+- `--log-keep DAYS` - delete run logs older than DAYS days at startup
+  (default 30; `0` keeps every log).
+- `--ensure-paragraphs` - enforce the paragraph count after each pass
+  (strict); equivalent to `ensure_paragraphs = true`, see `[options]`.
+- `--best-effort` - keep the last reply and continue when a unit still
+  fails validation after all repair attempts (default: fail the run with
+  exit code 1). Unvalidated replies are never cached.
+- `--verbose`, `-v` - print chunking, cache, timing, and reasoning
+  diagnostics to stderr.
+- `--show-log-path`, `-l` - print the run log's path to stderr at
+  startup.
+- `--stream` / `--no-stream` - force streamed or plain responses;
+  default follows `api.params.stream`.
+- `--check-config` - print the resolved configuration and exit without
+  translating.
+- `--dry-run` - print the per-pass call plan (units, token estimates,
+  cache keys) and exit without calling the endpoint; warns when a
+  paragraph cannot fit in a single request.
+- `--version` - print the version and exit.
 
 Precedence, from weakest to strongest:
 
-```
+```text
 defaults < user config < selected config < environment < command line
 ```
 
 ### Exit codes
 
-| Code  | Meaning                                                 |
-| ----- | ------------------------------------------------------- |
-| `0`   | Success (including empty input).                        |
-| `1`   | Pipeline error (endpoint, budget, or pass failure).     |
-| `2`   | Configuration or argument error.                        |
-| `130` | Interrupted with Ctrl-C.                                |
-| `141` | stdout closed early (SIGPIPE), e.g. piping into `head`. |
-
-### Interactive verbose toggle
+- `0` - success (including empty input).
+- `1` - pipeline error (endpoint, budget, or pass failure).
+- `2` - configuration or argument error.
+- `130` - interrupted with Ctrl-C.
+- `141` - stdout closed early (SIGPIPE), e.g. piping into `head`.
 
 When stderr is a terminal, press **Tab** during a run to toggle verbose
-output. l2l re-renders the session's stderr for the new mode and reveals
-reasoning captured while hidden. stdin stays reserved for the input
-text; the listener is off when stderr is not a terminal (pipes, CI).
-
-### Logging
+output; the listener is off for pipes and CI.
 
 Every run writes a log to `<cache-dir>/logs/<timestamp>-<pid>.log`, even
-with `--no-cache`. The log records each request payload and everything
-received in reply: raw SSE lines for streamed calls, response bodies for
-plain calls, and any transport or protocol errors. Request headers — and
-therefore API keys — are never logged. Pass `--show-log-path` (or `-l`)
-to print the log's path at startup, e.g. when attaching a log to a bug
-report.
+with `--no-cache`. It records each request payload and everything
+received in reply; request headers - and therefore API keys - are never
+logged. Pass `--show-log-path` to print the log's path at startup.
 
 ## Configuration
 
 Configuration lives in a TOML file with up to three kinds of table:
 
 ```toml
-[api]          # endpoint, key, model, limits, extra request parameters
-[[pass]]       # one or more passes, run in order
-[options]      # global toggles
+[api]      # endpoint, key, model, limits, extra request parameters
+[[pass]]   # one or more passes, run in order
+[options]  # global toggles
 ```
 
-A complete example (Chinese fiction to English — see `docs/configs/` for
-working copies):
+A minimal example:
 
 ```toml
 [api]
 base_url = "https://openrouter.ai/api/v1"
 api_key = "sk-..."
 model = "z-ai/glm-5.3-flash"
-timeout = 120.0
-max_tokens = 100000
-
-[api.params]
-stop = ["END"]
 
 [[pass]]
 name = "translate"
+instruction = "Translate Chinese fiction to natural English."
 mode = "chunk"
-instruction_file = "translate.txt"
-model = "z-ai/glm-5.3-flash"
-[pass.params]
-reasoning_effort = "high"
-
-[options]
-ascii = true
-ensure_paragraphs = true
 ```
+
+Complete multi-pass examples live in `docs/configs/`, with their
+instruction files in `docs/prompts/`.
 
 ### Config file resolution
 
-l2l selects the config providing your passes in this order:
-
 1. The positional `CONFIG` argument, if given.
-2. The `$TRANSLATE_CONFIG` environment variable.
+2. The `TRANSLATE_CONFIG` environment variable.
 3. `./l2l.toml` in the current directory.
 4. `~/.config/l2l/config.toml` (or `$XDG_CONFIG_HOME/l2l/config.toml`).
 
-Separately, l2l always merges the user config at
-`~/.config/l2l/config.toml` (or `$XDG_CONFIG_HOME/l2l/config.toml`) in
-as a base layer when it exists; the selected config overrides it. Put
-your `base_url` and `api_key` there, so per-project configs only need
-the passes.
+Separately, that user config is always merged in as a base layer when it
+exists; the selected config overrides it. Put your `base_url` and
+`api_key` there, so per-project configs only need the passes.
 
-### `[api]` — endpoint settings
+### Environment variables
 
-| Key          | Type    | Default  | Meaning                                                                                                                      |
-| ------------ | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `base_url`   | string  | —        | Chat completions endpoint, e.g. `https://openrouter.ai/api/v1`. A trailing `/` is stripped.                                  |
-| `api_key`    | string  | —        | Sent as `Authorization: Bearer …`.                                                                                           |
-| `model`      | string  | —        | Default model for calls (can be overridden per pass).                                                                        |
-| `timeout`    | number  | `120.0`  | Request timeout in seconds.                                                                                                  |
-| `max_tokens` | integer | `100000` | Token budget for requests.                                                                                                   |
-| `params`     | table   | `{}`     | Extra keys merged into every request body, e.g. `stop = ["END"]` or provider routing options. Must contain only JSON values. |
+- `TRANSLATE_CONFIG` - fallback config path (see resolution order
+  above).
+- `TRANSLATE_BASE_URL`, `TRANSLATE_API_KEY`, `TRANSLATE_MODEL`,
+  `TRANSLATE_TIMEOUT`, `TRANSLATE_MAX_TOKENS` - fallbacks for the
+  matching `[api]` keys; the command-line options win over all of them.
+- `XDG_CACHE_HOME`, `XDG_CONFIG_HOME` - relocate the cache and user
+  config directories.
+
+### `[api]` - endpoint settings
+
+- `base_url` (string) - chat completions endpoint, e.g.
+  `https://openrouter.ai/api/v1`; a trailing `/` is stripped.
+- `api_key` (string) - sent as `Authorization: Bearer ...`.
+- `model` (string) - default model for calls (can be overridden per
+  pass).
+- `timeout` (number, default `120.0`) - request timeout in seconds.
+- `max_tokens` (integer, default `100000`) - token budget for requests.
+- `params` (table, default `{}`) - extra keys merged into every request
+  body, e.g. `stop = ["END"]`; must contain only JSON values.
 
 `base_url`, `api_key`, and `model` have no built-in default but only
 need to be set in one place: this table, the user config, the
-environment, or the matching command-line option, which always wins (the
-table above names each setting's environment variable).
+environment, or the command line.
 
-### `[[pass]]` — pipeline passes
+### `[[pass]]` - pipeline passes
 
-`[[pass]]` entries run in order; each pass's output is the next's input.
-Each pass requires:
+Passes run in order; each pass's output is the next's input.
 
-| Key                                   | Meaning                                                                                                                                                          |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                                | Non-empty string, used in logs and cache keys.                                                                                                                   |
-| `instruction` _or_ `instruction_file` | Exactly one: the instruction as inline text, or a path to a text file (relative to the config file). The instruction defines the language pair and target style. |
-
-Optional per-pass keys:
-
-| Key                        | Default                              | Meaning                                                                                                   |
-| -------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| `mode`                     | `"chunk"`                            | How the document is processed (see below).                                                                |
-| `model`                    | `[api] model`                        | Model override for this pass's calls.                                                                     |
-| `params`                   | `{}`                                 | Extra request-body keys for this pass's calls, merged over `[api] params`.                                |
-| `ascii`                    | `[options] ascii`                    | Per-pass ASCII enforcement override.                                                                      |
-| `ensure_paragraphs`        | `[options] ensure_paragraphs`        | Per-pass paragraph-count check override: `true` (strict), `false` (off), or a positive integer tolerance. |
-| `retranslate_untranslated` | `[options] retranslate_untranslated` | Per-pass untranslated-paragraph check override (see below).                                               |
+- `name` (required) - non-empty string, used in logs and cache keys.
+- `instruction` or `instruction_file` (exactly one required) - the
+  instruction as inline text, or a path to a text file (relative to the
+  config file). The instruction defines the language pair and target
+  style.
+- `mode` (default `"chunk"`) - how the document is processed, see below.
+- `model` (default `[api] model`) - model override for this pass's
+  calls.
+- `params` (default `{}`) - extra request-body keys for this pass's
+  calls, merged over `[api] params`.
+- `ascii`, `ensure_paragraphs`, `retranslate_untranslated` - per-pass
+  overrides of the `[options]` toggles below.
 
 Modes:
 
-- **`chunk`** — translates paragraphs grouped into token-budgeted
-  chunks. The default, and cheapest for long documents. Each pass
-  derives its chunk size from the actual request budget: `max_tokens`
-  minus the pass instruction, any analysis brief from an earlier pass,
-  and room for the draft when a previous pass produced text, capped at
-  3,500 source tokens per call. A single paragraph too large for one
-  request fails the run up front instead of mid-pass.
-- **`paragraph`** — translates each paragraph with its own call,
-  including neighbouring source paragraphs as read-only context to
-  anchor short or ambiguous units (title-only lines, ellipses, …).
-- **`analysis`** — reads the whole document and stores a preparation
-  brief (outline, names, hard-to-translate items) that later passes
-  include for context. The document must fit in one call; otherwise
-  increase `max_tokens`.
+- `chunk` - translates paragraphs grouped into token-budgeted chunks.
+  The default, and cheapest for long documents. Each pass derives its
+  chunk size from the actual request budget (`max_tokens` minus
+  instruction, context, and draft room), capped at 3,500 source tokens
+  per call. A single paragraph too large for one request fails the run
+  up front.
+- `paragraph` - translates each paragraph with its own call, including
+  neighbouring source paragraphs as read-only context to anchor short or
+  ambiguous units (title-only lines, ellipses, ...).
+- `analysis` - reads the whole document and stores a preparation brief
+  (outline, names, hard-to-translate items) that later passes include
+  for context. The document must fit in one call; otherwise increase
+  `max_tokens`.
 
 A typical multi-pass setup pairs an `analysis` pass with a `chunk` pass.
 
-### `[options]` — global toggles
+### `[options]` - global toggles
 
-| Key                        | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| -------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ascii`                    | `false` | Enforce pure ASCII output. Assumes a Latin-script target language; leave it off for targets such as Russian, Greek, Japanese, or Chinese.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `ensure_paragraphs`        | `false` | Paragraph-count enforcement. `true` requires each pass's output to match the source paragraph count exactly, re-running a mismatching chunk-mode pass with one call per paragraph. A positive integer sets a tolerance: `ensure_paragraphs = 2` accepts outputs within ±2 paragraphs of the source and only re-runs beyond that. `false` disables the check entirely. While a pass runs, each chunk reply is also rejected (and re-asked with corrective feedback) when its paragraph count drifts beyond the tolerance; `paragraph`-mode passes always require exactly one paragraph per call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `retranslate_untranslated` | `false` | After each pass, compare every output paragraph against its source paragraph (by index). l2l first guesses the (source, target) language pair from the letters alone — the most frequent Unicode script in the source text, and the most common script among output paragraphs that no longer read as the source; no endpoint call is involved. A paragraph counts as untranslated when it matches the source after mechanical ASCII folding (echoes often differ only in punctuation and whitespace) or when it carries no letters of the detected target script; sources without letters (rules, numbers) are never flagged. When more than half of the paragraphs are flagged in a chunk-mode pass, l2l first re-runs the whole pass once in its own mode — fresh endpoint calls, cached under retry keys so the flagged output is never replayed — and paragraph mode goes straight to per-paragraph retranslation. Flagged paragraphs (after any such retry) are re-asked with one call each, using the pass's own instruction plus neighbouring source paragraphs as context, and retranslation results are cached under keys dedicated to retranslation, provided they no longer read as untranslated. A paragraph that is still untranslated after retranslation fails the run with exit code 1, and the failed repair is not cached, so the next run asks the endpoint again. When the target script cannot be told from the source — only echoes came back, or a script-level pair such as Chinese and Japanese kanji — the check falls back to the historical no-ASCII-letters rule, so Latin-script targets stay covered. |
+- `ascii` (default `false`) - enforce pure ASCII output. Assumes a
+  Latin-script target language; leave it off for targets such as
+  Russian, Greek, Japanese, or Chinese.
+- `ensure_paragraphs` (default `false`) - paragraph-count enforcement.
+  `true` requires each pass's output to match the source paragraph count
+  exactly, re-running a mismatching chunk-mode pass with one call per
+  paragraph; a positive integer sets a tolerance (`2` accepts outputs
+  within ±2 paragraphs); `false` disables the check. Chunk replies whose
+  count drifts beyond the tolerance are re-asked with corrective
+  feedback; `paragraph`-mode passes always require exactly one paragraph
+  per call.
+- `retranslate_untranslated` (default `false`) - after each pass, l2l
+  flags output paragraphs that still read as their source (matching
+  after mechanical ASCII folding, or carrying no letters of the detected
+  target script) and re-asks each one with the pass's instruction plus
+  neighbouring source paragraphs as context. When more than half the
+  paragraphs are flagged in a chunk-mode pass, the whole pass is re-run
+  once first. Retranslations are cached only when they no longer read as
+  untranslated; a paragraph still untranslated afterwards fails the run
+  with exit code 1, and the failed repair is not cached.
 
-All toggles can be overridden per pass (`ascii` / `ensure_paragraphs` /
-`retranslate_untranslated` on a `[[pass]]` entry).
+## Testing
+
+```sh
+uv run pytest
+```
+
+The suite runs with branch coverage for `l2l` and `tools` and fails
+below 99% (see `addopts` in `pyproject.toml`). Lint and types:
+
+```sh
+uv run ruff check
+uv run mypy --strict
+```
+
+## Development tools
+
+`tools/optimize` evolves a translation instruction through rounds of
+pairwise judged challenges, or compares two instruction files directly;
+see `tools/README.md`:
+
+```sh
+uv run python3 -m tools.optimize --help
+```
