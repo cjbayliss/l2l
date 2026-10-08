@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import reduce
 from itertools import accumulate, chain
 from typing import Any
 
-from l2l.errors import HttpError, TranslationError
-from l2l.monads import IO, NOTHING, Just, Maybe
+from l2l.errors import HttpError, TranslationError, fail_budget, fail_pass
+from l2l.messages import chunk_budget_violation_message
+from l2l.monads import IO, NOTHING, Err, Just, Maybe, Ok, Result
 from l2l.settings import (
     Context,
     PassDefinition,
@@ -185,6 +187,180 @@ def resolve_work_groups(
 
         case _:
             return make_chunks(work_paragraphs, budget), warning
+
+
+type ChunkPlan = tuple[tuple[str, ...], ...]
+
+
+PROMPT_SCAFFOLDING_TOKENS = 16
+
+
+type PassModeSet = frozenset[PassMode]
+
+
+@dataclass(frozen=True)
+class PromptAllowance:
+    instruction_tokens: int
+    analysis_tokens: int
+    scaffolding_tokens: int
+    includes_draft: bool
+
+    def request_tokens(self, source_tokens: int) -> int:
+        draft_tokens = source_tokens if self.includes_draft else 0
+        return (
+            self.instruction_tokens
+            + self.analysis_tokens
+            + self.scaffolding_tokens
+            + source_tokens
+            + draft_tokens
+        )
+
+
+@dataclass(frozen=True)
+class PassPlan:
+    chunks: ChunkPlan
+    chunk_budget: int
+    source_budget: int
+
+
+def preceding_modes(
+    pass_definitions: tuple[PassDefinition, ...],
+) -> tuple[PassModeSet, ...]:
+    def grow(
+        accumulated: tuple[PassModeSet, ...], pass_definition: PassDefinition
+    ) -> tuple[PassModeSet, ...]:
+        previous = accumulated[-1] if accumulated else frozenset[PassMode]()
+        return accumulated + (previous | {pass_definition.mode},)
+
+    modes_after_each_pass: tuple[PassModeSet, ...] = reduce(grow, pass_definitions, ())
+    return (frozenset[PassMode](),) + modes_after_each_pass[:-1]
+
+
+def prompt_allowance(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    earlier_pass_modes: PassModeSet,
+) -> PromptAllowance:
+    return PromptAllowance(
+        instruction_tokens=estimate_tokens(pass_definition.instruction),
+        analysis_tokens=(
+            run_context.settings.analysis_reserve_tokens
+            if "analysis" in earlier_pass_modes
+            else 0
+        ),
+        scaffolding_tokens=PROMPT_SCAFFOLDING_TOKENS,
+        includes_draft=bool(earlier_pass_modes - {"analysis"}),
+    )
+
+
+def pass_source_budget(allowance: PromptAllowance, maximum_tokens: int) -> int:
+    reserved_tokens = (
+        allowance.instruction_tokens
+        + allowance.analysis_tokens
+        + allowance.scaffolding_tokens
+    )
+    available_tokens = max(maximum_tokens - reserved_tokens, 0)
+    source_share_count = 2 if allowance.includes_draft else 1
+    return max(available_tokens // source_share_count, 1)
+
+
+def plan_pass_chunks(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    earlier_pass_modes: PassModeSet,
+    source_paragraphs: tuple[str, ...],
+) -> PassPlan:
+    allowance = prompt_allowance(run_context, pass_definition, earlier_pass_modes)
+    source_budget = pass_source_budget(allowance, run_context.config.maximum_tokens)
+    chunk_budget = min(run_context.settings.chunk_budget_tokens, source_budget)
+    return PassPlan(
+        chunks=make_chunks(source_paragraphs, chunk_budget),
+        chunk_budget=chunk_budget,
+        source_budget=source_budget,
+    )
+
+
+def oversized_paragraph_sizes(
+    source_paragraphs: tuple[str, ...], source_budget: int
+) -> tuple[tuple[int, int], ...]:
+    sizes = tuple(
+        (index, estimate_tokens(paragraph))
+        for index, paragraph in enumerate(source_paragraphs)
+    )
+    return tuple((index, size) for index, size in sizes if size > source_budget)
+
+
+def plan_violation(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    earlier_pass_modes: PassModeSet,
+    source_paragraphs: tuple[str, ...],
+) -> TranslationError | None:
+    match pass_definition.mode:
+        case "analysis":
+            return None
+
+        case _:
+            allowance = prompt_allowance(
+                run_context, pass_definition, earlier_pass_modes
+            )
+            source_budget = pass_source_budget(
+                allowance, run_context.config.maximum_tokens
+            )
+            oversized = oversized_paragraph_sizes(source_paragraphs, source_budget)
+            if not oversized:
+                return None
+
+            _, source_tokens = oversized[0]
+            return fail_pass(
+                pass_definition.name,
+                fail_budget(
+                    allowance.request_tokens(source_tokens),
+                    run_context.config.maximum_tokens,
+                ).error,
+            ).error
+
+
+def pass_chunk_plans(
+    run_context: Context,
+    pass_definitions: tuple[PassDefinition, ...],
+    source_paragraphs: tuple[str, ...],
+) -> Result[tuple[PassPlan, ...], TranslationError]:
+    earlier_pass_modes = preceding_modes(pass_definitions)
+
+    def indexed_violation(
+        indexed: tuple[int, PassDefinition],
+    ) -> TranslationError | None:
+        index, pass_definition = indexed
+        return plan_violation(
+            run_context,
+            pass_definition,
+            earlier_pass_modes[index],
+            source_paragraphs,
+        )
+
+    first_violation = next(
+        (
+            violation
+            for violation in map(indexed_violation, enumerate(pass_definitions))
+            if violation is not None
+        ),
+        None,
+    )
+    if first_violation is not None:
+        return Err(first_violation)
+
+    return Ok(
+        tuple(
+            plan_pass_chunks(
+                run_context,
+                pass_definition,
+                earlier_pass_modes[index],
+                source_paragraphs,
+            )
+            for index, pass_definition in enumerate(pass_definitions)
+        )
+    )
 
 
 def build_ascii_fix_user(source_paragraph: str, output_paragraph: str) -> str:
@@ -383,9 +559,7 @@ def plan_report(
     text: str,
 ) -> str:
     source_paragraphs, separators = split_paragraphs(text)
-    chunk_plan = make_chunks(
-        source_paragraphs, run_context.settings.chunk_budget_tokens
-    )
+    earlier_pass_modes = preceding_modes(pass_definitions)
     paragraph_plan = tuple((paragraph,) for paragraph in source_paragraphs)
 
     def report_pass(indexed: tuple[int, PassDefinition]) -> tuple[str, ...]:
@@ -400,17 +574,23 @@ def plan_report(
                 return ("%s: mode=analysis, 1 call with the whole document" % header,)
 
             case _:
+                pass_plan = plan_pass_chunks(
+                    run_context,
+                    pass_definition,
+                    earlier_pass_modes[number - 1],
+                    source_paragraphs,
+                )
                 plan = (
                     paragraph_plan
                     if pass_definition.mode == "paragraph"
-                    else chunk_plan
+                    else pass_plan.chunks
                 )
                 work_groups, warning = resolve_work_groups(
                     pass_definition.mode,
                     source_paragraphs,
                     plan,
                     pass_definition.name,
-                    run_context.settings.chunk_budget_tokens,
+                    pass_plan.chunk_budget,
                 )
                 calls = plan_unit_calls(
                     run_context,
@@ -420,9 +600,26 @@ def plan_report(
                     unit_separators(plan, separators),
                     None,
                 )
+                budget_note = (
+                    ", source budget ~%d tokens" % pass_plan.chunk_budget
+                    if pass_definition.mode == "chunk"
+                    else ""
+                )
+                violations = (
+                    oversized_paragraph_sizes(
+                        source_paragraphs, pass_plan.source_budget
+                    )
+                    if pass_definition.mode == "chunk"
+                    else ()
+                )
                 return (
-                    "%s: mode=%s, %d unit(s)"
-                    % (header, pass_definition.mode, len(work_groups)),
+                    "%s: mode=%s, %d unit(s)%s"
+                    % (
+                        header,
+                        pass_definition.mode,
+                        len(work_groups),
+                        budget_note,
+                    ),
                     *(
                         "  unit %d/%d: ~%d source tokens, cache key %s..."
                         % (
@@ -437,6 +634,16 @@ def plan_report(
                         ("  warning: %s" % warning.value,)
                         if isinstance(warning, Just)
                         else ()
+                    ),
+                    *(
+                        "  warning: %s"
+                        % chunk_budget_violation_message(
+                            pass_definition.name,
+                            paragraph_index,
+                            paragraph_tokens,
+                            pass_plan.source_budget,
+                        )
+                        for paragraph_index, paragraph_tokens in violations
                     ),
                 )
 

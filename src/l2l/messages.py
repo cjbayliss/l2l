@@ -175,5 +175,15 @@ def retranslate_unit_message(pass_name: str, index: int, total: int) -> str:
     )
 
 
+def chunk_budget_violation_message(
+    pass_name: str, index: int, tokens: int, budget: int
+) -> str:
+    return (
+        "[%s] paragraph %d is ~%d source tokens, over the ~%d-token source "
+        "budget for a single request in this pass; raise api.max_tokens or "
+        "shorten the input" % (pass_name, index + 1, tokens, budget)
+    )
+
+
 def done_in_message(elapsed: float) -> str:
     return "l2l: done in %.1fs" % elapsed
