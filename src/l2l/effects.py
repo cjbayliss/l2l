@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import tomllib
 from collections.abc import Callable, Mapping
@@ -144,16 +145,42 @@ def cache_read(cache_directory: str, key: str) -> IO[Maybe[str]]:
     return IO(thunk)
 
 
-def cache_write(cache_directory: str, key: str, value: str) -> IO[None]:
-    def thunk() -> None:
-        path = cache_path(cache_directory, key)
-        temporary_path = path + ".tmp"
-        with open(temporary_path, "w", encoding="utf-8") as handle:
-            handle.write(value)
+CACHE_TEMPORARY_SUFFIX = ".txt.tmp"
 
-        os.replace(temporary_path, path)
+
+def write_file_atomically(
+    final_path: str, content: str, temporary_suffix: str
+) -> IO[bool]:
+    def thunk() -> bool:
+        directory = os.path.dirname(final_path) or "."
+        temporary_prefix = os.path.basename(final_path) + "."
+        try:
+            descriptor, temporary_path = tempfile.mkstemp(
+                dir=directory, prefix=temporary_prefix, suffix=temporary_suffix
+            )
+        except OSError:
+            return False
+
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(content)
+
+            os.replace(temporary_path, final_path)
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.remove(temporary_path)
+
+            return False
+
+        return True
 
     return IO(thunk)
+
+
+def cache_write(cache_directory: str, key: str, value: str) -> IO[bool]:
+    return write_file_atomically(
+        cache_path(cache_directory, key), value, CACHE_TEMPORARY_SUFFIX
+    )
 
 
 def log_stamp(now_value: float) -> str:
