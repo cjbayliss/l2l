@@ -1,4 +1,6 @@
 import json
+import socket
+from dataclasses import replace
 from typing import Any
 
 import pycurl
@@ -15,6 +17,7 @@ from fakes import (
     stream_chunks,
     with_usage,
 )
+from http_server import json_reply, local_endpoint, raw_reply
 
 from l2l.console import toggle_verbose
 from l2l.errors import HttpError, TranslationError, describe, fail_http
@@ -761,3 +764,107 @@ def test_log_all_writes_each_message_when_verbose() -> None:
     outcome = log_all(console, ("one", "two")).run()
     assert outcome == Ok(())
     assert stream.getvalue() == "one\ntwo\n"
+
+
+DIRECT_ENVIRONMENT = {"no_proxy": "127.0.0.1,localhost"}
+
+
+def real_open_http(request: Any, timeout: float) -> Result[Any, TranslationError]:
+    return curl_open(request, timeout, DIRECT_ENVIRONMENT)
+
+
+def local_context(console: Any, endpoint_url: str) -> Any:
+    run_context = make_context(console, real_open_http)
+    return replace(
+        run_context, config=replace(run_context.config, base_url=endpoint_url)
+    )
+
+
+def closed_local_port() -> int:
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = int(probe.getsockname()[1])
+    probe.close()
+    return port
+
+
+def test_http_post_json_round_trips_a_local_server() -> None:
+    console, _ = make_console()
+    with local_endpoint(lambda body, headers: json_reply({"echo": "ok"})) as endpoint:
+        result = http_post_json(
+            local_context(console, endpoint.url), {"model": "m"}
+        ).run()
+    assert isinstance(result, Ok)
+    assert result.value == {"echo": "ok"}
+    assert len(endpoint.requests) == 1
+    sent = endpoint.requests[0]
+    assert sent.path == "/v1/chat/completions"
+    assert sent.headers["Authorization"] == "Bearer key"
+    assert sent.payload() == {"model": "m"}
+
+
+def test_http_post_json_reports_a_status_failure_from_a_local_server() -> None:
+    console, _ = make_console()
+
+    def overloaded(body: bytes, headers: dict[str, str]) -> Any:
+        return (429, (("Retry-After", "7"),), b"slow down")
+
+    with local_endpoint(overloaded) as endpoint:
+        result = http_post_json(
+            local_context(console, endpoint.url), {"model": "m"}
+        ).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "status"
+    assert failure.status == 429
+    assert failure.detail == "slow down"
+    assert failure.retry_after == 7.0
+
+
+def test_http_post_json_reports_an_unreachable_local_port() -> None:
+    console, _ = make_console()
+    endpoint_url = "http://127.0.0.1:%d/v1" % closed_local_port()
+    result = http_post_json(local_context(console, endpoint_url), {"model": "m"}).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "unreachable"
+
+
+def test_http_post_json_reports_invalid_json_from_a_local_server() -> None:
+    console, _ = make_console()
+    with local_endpoint(lambda body, headers: raw_reply(200, b"not json")) as endpoint:
+        result = http_post_json(
+            local_context(console, endpoint.url), {"model": "m"}
+        ).run()
+    assert isinstance(result, Err)
+    failure = result.error
+    assert isinstance(failure, HttpError)
+    assert failure.kind == "protocol"
+    assert "invalid JSON" in describe(failure)
+
+
+def test_chat_streams_a_completion_from_a_local_server() -> None:
+    console, _ = make_console()
+
+    def stream_hello(body: bytes, headers: dict[str, str]) -> Any:
+        frames = (
+            b'data: {"choices": [{"delta": {"content": "Hel"}}]}\n\n',
+            b'data: {"choices": [{"delta": {"content": "lo"}}]}\n\n',
+            b"data: [DONE]\n\n",
+        )
+        return (200, (("Content-Type", "text/event-stream"),), b"".join(frames))
+
+    with local_endpoint(stream_hello) as endpoint:
+        run_context = replace(local_context(console, endpoint.url), stream=True)
+        result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == "Hello"
+    sent = endpoint.requests[0]
+    assert sent.headers["Accept"] == "text/event-stream"
+    payload = sent.payload()
+    assert payload["stream"] is True
+    stream_options = payload["stream_options"]
+    assert isinstance(stream_options, dict)
+    assert "include_usage" in stream_options

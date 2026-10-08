@@ -48,6 +48,7 @@ from l2l.monads import (
     io_map,
     io_pure,
     io_result,
+    io_result_bind,
     io_sequence,
     io_traverse,
     io_when_unit,
@@ -265,12 +266,10 @@ def extract_object(text: str) -> Result[dict[str, Any], TranslationError]:
         return fail_config("no JSON object in reply: %s" % compact(text))
 
     try:
-        parsed = json.loads(text[start : end + 1])
+        parsed: dict[str, Any] = json.loads(text[start : end + 1])
     except json.JSONDecodeError as error:
         return fail_config("reply is not valid JSON: %s" % error)
 
-    if not isinstance(parsed, dict):
-        return fail_config("reply is not a JSON object")
     return Ok(parsed)
 
 
@@ -297,11 +296,8 @@ def strip_reply(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("```"):
         lines = stripped.splitlines()
-        if len(lines) >= 2 and lines[-1].strip().startswith("```"):
-            lines = lines[1:-1]
-        elif len(lines) >= 1:
-            lines = lines[1:]
-        stripped = "\n".join(lines).strip()
+        closing = len(lines) >= 2 and lines[-1].strip().startswith("```")
+        stripped = "\n".join(lines[1:-1] if closing else lines[1:]).strip()
     return stripped
 
 
@@ -444,10 +440,7 @@ def render_config(
         def with_option_lines(
             lines: tuple[str, ...],
         ) -> Result[str, TranslationError]:
-            return result_bind(
-                pass_groups(),
-                with_pass_parts(api_lines, ("", "[options]") + lines),
-            )
+            return result_bind(pass_groups(), with_pass_parts(api_lines, lines))
 
         return result_bind(emit_body("options", options), with_option_lines)
 
@@ -876,13 +869,13 @@ def curl_endpoint(
             return Ok(EndpointReply(text, body))
 
         def respond(
-            opened: Result[Any, TranslationError],
+            response: Any,
         ) -> IO[Result[EndpointReply, TranslationError]]:
-            if isinstance(opened, Err):
-                return io_result(opened)
-            return io_map(opened.value.body(), loaded)
+            return io_map(response.body(), loaded)
 
-        return io_bind(io_result(curl_open(request, timeout, environment)), respond)
+        return io_result_bind(
+            io_result(curl_open(request, timeout, environment)), respond
+        )
 
     return open_endpoint
 
@@ -2280,14 +2273,12 @@ def run_compare(
         )
 
     def with_existence(
-        outcomes: Result[tuple[bool, ...], TranslationError],
+        outcomes: tuple[bool, ...],
     ) -> IO[Result[None, TranslationError]]:
-        if isinstance(outcomes, Err):
-            return io_result(outcomes)
         missing = next(
             (
                 path
-                for path, present in zip(paths, outcomes.value, strict=True)
+                for path, present in zip(paths, outcomes, strict=True)
                 if not present
             ),
             None,
@@ -2296,7 +2287,7 @@ def run_compare(
             return io_result(fail_config("prompt file not found: %s" % missing))
         return io_bind(read_text_file(paths[0], "instruction"), chain_result(with_left))
 
-    return io_bind(io_traverse(paths, existing), with_existence)
+    return io_result_bind(io_traverse(paths, existing), with_existence)
 
 
 def resolve_api(

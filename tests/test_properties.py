@@ -1,4 +1,5 @@
 import json
+import tomllib
 from itertools import chain, zip_longest
 from typing import Any
 
@@ -21,6 +22,7 @@ from l2l.text import (
     split_to_budget,
     think_step,
 )
+from tools.optimize import emit_body, load_base_config, render_config, toml_value
 
 PLAIN_TEXT = st.text(
     alphabet=st.characters(min_codepoint=32, max_codepoint=0x9FFF),
@@ -282,3 +284,111 @@ def test_plan_backoff_is_monotone_and_capped(
     assert len(delays) == attempts
     assert tuple(delays) == tuple(sorted(delays))
     assert all(delay <= cap for delay in delays)
+
+
+TOML_KEY = st.text(alphabet="abcdefghijklmnopqrstuvwxyz_", min_size=1, max_size=8)
+TOML_SCALAR = st.one_of(
+    st.booleans(),
+    st.integers(min_value=-(2**62), max_value=2**62),
+    st.floats(allow_nan=False, allow_infinity=False, width=16),
+    st.text(
+        alphabet=st.characters(min_codepoint=32, max_codepoint=0x2FFF),
+        max_size=12,
+    ),
+)
+TOML_TABLE = st.dictionaries(TOML_KEY, TOML_SCALAR)
+TOML_NAME = st.text(alphabet="abcdefghijklmnopqrstuvwxyz", min_size=1, max_size=8)
+
+
+@st.composite
+def toml_pass(draw: st.DrawFn) -> dict[str, Any]:
+    return {**draw(TOML_TABLE), "name": draw(TOML_NAME)}
+
+
+@given(st.one_of(TOML_SCALAR, st.lists(TOML_SCALAR, max_size=4)))
+def test_toml_value_round_trips_through_tomllib(value: Any) -> None:
+    rendered = toml_value(value)
+    assert isinstance(rendered, Ok)
+    assert tomllib.loads("value = " + rendered.value)["value"] == value
+
+
+def emitted_tables(table: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: emitted_tables(value) if isinstance(value, dict) else value
+        for key, value in table.items()
+        if value != {}
+    }
+
+
+@given(TOML_TABLE)
+def test_emit_body_round_trips_a_flat_table(table: dict[str, Any]) -> None:
+    body = emit_body("api", table)
+    assert isinstance(body, Ok)
+    parsed = tomllib.loads("[api]\n" + "\n".join(body.value))
+    assert parsed["api"] == emitted_tables(table)
+
+
+@st.composite
+def nested_tables(draw: st.DrawFn) -> dict[str, Any]:
+    children = draw(st.dictionaries(TOML_KEY, TOML_TABLE, max_size=3))
+    return {**draw(TOML_TABLE), **children}
+
+
+@given(nested_tables())
+def test_emit_body_round_trips_a_nested_table(table: dict[str, Any]) -> None:
+    body = emit_body("options", table)
+    assert isinstance(body, Ok)
+    parsed = tomllib.loads("[options]\n" + "\n".join(body.value))
+    assert parsed["options"] == emitted_tables(table)
+
+
+@st.composite
+def base_documents(
+    draw: st.DrawFn,
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    tuple[dict[str, Any], ...],
+]:
+    api: dict[str, Any] = draw(TOML_TABLE)
+    options: dict[str, Any] = draw(TOML_TABLE)
+    passes: tuple[dict[str, Any], ...] = tuple(
+        draw(st.lists(toml_pass(), min_size=1, max_size=3))
+    )
+    expected: dict[str, Any] = {
+        "api": api,
+        "options": options,
+        "pass": [dict(pass_entry) for pass_entry in passes],
+    }
+    return (expected, api, options, passes)
+
+
+@given(base_documents())
+def test_render_config_round_trips_through_load_base_config(
+    drawn: tuple[
+        dict[str, Any],
+        dict[str, Any],
+        dict[str, Any],
+        tuple[dict[str, Any], ...],
+    ],
+) -> None:
+    expected_data, api, options, passes = drawn
+    rendered = render_config(api, options, passes)
+    assert isinstance(rendered, Ok)
+    parsed = tomllib.loads(rendered.value)
+    assert parsed == {
+        key: value
+        for key, value in expected_data.items()
+        if key != "options" or options
+    }
+    pass_name = str(passes[0]["name"]) if len(passes) > 1 else None
+    built = load_base_config(parsed, pass_name, "base.toml")
+    assert isinstance(built, Ok)
+    assert dict(built.value.api) == emitted_tables(api)
+    assert dict(built.value.options) == emitted_tables(options)
+    assert [dict(pass_entry) for pass_entry in built.value.passes] == [
+        emitted_tables(pass_entry) for pass_entry in passes
+    ]
+    assert built.value.target_index == 0
+    assert built.value.target_name == str(passes[0]["name"])
