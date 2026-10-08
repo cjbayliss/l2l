@@ -62,6 +62,6 @@
 ```sh
 uv format --preview-features format-command
 uv run ruff check
-uv run mypy
+uv run mypy --strict
 uv run pytest -q
 ```

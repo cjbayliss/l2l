@@ -4,16 +4,26 @@ on:
   push:
     branches: [main]
     paths:
+      - '.github/workflows/**'
+      - '.python-version'
+      - 'docs/configs/**'
+      - 'docs/prompts/**'
       - 'src/l2l/**'
       - 'tools/**'
       - 'tests/**'
       - 'pyproject.toml'
+      - 'uv.lock'
   pull_request:
     paths:
+      - '.github/workflows/**'
+      - '.python-version'
+      - 'docs/configs/**'
+      - 'docs/prompts/**'
       - 'src/l2l/**'
       - 'tools/**'
       - 'tests/**'
       - 'pyproject.toml'
+      - 'uv.lock'
 
 jobs:
   check:
@@ -23,7 +33,23 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+      - run: uv sync --locked
       - run: uv format --check
-      - run: uv run ruff check
-      - run: uv run mypy
-      - run: uv run pytest -q
+      - run: uv run --locked ruff check
+      - run: uv run --locked mypy --strict
+      - run: uv run --locked pytest -q
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv build
+      - run: uv export --format requirements-txt --no-dev --no-hashes --no-emit-project --output-file requirements-smoke.txt
+      - run: uv venv smoke-venv
+      - run: uv pip install --python smoke-venv/bin/python --constraints requirements-smoke.txt dist/*.whl
+      - run: smoke-venv/bin/l2l --version
+      - run: echo "你好，世界。" | smoke-venv/bin/l2l docs/configs/zh2en.toml --dry-run
+      - run: echo "こんにちは世界。" | smoke-venv/bin/l2l docs/configs/ja2en.toml --dry-run
