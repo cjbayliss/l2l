@@ -1,4 +1,5 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TextIO, cast
 
@@ -29,6 +30,9 @@ from l2l.effects import (
 )
 from l2l.errors import describe
 from l2l.monads import NOTHING, Err, Just, Ok
+from l2l.text import cache_path
+
+WRITER_COUNT_FOR_RACE_TEST = 16
 
 
 def test_stream_isatty_handles_errors() -> None:
@@ -80,8 +84,44 @@ def test_user_config_path_honours_xdg() -> None:
 
 
 def test_cache_write_and_read_roundtrip(tmp_path: Path) -> None:
-    cache_write(str(tmp_path), "key1", "value").run()
+    assert cache_write(str(tmp_path), "key1", "value").run() is True
     assert cache_read(str(tmp_path), "key1").run() == Just("value")
+
+
+def test_concurrent_cache_writes_to_the_same_key_all_succeed(tmp_path: Path) -> None:
+    cache_directory = str(tmp_path)
+    written_values = frozenset(
+        "value-%d" % index for index in range(WRITER_COUNT_FOR_RACE_TEST)
+    )
+
+    def write(value: str) -> bool:
+        return cache_write(cache_directory, "shared-key", value).run()
+
+    with ThreadPoolExecutor(max_workers=WRITER_COUNT_FOR_RACE_TEST) as executor:
+        outcomes = tuple(executor.map(write, sorted(written_values)))
+
+    assert outcomes == (True,) * WRITER_COUNT_FOR_RACE_TEST
+    stored = cache_read(cache_directory, "shared-key").run()
+    assert isinstance(stored, Just)
+    assert stored.value in written_values
+    assert cache_entry_paths(cache_directory).run() == (
+        cache_path(cache_directory, "shared-key"),
+    )
+
+
+def test_cache_write_reports_failure_when_cache_directory_is_missing(
+    tmp_path: Path,
+) -> None:
+    assert cache_write(str(tmp_path / "absent"), "key1", "value").run() is False
+
+
+def test_cache_write_removes_its_temporary_file_when_replacement_fails(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "key1.txt").mkdir()
+
+    assert cache_write(str(tmp_path), "key1", "value").run() is False
+    assert cache_entry_paths(str(tmp_path)).run() == ()
 
 
 def test_cache_read_missing_returns_nothing(tmp_path: Path) -> None:

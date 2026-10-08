@@ -1,5 +1,6 @@
 import io
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from fakes import make_console, make_context
@@ -155,6 +156,17 @@ def test_cache_store_condition_gates_write(tmp_path: Path) -> None:
 
     cache_store(run_context, key, "value", False).run()
     assert cache_lookup(run_context, key).run() == NOTHING
+
+
+def test_cache_store_write_failure_does_not_raise(tmp_path: Path) -> None:
+    run_context, _ = make_cached_context(tmp_path)
+    absent_directory_context = replace(
+        run_context, cache_directory=str(tmp_path / "absent")
+    )
+    key = cache_key("source", "model-x")
+
+    assert cache_store(absent_directory_context, key, "value", True).run() is None
+    assert cache_lookup(absent_directory_context, key).run() == NOTHING
 
 
 def test_always_acceptable_accepts_everything() -> None:

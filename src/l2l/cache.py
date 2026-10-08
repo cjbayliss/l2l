@@ -45,12 +45,19 @@ def cache_lookup(
     return io_map(cache_read(run_context.cache_directory, key), checked)
 
 
+def discard_cache_write_outcome(_stored: bool) -> None:
+    return None
+
+
 def cache_store(
     run_context: Context, key: str, value: str, condition: bool
 ) -> IO[None]:
     return io_when_unit(
         run_context.use_cache and condition,
-        cache_write(run_context.cache_directory, key, value),
+        io_map(
+            cache_write(run_context.cache_directory, key, value),
+            discard_cache_write_outcome,
+        ),
     )
 
 
