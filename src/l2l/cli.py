@@ -110,6 +110,13 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         "source; re-run a mismatching pass with one call per paragraph",
     )
     parser.add_argument(
+        "--best-effort",
+        action="store_true",
+        help="keep the last reply and continue when a unit still fails "
+        "validation after all repair attempts (default: fail the run "
+        "with exit code 1)",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -172,6 +179,7 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         stream=parsed.stream,
         cache_prune=parsed.cache_prune,
         log_keep=parsed.log_keep,
+        best_effort=parsed.best_effort,
     )
 
 
@@ -268,6 +276,7 @@ def build_context(
         clock=clock,
         sleep=sleep,
         stream=parsed.stream,
+        best_effort=parsed.best_effort,
     )
 
 

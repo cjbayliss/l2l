@@ -67,6 +67,12 @@ class UntranslatedError:
     sample: str
 
 
+@dataclass(frozen=True)
+class InvalidOutputError:
+    attempts: int
+    problem: str
+
+
 type SetupError = ConfigError | MissingSettings
 type TranslationError = (
     SetupError
@@ -77,6 +83,7 @@ type TranslationError = (
     | AsciiError
     | AsciiCollapseError
     | UntranslatedError
+    | InvalidOutputError
 )
 
 
@@ -125,6 +132,10 @@ def fail_ascii_collapse(
 
 def fail_untranslated(pass_name: str, index: int, sample: str) -> Err[TranslationError]:
     return Err(UntranslatedError(pass_name, index, sample))
+
+
+def fail_invalid_output(attempts: int, problem: str) -> Err[TranslationError]:
+    return Err(InvalidOutputError(attempts, problem))
 
 
 def describe_http(error: HttpError) -> str:
@@ -205,6 +216,13 @@ def describe(error: TranslationError) -> str:
             return (
                 "l2l: pass [%s] paragraph %d is still untranslated after "
                 "retranslation: %r" % (error.pass_name, error.index + 1, error.sample)
+            )
+
+        case InvalidOutputError():
+            return (
+                "output still failed validation after %d repair attempt(s): %s; "
+                "pass --best-effort to keep the last reply instead"
+                % (error.attempts, error.problem)
             )
 
         case other:
