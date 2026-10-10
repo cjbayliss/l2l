@@ -36,7 +36,15 @@ def test_cli_module_guard_runs_the_program(monkeypatch: pytest.MonkeyPatch) -> N
 def test_package_main_guard_runs_the_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["l2l", "--version"])
     with pytest.raises(SystemExit) as raised:
-        runpy.run_path(str(ROOT / "src" / "l2l" / "__main__.py"), run_name="__main__")
+        runpy.run_module("l2l.__main__", run_name="__main__")
+
+    assert raised.value.code == 0
+
+
+def test_optimize_main_guard_prints_the_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["optimize", "--help"])
+    with pytest.raises(SystemExit) as raised:
+        runpy.run_module("tools.optimize.__main__", run_name="__main__")
 
     assert raised.value.code == 0
 
@@ -45,3 +53,9 @@ def test_importing_the_entry_module_does_not_run_the_cli() -> None:
     import l2l.__main__ as entry
 
     assert entry.__name__ == "l2l.__main__"
+
+
+def test_importing_the_optimize_entry_module_does_not_run_the_program() -> None:
+    import tools.optimize.__main__ as entry
+
+    assert entry.__name__ == "tools.optimize.__main__"
