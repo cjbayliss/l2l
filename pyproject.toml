@@ -27,9 +27,6 @@ addopts = "--cov=l2l --cov=tools --cov-report=term-missing --cov-fail-under=99"
 [tool.coverage.run]
 branch = true
 
-[tool.coverage.report]
-exclude_lines = ["assert_never", "\\(Protocol\\)", "if __name__ == .__main__.:"]
-
 [tool.ruff]
 line-length = 88
 target-version = "py314"
