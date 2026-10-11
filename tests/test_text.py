@@ -352,7 +352,7 @@ def test_letter_script_buckets_letters_by_family() -> None:
     assert letter_script("ह") == "devanagari"
     assert letter_script("7") == ""
     assert letter_script("!") == ""
-    assert letter_script(chr(0x17000)) == ""
+    assert letter_script(chr(0x0378)) == ""
 
 
 def test_dominant_script_picks_the_most_frequent_family() -> None:

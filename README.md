@@ -27,7 +27,7 @@ uv run l2l
 
 ## Requirements
 
-- Python 3.14 or newer
+- Python 3.15 or newer
 - [uv](https://docs.astral.sh/uv/) for the install and test commands
   below
 - libcurl: l2l uses `pycurl` for HTTP transport; on platforms without a
