@@ -62,7 +62,7 @@ uv run python3 -m tools.optimize \
 
 `optimize` drives l2l as a subprocess, using `<python> -m l2l` from the
 repository root by default; pass `--l2l "l2l"` to use an installed `l2l`
-command instead. It requires the same Python 3.14 or newer as l2l and
+command instead. It requires the same Python 3.15 or newer as l2l and
 needs the `l2l` package importable (run it through `uv run` from the
 repository root, or install the project). Its endpoint calls go through
 l2l's own HTTP transport, so proxy environment variables behave exactly
