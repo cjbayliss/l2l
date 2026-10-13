@@ -410,6 +410,90 @@ def test_retranslation_fails_when_paragraph_still_untranslated() -> None:
     assert "你好。" in logged
 
 
+def test_retranslation_accepts_paragraph_already_in_target_script() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("Hello.\n\nBIU!"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("BIU!"), USAGE)),
+        ]
+    )
+    run_context = make_context(console, http.open, verbose=True)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        run_context,
+        (chunk_pass(retranslate_untranslated=True),),
+        "你好。\n\nBIU！",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\nBIU!\n"
+    assert len(http.requests) == 2
+    assert "already in the target script" in stderr.getvalue()
+
+
+def test_retranslation_target_script_results_are_cached(tmp_path: Path) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+
+    def run() -> tuple[int, str, int]:
+        console, _ = make_console()
+        http = FakeHttp(
+            [
+                FakeStreamResponse(with_usage(stream_chunks("Hello.\n\nBIU!"), USAGE)),
+                FakeStreamResponse(with_usage(stream_chunks("BIU!"), USAGE)),
+            ]
+        )
+        run_context = make_context(
+            console,
+            http.open,
+            cache_directory=str(cache_directory),
+            use_cache=True,
+        )
+        stdout = io.StringIO()
+        code = run_pipeline(
+            run_context,
+            (chunk_pass(retranslate_untranslated=True),),
+            "你好。\n\nBIU！",
+            0.0,
+            stdout,
+        ).run()
+        return code, stdout.getvalue(), len(http.requests)
+
+    first_code, first_output, first_calls = run()
+    second_code, second_output, second_calls = run()
+    assert (first_code, second_code) == (0, 0)
+    assert (first_calls, second_calls) == (2, 0)
+    assert first_output == second_output == "Hello.\n\nBIU!\n"
+
+
+def test_retranslation_best_effort_keeps_untranslated_paragraph() -> None:
+    console, stderr = make_console()
+    echo = "你好。\n\n世界。"
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks(echo), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks(echo), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("你好。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("世界。"), USAGE)),
+        ]
+    )
+    run_context = make_context(console, http.open, best_effort=True)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        run_context,
+        (chunk_pass(retranslate_untranslated=True),),
+        echo,
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "你好。\n\n世界。\n"
+    assert "keeping the last reply" in stderr.getvalue()
+    assert len(http.requests) == 4
+
+
 def test_retranslation_disabled_by_default() -> None:
     console, _ = make_console()
     http = FakeHttp(

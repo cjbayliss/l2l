@@ -37,12 +37,15 @@ from l2l.messages import (
     retranslate_pair_message,
     retranslate_skipped_message,
     retranslate_unit_message,
+    retranslation_target_script_message,
     stage_done_line,
     unit_cache_hit_message,
     unit_done_message,
     unit_failed_validation_attempt,
     unit_failed_validation_final,
     unit_no_source_message,
+    untranslated_kept_message,
+    untranslated_problem,
     usage_line,
 )
 from l2l.monads import (
@@ -96,6 +99,7 @@ from l2l.text import (
     estimate_tokens,
     excerpt,
     make_chunks,
+    paragraph_is_in_target_script,
     split_paragraphs,
     split_units_to_budget,
     unit_separators,
@@ -294,8 +298,12 @@ def conclude_state(
                 result.value.text,
                 state.analysis,
                 result.value.usage,
-                state.validated,
-                state.problem,
+                state.validated and result.value.validated,
+                (
+                    result.value.problem
+                    if result.value.problem is not None
+                    else state.problem
+                ),
             )
         )
 
@@ -364,7 +372,14 @@ def retranslate_untranslated(
                 if isinstance(outcome, Err):
                     return Err(outcome.error)
 
-                return Ok(Translated(outcome.value.text, outcome.value.usage))
+                return Ok(
+                    Translated(
+                        outcome.value.text,
+                        outcome.value.usage,
+                        outcome.value.validated,
+                        outcome.value.problem,
+                    )
+                )
 
             return io_map(retry(usage, retry_started), lifted)
 
@@ -377,14 +392,34 @@ def retranslate_untranslated(
             io_bind(now(run_context.clock), escalate),
         )
 
+    def paragraph_separator(index: int) -> str:
+        return separators[index] if index < len(separators) else ""
+
+    def paragraph_untranslated(index: int, body: str) -> bool:
+        return untranslated_paragraph(
+            source_paragraphs[index],
+            body,
+            pair,
+            run_context.settings.ascii_character_map,
+        )
+
+    def untranslated_bodies(
+        texts: tuple[str, ...],
+    ) -> tuple[tuple[int, str], ...]:
+        bodies = tuple(
+            (index, texts[index].removesuffix(paragraph_separator(index)))
+            for index in flagged
+        )
+        return tuple(
+            (index, body)
+            for index, body in bodies
+            if paragraph_untranslated(index, body)
+        )
+
     def cacheable_retranslation(index: int) -> Callable[[str], bool]:
         def cacheable(text: str) -> bool:
-            return not untranslated_paragraph(
-                source_paragraphs[index],
-                text,
-                pair,
-                run_context.settings.ascii_character_map,
-            )
+            translated = not paragraph_untranslated(index, text)
+            return translated or paragraph_is_in_target_script(text, pair)
 
         return cacheable
 
@@ -424,26 +459,77 @@ def retranslate_untranslated(
             ),
         )
 
-    def collect(
+    def settle(
         units: tuple[UnitResult, ...],
-    ) -> Result[Translated, TranslationError]:
+    ) -> IO[Result[Translated, TranslationError]]:
         texts = tuple(unit.text for unit in units)
-        for index in flagged:
-            separator = separators[index] if index < len(separators) else ""
-            body = texts[index].removesuffix(separator)
-            if untranslated_paragraph(
-                source_paragraphs[index],
-                body,
-                pair,
-                run_context.settings.ascii_character_map,
-            ):
+        untranslated = untranslated_bodies(texts)
+        verify_kept = tuple(
+            (index, body)
+            for index, body in untranslated
+            if paragraph_is_in_target_script(body, pair)
+        )
+        unresolved = tuple(
+            (index, body)
+            for index, body in untranslated
+            if not paragraph_is_in_target_script(body, pair)
+        )
+
+        def collected(_: None) -> Result[Translated, TranslationError]:
+            if unresolved and not run_context.best_effort:
+                index, body = unresolved[0]
                 return fail_untranslated(pass_definition.name, index, excerpt(body))
 
-        return Ok(
-            Translated(
-                "".join(texts),
-                reduce(usage_add, (unit.usage for unit in units), usage),
+            if not unresolved:
+                return Ok(
+                    Translated(
+                        "".join(texts),
+                        reduce(usage_add, (unit.usage for unit in units), usage),
+                    )
+                )
+
+            index, body = unresolved[0]
+            return Ok(
+                Translated(
+                    "".join(texts),
+                    reduce(usage_add, (unit.usage for unit in units), usage),
+                    False,
+                    untranslated_problem(index, excerpt(body)),
+                )
             )
+
+        def announce_kept() -> IO[None]:
+            if not unresolved:
+                return io_pure(None)
+
+            index, body = unresolved[0]
+            return run_context.console.log(
+                untranslated_kept_message(
+                    pass_definition.name, index, len(paragraphs), excerpt(body)
+                )
+            )
+
+        def announce_verify_kept() -> IO[None]:
+            return reduce(
+                io_and_then,
+                (
+                    verbose_log(
+                        run_context,
+                        retranslation_target_script_message(
+                            pass_definition.name,
+                            index,
+                            len(paragraphs),
+                            excerpt(body),
+                        ),
+                    )
+                    for index, body in verify_kept
+                ),
+                io_pure(None),
+            )
+
+        return io_map(
+            io_and_then(announce_verify_kept(), announce_kept()),
+            collected,
         )
 
     def conclude(
@@ -467,7 +553,7 @@ def retranslate_untranslated(
     def start(_: None) -> IO[Result[Translated, TranslationError]]:
         return io_result_bind(
             io_traverse(enumerate(paragraphs), part),
-            lambda units: io_result(collect(units)),
+            settle,
         )
 
     return io_and_then(
