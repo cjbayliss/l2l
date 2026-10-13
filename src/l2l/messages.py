@@ -153,6 +153,31 @@ def retranslate_skipped_message(pass_name: str, found: int, source: int) -> str:
     )
 
 
+def retranslation_target_script_message(
+    pass_name: str, index: int, total: int, sample: str
+) -> str:
+    return (
+        "l2l: [%s] paragraph %d/%d still looks untranslated but is already "
+        "in the target script; keeping %r" % (pass_name, index + 1, total, sample)
+    )
+
+
+def untranslated_kept_message(
+    pass_name: str, index: int, total: int, sample: str
+) -> str:
+    return (
+        "l2l: [%s] paragraph %d/%d is still untranslated after retranslation: "
+        "%r; keeping the last reply" % (pass_name, index + 1, total, sample)
+    )
+
+
+def untranslated_problem(index: int, sample: str) -> str:
+    return "paragraph %d is still untranslated after retranslation: %r" % (
+        index + 1,
+        sample,
+    )
+
+
 def retranslate_pair_message(pair: tuple[str, str]) -> str:
     source, target = pair
     if not target:

@@ -26,6 +26,8 @@ class Usage:
 class Translated:
     text: str
     usage: Usage
+    validated: bool = True
+    problem: str | None = None
 
 
 CJK_RANGES: tuple[tuple[int, int], ...] = (
@@ -310,6 +312,19 @@ def untranslated_paragraph(
         return not any(char.isascii() and char.isalpha() for char in output)
 
     return not any(letter_script(char) == target_script for char in output)
+
+
+def paragraph_is_in_target_script(output: str, pair: tuple[str, str]) -> bool:
+    if not has_letters(output):
+        return False
+
+    target_script = pair[1]
+    if not target_script:
+        return all(char.isascii() for char in output if char.isalpha())
+
+    return all(
+        letter_script(char) == target_script for char in output if char.isalpha()
+    )
 
 
 def excerpt(text: str, limit: int = 60) -> str:

@@ -30,6 +30,7 @@ from l2l.text import (
     letter_script,
     make_chunks,
     non_ascii_sample,
+    paragraph_is_in_target_script,
     parse_cost,
     parse_tokens,
     regroup_by_plan,
@@ -412,6 +413,20 @@ def test_untranslated_paragraph_ignores_letterless_sources() -> None:
         assert not untranslated_paragraph(
             source, source, ("cjk", "latin"), character_map
         )
+
+
+def test_paragraph_is_in_target_script_accepts_target_script_paragraphs() -> None:
+    assert paragraph_is_in_target_script("BIU!", ("han", "latin"))
+    assert paragraph_is_in_target_script("BIU.", ("han", "latin"))
+    assert paragraph_is_in_target_script("Hello.", ("cjk", ""))
+    assert paragraph_is_in_target_script("Привет.", ("cjk", "cyrillic"))
+
+
+def test_paragraph_is_in_target_script_rejects_other_scripts() -> None:
+    assert not paragraph_is_in_target_script("哔！", ("han", "latin"))
+    assert not paragraph_is_in_target_script("他说, BIU!", ("han", "latin"))
+    assert not paragraph_is_in_target_script("……", ("han", "latin"))
+    assert not paragraph_is_in_target_script("你好。", ("cjk", ""))
 
 
 def test_excerpt_collapses_and_truncates() -> None:
