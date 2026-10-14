@@ -88,6 +88,13 @@ Empty input succeeds without calling the endpoint. To get started:
   startup.
 - `--stream` / `--no-stream` - force streamed or plain responses;
   default follows `api.params.stream`.
+- `--glossary FILE` - JSON glossary file with mandatory term renderings;
+  repeatable, later files override earlier entries.
+- `--write-glossary FILE` - extract a starting glossary from the stdin
+  text with one model call, write it to FILE, and exit. Existing
+  `--glossary` entries are carried over unchanged.
+- `--target-language LANG` - target language for `--write-glossary`
+  (default: English).
 - `--check-config` - print the resolved configuration and exit without
   translating.
 - `--dry-run` - print the per-pass call plan (units, token estimates,

@@ -14,6 +14,7 @@ from l2l.effects import (
     ensure_directory,
     entry_paths,
     file_age,
+    load_json,
     load_toml,
     log_paths,
     path_is_directory,
@@ -59,6 +60,27 @@ def test_read_text_file_reports_directory_reads(tmp_path: Path) -> None:
     result = read_text_file(str(tmp_path), "instruction file").run()
     assert isinstance(result, Err)
     assert "cannot read instruction file" in describe(result.error)
+
+
+def test_load_json_reads_documents(tmp_path: Path) -> None:
+    path = tmp_path / "glossary.json"
+    path.write_text('[{"original": "x", "translated": "y"}]', encoding="utf-8")
+    result = load_json(str(path), "glossary file").run()
+    assert result == Ok([{"original": "x", "translated": "y"}])
+
+
+def test_load_json_reports_missing_files(tmp_path: Path) -> None:
+    result = load_json(str(tmp_path / "absent.json"), "glossary file").run()
+    assert isinstance(result, Err)
+    assert "glossary file not found" in describe(result.error)
+
+
+def test_load_json_reports_malformed_documents(tmp_path: Path) -> None:
+    path = tmp_path / "broken.json"
+    path.write_text("{not json", encoding="utf-8")
+    result = load_json(str(path), "glossary file").run()
+    assert isinstance(result, Err)
+    assert "cannot parse glossary file" in describe(result.error)
 
 
 def test_no_append_and_no_close_do_nothing() -> None:

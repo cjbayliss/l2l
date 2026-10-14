@@ -25,9 +25,16 @@ from l2l.effects import (
     stream_isatty,
     time_sleep,
     write_stdout,
+    write_text_file,
 )
 from l2l.errors import TranslationError, describe, fail_config
-from l2l.http import curl_open
+from l2l.glossary import (
+    entries_to_json_text,
+    extraction_user_message,
+    merge_glossary_entries,
+    parse_model_glossary_reply,
+)
+from l2l.http import chat, curl_open
 from l2l.keys import start_tab_listener
 from l2l.monads import (
     IO,
@@ -49,6 +56,7 @@ from l2l.monads import (
 from l2l.pipeline import run_pipeline
 from l2l.plans import plan_report, setup_report
 from l2l.settings import Arguments, Context, OpenHTTP, Setup, build_settings
+from l2l.text import Translated, Usage
 
 
 def parse_args(arguments: Sequence[str]) -> Arguments:
@@ -148,6 +156,26 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         "default follows api.params.stream",
     )
     parser.add_argument(
+        "--glossary",
+        action="append",
+        metavar="FILE",
+        default=[],
+        help="JSON glossary file with mandatory renderings; repeatable; "
+        "later files override earlier entries",
+    )
+    parser.add_argument(
+        "--write-glossary",
+        metavar="FILE",
+        help="extract a starting glossary from the stdin text with one "
+        "model call, write it to FILE, and exit",
+    )
+    parser.add_argument(
+        "--target-language",
+        metavar="LANG",
+        default="English",
+        help="target language for --write-glossary (default: %(default)s)",
+    )
+    parser.add_argument(
         "--cache-prune",
         metavar="DAYS",
         type=int,
@@ -180,6 +208,9 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         cache_prune=parsed.cache_prune,
         log_keep=parsed.log_keep,
         best_effort=parsed.best_effort,
+        glossary=tuple(parsed.glossary),
+        write_glossary=parsed.write_glossary,
+        target_language=parsed.target_language,
     )
 
 
@@ -230,6 +261,22 @@ def main(
 
         if parsed.cache_prune is not None:
             return prune_program(parsed, environment, stderr, clock)
+
+        if parsed.write_glossary is not None:
+            glossary_output_path = parsed.write_glossary
+            return io_bind(
+                read_stdin(stdin),
+                lambda text: write_glossary_program(
+                    parsed,
+                    glossary_output_path,
+                    environment,
+                    text,
+                    stderr,
+                    clock,
+                    opener,
+                    sleep,
+                ),
+            )
 
         return io_bind(
             read_stdin(stdin),
@@ -468,6 +515,88 @@ def run_main_program(
                 )
 
             return io_bind(now(clock), with_started)
+
+        return io_bind(load_setup(parsed, environment), use_setup)
+
+    return with_console_io(stderr, with_console, verbose=parsed.verbose)
+
+
+def write_glossary_program(
+    parsed: Arguments,
+    output_path: str,
+    environment: Mapping[str, str],
+    text: str,
+    stderr: TextIO,
+    clock: Callable[[], float],
+    open_http: OpenHTTP,
+    sleep: Sleep,
+) -> IO[int]:
+    def with_console(console: Console) -> IO[int]:
+        def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
+            if isinstance(setup_result, Err):
+                return io_map(console.log(describe(setup_result.error)), lambda _: 2)
+
+            if not text.strip():
+                return io_map(
+                    console.log("l2l: --write-glossary requires text on stdin"),
+                    lambda _: 2,
+                )
+
+            setup = setup_result.value
+            run_context = build_context(parsed, setup, console, clock, open_http, sleep)
+
+            def handle_reply(
+                reply_result: Result[Translated, TranslationError],
+            ) -> IO[int]:
+                if isinstance(reply_result, Err):
+                    return io_map(
+                        console.log(describe(reply_result.error)), lambda _: 1
+                    )
+
+                reply_entries = parse_model_glossary_reply(
+                    reply_result.value.text, output_path
+                )
+                if isinstance(reply_entries, Err):
+                    return io_map(
+                        console.log(describe(reply_entries.error)), lambda _: 1
+                    )
+
+                merged = merge_glossary_entries(
+                    (setup.glossary_entries, reply_entries.value)
+                )
+
+                def report(written: Result[None, TranslationError]) -> IO[int]:
+                    if isinstance(written, Err):
+                        return io_map(console.log(describe(written.error)), lambda _: 1)
+
+                    return io_map(
+                        console.log(
+                            "l2l: wrote %d glossary entries to %s"
+                            % (len(merged), output_path)
+                        ),
+                        lambda _: 0,
+                    )
+
+                return io_bind(
+                    write_text_file(
+                        output_path, entries_to_json_text(merged), "glossary file"
+                    ),
+                    report,
+                )
+
+            return io_bind(
+                chat(
+                    run_context,
+                    run_context.settings.glossary_extraction_instruction,
+                    extraction_user_message(
+                        parsed.target_language, setup.glossary_entries, text
+                    ),
+                    run_context.config.model,
+                    {},
+                    Usage(),
+                ),
+                handle_reply,
+            )
 
         return io_bind(load_setup(parsed, environment), use_setup)
 

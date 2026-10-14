@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import pty
 import threading
@@ -369,3 +370,146 @@ def test_tab_key_toggles_verbose_during_a_live_run(
     assert code == 0
     assert stdout.getvalue() == "Hello.\n"
     assert toggled.is_set()
+
+
+def test_translation_request_carries_glossary_block(tmp_path: Path) -> None:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text(
+        '[{"original": "南京", "translated": "Nanjing"}]', encoding="utf-8"
+    )
+    chunks = [
+        *stream_chunks("Hello."),
+        {"choices": [{"delta": {}}], "usage": USAGE},
+    ]
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(write_config(tmp_path)),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--no-cache",
+            "--glossary",
+            str(glossary),
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 0
+    payload = json.loads(http.requests[0].body.decode("utf-8"))
+    system = payload["messages"][0]["content"]
+    assert "Glossary (mandatory)" in system
+    assert '- 南京 = "Nanjing"' in system
+
+
+def run_write_glossary(
+    tmp_path: Path,
+    arguments: list[str],
+    http: FakeHttp,
+    stdin: str = "book text",
+) -> tuple[int, str, str]:
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(write_config(tmp_path)),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            *arguments,
+        ],
+        {},
+        io.StringIO(stdin),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+def glossary_reply(entries: list[dict[str, Any]]) -> FakeStreamResponse:
+    chunks = [
+        *stream_chunks("```json\n" + json.dumps(entries, ensure_ascii=False) + "\n```"),
+        {"choices": [{"delta": {}}], "usage": USAGE},
+    ]
+    return FakeStreamResponse(chunks)
+
+
+def test_write_glossary_happy_path(tmp_path: Path) -> None:
+    carried = tmp_path / "generic.json"
+    carried.write_text(
+        '[{"original": "南京", "translated": "Nanjing"}]', encoding="utf-8"
+    )
+    output = tmp_path / "book-glossary.json"
+    http = FakeHttp(
+        [
+            glossary_reply(
+                [
+                    {
+                        "original": "林黛玉",
+                        "translated": "Lin Daiyu",
+                        "pronouns": "she/her",
+                    }
+                ]
+            )
+        ]
+    )
+    code, _, stderr = run_write_glossary(
+        tmp_path,
+        ["--write-glossary", str(output), "--glossary", str(carried)],
+        http,
+    )
+    assert code == 0
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert [item["original"] for item in document] == ["南京", "林黛玉"]
+    assert document[1]["pronouns"] == "she/her"
+    assert "wrote 2 glossary entries to %s" % output in stderr
+    payload = json.loads(http.requests[0].body.decode("utf-8"))
+    user_message = payload["messages"][1]["content"]
+    assert payload["model"] == "m"
+    assert "Target language: English" in user_message
+    assert "Already decided" in user_message
+    assert "book text" in user_message
+
+
+def test_write_glossary_target_language_reaches_the_payload(tmp_path: Path) -> None:
+    output = tmp_path / "book-glossary.json"
+    http = FakeHttp([glossary_reply([{"original": "南京", "translated": "Nanjing"}])])
+    code, _, _ = run_write_glossary(
+        tmp_path,
+        ["--write-glossary", str(output), "--target-language", "French"],
+        http,
+    )
+    assert code == 0
+    payload = json.loads(http.requests[0].body.decode("utf-8"))
+    assert "Target language: French" in payload["messages"][1]["content"]
+
+
+def test_write_glossary_invalid_reply_exits_one(tmp_path: Path) -> None:
+    output = tmp_path / "book-glossary.json"
+    chunks = [
+        *stream_chunks("not json"),
+        {"choices": [{"delta": {}}], "usage": USAGE},
+    ]
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    code, _, stderr = run_write_glossary(
+        tmp_path, ["--write-glossary", str(output)], http
+    )
+    assert code == 1
+    assert "not valid JSON" in stderr
+    assert not output.exists()
+
+
+def test_write_glossary_empty_stdin_exits_two(tmp_path: Path) -> None:
+    output = tmp_path / "book-glossary.json"
+    code, _, stderr = run_l2l(
+        tmp_path,
+        [str(write_config(tmp_path)), "--write-glossary", str(output)],
+        "",
+    )
+    assert code == 2
+    assert "requires text on stdin" in stderr
+    assert not output.exists()

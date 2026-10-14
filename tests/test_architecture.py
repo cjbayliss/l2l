@@ -13,7 +13,7 @@ TOOLS = Path(__file__).resolve().parents[1] / "tools"
 LAYERS: tuple[tuple[str, ...], ...] = (
     ("monads", "messages"),
     ("errors", "text"),
-    ("console", "effects"),
+    ("console", "effects", "glossary"),
     ("keys", "settings"),
     ("config", "plans"),
     ("cache", "http"),

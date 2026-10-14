@@ -8,6 +8,7 @@ from typing import Any, Literal, Protocol
 from l2l.console import Console
 from l2l.effects import Clock, RunLog, Sleep
 from l2l.errors import TranslationError
+from l2l.glossary import GlossaryEntry
 from l2l.monads import IO, Result
 from l2l.text import CACHE_SALT_VERSION
 
@@ -51,6 +52,7 @@ class Settings:
     retry_attempts: int
     retry_base_delay: float
     retry_cap: float
+    glossary_extraction_instruction: str
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,9 @@ class Arguments:
     cache_prune: int | None = None
     log_keep: int = 30
     best_effort: bool = False
+    glossary: tuple[str, ...] = ()
+    write_glossary: str | None = None
+    target_language: str = "English"
 
 
 @dataclass(frozen=True)
@@ -79,6 +84,8 @@ class Setup:
     config: Config
     passes: tuple[PassDefinition, ...]
     ensure_paragraphs: bool | int
+    glossary_paths: tuple[str, ...] = ()
+    glossary_entries: tuple[GlossaryEntry, ...] = ()
 
 
 class HttpResponse(Protocol):
@@ -120,6 +127,18 @@ def build_settings() -> Settings:
         retry_attempts=2,
         retry_base_delay=1.0,
         retry_cap=30.0,
+        glossary_extraction_instruction="""
+You extract a translation glossary from source text. Cover named and
+speaking characters (assign pronouns only where they are meaningful and
+the character can be referred to pronominally), place names, and recurring
+terms or numbers (no pronouns). Reply with a bare JSON array of objects;
+each object has "original" holding the exact source term plus only the
+attributes that carry information: "translated" with the rendering in the
+target language (always when known), "pronouns" only for characters, and
+any other helpful attribute as a non-empty string. Entries already marked
+as decided must be carried over unchanged. Output JSON only: no markdown
+fences, no commentary. The target language is named in the user message.
+""",
         sentence_boundary_characters="。！？…⋯!?；;\n؟؛।॥։።",
         ascii_fix_instruction="""
 This paragraph failed to be fully translated or contains non-ASCII
