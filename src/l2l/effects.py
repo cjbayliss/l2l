@@ -121,6 +121,21 @@ def load_toml(
     return IO(thunk)
 
 
+def load_json(path: str, description: str) -> IO[Result[Any, TranslationError]]:
+    def thunk() -> Result[Any, TranslationError]:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return Ok(json.loads(handle.read()))
+        except FileNotFoundError:
+            return fail_config("%s not found: %s" % (description, path))
+        except OSError as error:
+            return fail_config("cannot read %s: %s" % (description, error))
+        except json.JSONDecodeError as error:
+            return fail_config("cannot parse %s %s: %s" % (description, path, error))
+
+    return IO(thunk)
+
+
 def read_text_file(path: str, description: str) -> IO[Result[str, TranslationError]]:
     def thunk() -> Result[str, TranslationError]:
         try:

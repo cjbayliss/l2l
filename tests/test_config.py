@@ -1,4 +1,6 @@
+from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from l2l.config import (
@@ -26,6 +28,7 @@ from l2l.config import (
     validate_document,
 )
 from l2l.errors import TranslationError, describe
+from l2l.glossary import GlossaryEntry
 from l2l.monads import Err, Ok, Result, io_pure
 from l2l.plans import mask_api_key, setup_report
 from l2l.settings import (
@@ -638,3 +641,165 @@ def test_pass_params_must_contain_json_values() -> None:
     result = pass_definition_from("f", "p", {"params": {"t": [object()]}}, "i")
     assert isinstance(result, Err)
     assert "params must contain only JSON values" in describe(result.error)
+
+
+SELECTED_CONFIG_TEXT = (
+    'glossary = ["selected-glossary.json"]\n'
+    "\n[api]\n"
+    'base_url = "http://endpoint.test/v1"\n'
+    'api_key = "key"\n'
+    'model = "m"\n'
+    "\n[[pass]]\n"
+    'name = "translate"\n'
+    'mode = "chunk"\n'
+    'instruction = "Translate."\n'
+)
+
+
+def glossary_arguments(config_path: Path) -> Arguments:
+    return Arguments(
+        config=str(config_path),
+        base_url=None,
+        api_key=None,
+        model=None,
+        timeout=None,
+        maximum_tokens=None,
+        no_cache=False,
+        ensure_paragraphs=False,
+        verbose=False,
+        show_log_path=False,
+        cache_directory=None,
+    )
+
+
+def test_validate_document_accepts_glossary_paths() -> None:
+    assert isinstance(validate_document("f", {"glossary": ["a.json"]}), Ok)
+
+
+def test_validate_document_rejects_bad_glossary_values() -> None:
+    for document in (
+        {"glossary": "a.json"},
+        {"glossary": [1]},
+        {"glossary": [""]},
+    ):
+        result = validate_document("f", document)
+        assert isinstance(result, Err)
+        assert "f: glossary must be a list of file paths" in describe(result.error)
+
+
+def test_load_setup_resolves_and_merges_glossaries(tmp_path: Path) -> None:
+    user_home = tmp_path / "user"
+    user_config_directory = user_home / "l2l"
+    user_config_directory.mkdir(parents=True)
+    (user_config_directory / "config.toml").write_text(
+        'glossary = ["user-glossary.json"]\n', encoding="utf-8"
+    )
+    (user_config_directory / "user-glossary.json").write_text(
+        '[{"original": "甲", "translated": "Alpha", "pronouns": "she/her"}]',
+        encoding="utf-8",
+    )
+
+    selected_directory = tmp_path / "selected"
+    selected_directory.mkdir()
+    selected_config = selected_directory / "book.toml"
+    selected_config.write_text(SELECTED_CONFIG_TEXT, encoding="utf-8")
+    (selected_directory / "selected-glossary.json").write_text(
+        '[{"original": "甲", "translated": "Aleph"}]', encoding="utf-8"
+    )
+
+    cli_glossary = tmp_path / "cli-glossary.json"
+    cli_glossary.write_text(
+        '[{"original": "乙", "translated": "Bee"}]', encoding="utf-8"
+    )
+
+    arguments = replace(
+        glossary_arguments(selected_config), glossary=(str(cli_glossary),)
+    )
+    result = load_setup(arguments, {"XDG_CONFIG_HOME": str(user_home)}).run()
+    assert isinstance(result, Ok)
+    setup = result.value
+    assert setup.glossary_paths == (
+        str(user_config_directory / "user-glossary.json"),
+        str(selected_directory / "selected-glossary.json"),
+        str(cli_glossary),
+    )
+    assert [entry.original for entry in setup.glossary_entries] == ["甲", "乙"]
+    assert tuple(setup.glossary_entries[0].attributes.items()) == (
+        ("translated", "Aleph"),
+    )
+    for pass_definition in setup.passes:
+        assert "Glossary (mandatory)" in pass_definition.instruction
+        assert '- 甲 = "Aleph"' in pass_definition.instruction
+        assert '- 乙 = "Bee"' in pass_definition.instruction
+
+
+def test_load_setup_without_glossary_keeps_instructions(tmp_path: Path) -> None:
+    config_path = tmp_path / "book.toml"
+    config_path.write_text(
+        SELECTED_CONFIG_TEXT.replace('glossary = ["selected-glossary.json"]\n', ""),
+        encoding="utf-8",
+    )
+    result = load_setup(
+        glossary_arguments(config_path),
+        {"XDG_CONFIG_HOME": str(tmp_path / "nouser")},
+    ).run()
+    assert isinstance(result, Ok)
+    setup = result.value
+    assert setup.glossary_paths == ()
+    assert setup.glossary_entries == ()
+    assert [pass_definition.instruction for pass_definition in setup.passes] == [
+        "Translate."
+    ]
+
+
+def test_load_setup_rejects_invalid_glossary_entries(tmp_path: Path) -> None:
+    config_path = tmp_path / "book.toml"
+    config_path.write_text(SELECTED_CONFIG_TEXT, encoding="utf-8")
+    (tmp_path / "selected-glossary.json").write_text(
+        '[{"translated": "x"}]', encoding="utf-8"
+    )
+    result = load_setup(
+        glossary_arguments(config_path),
+        {"XDG_CONFIG_HOME": str(tmp_path / "nouser")},
+    ).run()
+    assert isinstance(result, Err)
+    assert "entry 1" in describe(result.error)
+
+
+def test_setup_report_lists_glossary_when_configured() -> None:
+    setup = Setup(
+        config=Config(
+            base_url="http://endpoint.test/v1",
+            api_key="secret-key",
+            model="m",
+            timeout=30.0,
+            maximum_tokens=1000,
+            parameters={},
+        ),
+        passes=(PassDefinition("translate", "T.", "chunk", {}, None, True, False),),
+        ensure_paragraphs=False,
+        glossary_paths=("generic.json", "book.json"),
+        glossary_entries=(
+            GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),
+        ),
+    )
+    report = setup_report(setup, False)
+    assert "glossary: 2 file(s), 1 entries" in report
+    assert "  - generic.json" in report
+    assert "  - book.json" in report
+
+
+def test_setup_report_omits_glossary_when_unconfigured() -> None:
+    setup = Setup(
+        config=Config(
+            base_url="http://endpoint.test/v1",
+            api_key="secret-key",
+            model="m",
+            timeout=30.0,
+            maximum_tokens=1000,
+            parameters={},
+        ),
+        passes=(PassDefinition("translate", "T.", "chunk", {}, None, True, False),),
+        ensure_paragraphs=False,
+    )
+    assert "glossary" not in setup_report(setup, False)

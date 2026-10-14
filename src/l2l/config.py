@@ -9,12 +9,19 @@ from typing import Any, Literal, assert_never
 
 from l2l.effects import (
     current_working_directory,
+    load_json,
     load_toml,
     path_exists,
     read_text_file,
     user_config_path,
 )
 from l2l.errors import TranslationError, fail_config, fail_missing_settings
+from l2l.glossary import (
+    GlossaryEntry,
+    instruction_with_glossary,
+    merge_glossary_entries,
+    parse_glossary_document,
+)
 from l2l.monads import (
     IO,
     Ok,
@@ -51,12 +58,19 @@ def validate_document(
     if not document:
         return Ok(None)
 
-    unknown = sorted(set(document) - {"api", "options", "pass"})
+    unknown = sorted(set(document) - {"api", "options", "pass", "glossary"})
     if unknown:
         return fail_config(
             "%s: unknown top-level key(s): %s (expected [api], [options], "
-            "[[pass]])" % (path, ", ".join(unknown))
+            "glossary, [[pass]])" % (path, ", ".join(unknown))
         )
+
+    glossary = document.get("glossary")
+    if glossary is not None and (
+        not isinstance(glossary, list)
+        or not all(isinstance(item, str) and item.strip() for item in glossary)
+    ):
+        return fail_config("%s: glossary must be a list of file paths" % path)
 
     return Ok(None)
 
@@ -759,7 +773,104 @@ def resolve_config_path(
 
 DocumentResult = Result[dict[str, Any], TranslationError]
 ResolvedPasses = tuple[dict[str, bool | int], tuple[PassDefinition, ...]]
+Glossaries = tuple[tuple[str, ...], tuple[GlossaryEntry, ...]]
 SetupResult = Result[Setup, TranslationError]
+
+
+def document_glossary_paths(
+    path: str | None, document: dict[str, Any]
+) -> Result[tuple[str, ...], TranslationError]:
+    value = document.get("glossary")
+    if value is None:
+        return Ok(())
+
+    if not path:
+        return fail_config(
+            "glossary configured in a config document without a file path"
+        )
+
+    base_directory = os.path.dirname(os.path.abspath(path))
+    return Ok(tuple(os.path.join(base_directory, item) for item in value))
+
+
+def resolve_glossaries(
+    user_path: str,
+    user_document_result: Result[dict[str, Any], TranslationError],
+    selected_path: str | None,
+    selected_document_result: Result[dict[str, Any], TranslationError],
+    command_line_paths: tuple[str, ...],
+) -> IO[Result[Glossaries, TranslationError]]:
+    def load_glossaries(
+        documents: tuple[dict[str, Any], dict[str, Any]],
+    ) -> IO[Result[Glossaries, TranslationError]]:
+        paths_result = result_map(
+            result_sequence(
+                document_glossary_paths(path, document)
+                for path, document in (
+                    (user_path, documents[0]),
+                    (selected_path, documents[1]),
+                )
+                if document
+            ),
+            lambda groups: (
+                tuple(path for group in groups for path in group)
+                + tuple(command_line_paths)
+            ),
+        )
+
+        def load(paths: tuple[str, ...]) -> IO[Result[Glossaries, TranslationError]]:
+            def parsed(
+                loaded_result: Result[tuple[Any, ...], TranslationError],
+            ) -> Result[Glossaries, TranslationError]:
+                return result_bind(
+                    loaded_result,
+                    lambda loaded: result_map(
+                        result_sequence(
+                            parse_glossary_document(item_path, document)
+                            for item_path, document in zip(paths, loaded, strict=True)
+                        ),
+                        lambda groups: (paths, merge_glossary_entries(groups)),
+                    ),
+                )
+
+            return io_map(
+                io_map(
+                    io_sequence(load_json(path, "glossary file") for path in paths),
+                    result_sequence,
+                ),
+                parsed,
+            )
+
+        return result_bind_io(paths_result, load)
+
+    return result_bind_io(
+        result_bind(
+            user_document_result,
+            lambda user_document: result_map(
+                selected_document_result,
+                lambda selected_document: (user_document, selected_document),
+            ),
+        ),
+        load_glossaries,
+    )
+
+
+def setup_with_glossary(setup: Setup, glossaries: Glossaries) -> Setup:
+    paths, entries = glossaries
+    return replace(
+        setup,
+        passes=tuple(
+            replace(
+                pass_definition,
+                instruction=instruction_with_glossary(
+                    pass_definition.instruction, entries
+                ),
+            )
+            for pass_definition in setup.passes
+        ),
+        glossary_paths=paths,
+        glossary_entries=entries,
+    )
 
 
 def build_setup(
@@ -794,8 +905,12 @@ def load_setup(arguments: Arguments, environment: Mapping[str, str]) -> IO[Setup
             documents: tuple[DocumentResult, DocumentResult],
         ) -> IO[SetupResult]:
             def setup_with(
-                resolved: Result[ResolvedPasses, TranslationError],
+                pair: tuple[
+                    Result[ResolvedPasses, TranslationError],
+                    Result[Glossaries, TranslationError],
+                ],
             ) -> SetupResult:
+                resolved, glossaries = pair
                 return result_bind(
                     merged_api_settings(
                         arguments,
@@ -805,13 +920,30 @@ def load_setup(arguments: Arguments, environment: Mapping[str, str]) -> IO[Setup
                         selected_path,
                         documents[1],
                     ),
-                    lambda config: build_setup(
-                        config, resolved, arguments.ensure_paragraphs
+                    lambda config: result_bind(
+                        build_setup(config, resolved, arguments.ensure_paragraphs),
+                        lambda setup: result_map(
+                            glossaries,
+                            lambda resolved_glossaries: setup_with_glossary(
+                                setup, resolved_glossaries
+                            ),
+                        ),
                     ),
                 )
 
             return io_map(
-                resolve_passes(user_path, documents[0], selected_path, documents[1]),
+                io_pair(
+                    resolve_passes(
+                        user_path, documents[0], selected_path, documents[1]
+                    ),
+                    resolve_glossaries(
+                        user_path,
+                        documents[0],
+                        selected_path,
+                        documents[1],
+                        arguments.glossary,
+                    ),
+                ),
                 setup_with,
             )
 

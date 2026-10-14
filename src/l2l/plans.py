@@ -710,8 +710,18 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
             )
         )
     )
+    glossary_lines: tuple[str, ...] = (
+        (
+            "glossary: %d file(s), %d entries"
+            % (len(setup.glossary_paths), len(setup.glossary_entries)),
+        )
+        + tuple("  - %s" % path for path in setup.glossary_paths)
+        if setup.glossary_paths
+        else ()
+    )
     return "\n".join(
         api_lines
         + pass_lines
+        + glossary_lines
         + ("options.ensure_paragraphs: %s" % effective_ensure_paragraphs,)
     )
