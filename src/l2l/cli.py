@@ -584,19 +584,29 @@ def write_glossary_program(
                     report,
                 )
 
-            return io_bind(
-                chat(
-                    run_context,
-                    run_context.settings.glossary_extraction_instruction,
-                    extraction_user_message(
-                        parsed.target_language, setup.glossary_entries, text
-                    ),
-                    run_context.config.model,
-                    {},
-                    Usage(),
-                ),
-                handle_reply,
-            )
+            def extract() -> IO[Result[Translated, TranslationError]]:
+                def toggle() -> None:
+                    toggle_verbose(console).run()
+
+                def execute() -> Result[Translated, TranslationError]:
+                    stop_listener = start_tab_listener(console, toggle).run()
+                    try:
+                        return chat(
+                            run_context,
+                            run_context.settings.glossary_extraction_instruction,
+                            extraction_user_message(
+                                parsed.target_language, setup.glossary_entries, text
+                            ),
+                            run_context.config.model,
+                            {},
+                            Usage(),
+                        ).run()
+                    finally:
+                        stop_listener.run()
+
+                return IO(execute)
+
+            return io_bind(extract(), handle_reply)
 
         return io_bind(load_setup(parsed, environment), use_setup)
 
