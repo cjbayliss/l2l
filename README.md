@@ -238,13 +238,17 @@ A typical multi-pass setup pairs an `analysis` pass with a `chunk` pass.
   per call.
 - `retranslate_untranslated` (default `false`) - after each pass, l2l
   flags output paragraphs that still read as their source (matching
-  after mechanical ASCII folding, or carrying no letters of the detected
-  target script) and re-asks each one with the pass's instruction plus
-  neighbouring source paragraphs as context. When more than half the
-  paragraphs are flagged in a chunk-mode pass, the whole pass is re-run
-  once first. Retranslations are cached only when they no longer read as
-  untranslated; a paragraph still untranslated afterwards fails the run
-  with exit code 1, and the failed repair is not cached.
+  after mechanical ASCII folding, or carrying no letters of the
+  detected target script while also carrying no numbers; a paragraph
+  reduced to digits and punctuation, such as "2078!" for "2078年！", is
+  considered translated) and re-asks each one with the pass's
+  instruction plus neighbouring source paragraphs as context. When more
+  than half the paragraphs are flagged in a chunk-mode pass, the whole
+  pass is re-run once first. Retranslations are cached only when they
+  no longer read as untranslated; a paragraph still untranslated
+  afterwards fails the run with exit code 1 (the last reply is kept
+  with a warning under `--best-effort`), and the failed repair is not
+  cached.
 
 ## Testing
 

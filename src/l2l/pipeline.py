@@ -499,7 +499,7 @@ def retranslate_untranslated(
             )
 
         def announce_kept() -> IO[None]:
-            if not unresolved:
+            if not unresolved or not run_context.best_effort:
                 return io_pure(None)
 
             index, body = unresolved[0]

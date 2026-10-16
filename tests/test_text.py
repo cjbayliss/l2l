@@ -407,6 +407,15 @@ def test_untranslated_paragraph_accepts_non_latin_targets() -> None:
     assert untranslated_paragraph("你好。", "你好！", pair, character_map)
 
 
+def test_untranslated_paragraph_accepts_letterless_output_with_numbers() -> None:
+    character_map = build_settings().ascii_character_map
+    pair = ("cjk", "latin")
+    assert not untranslated_paragraph("2078年！", "2078!", pair, character_map)
+    assert not untranslated_paragraph("2078年！", "The year 2078!", pair, character_map)
+    assert untranslated_paragraph("2078年！", "！", pair, character_map)
+    assert untranslated_paragraph("2078年！", "……", pair, character_map)
+
+
 def test_untranslated_paragraph_ignores_letterless_sources() -> None:
     character_map = build_settings().ascii_character_map
     for source in ("12", "---", "……", "...!"):
