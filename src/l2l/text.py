@@ -252,6 +252,10 @@ def has_letters(text: str) -> bool:
     return any(char.isalpha() for char in text)
 
 
+def has_alphanumeric_characters(text: str) -> bool:
+    return any(char.isalnum() for char in text)
+
+
 UNKNOWN_SCRIPT = ""
 
 SCRIPT_ALIASES: Mapping[str, str] = MappingProxyType(
@@ -306,6 +310,9 @@ def untranslated_paragraph(
     folded_source = to_ascii_mechanical(source, character_map).split()
     if folded_source == to_ascii_mechanical(output, character_map).split():
         return True
+
+    if not has_letters(output):
+        return not has_alphanumeric_characters(output)
 
     target_script = pair[1]
     if not target_script:

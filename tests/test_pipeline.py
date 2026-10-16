@@ -407,7 +407,28 @@ def test_retranslation_fails_when_paragraph_still_untranslated() -> None:
         in logged
     )
     assert "still untranslated after retranslation" in logged
+    assert "keeping the last reply" not in logged
     assert "你好。" in logged
+
+
+def test_retranslation_ignores_letterless_paragraph_with_numbers() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [FakeStreamResponse(with_usage(stream_chunks("Hello.\n\n2078!"), USAGE))]
+    )
+    run_context = make_context(console, http.open, verbose=True)
+    stdout = io.StringIO()
+    code = run_pipeline(
+        run_context,
+        (chunk_pass(retranslate_untranslated=True),),
+        "你好。\n\n2078年！",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n\n2078!\n"
+    assert len(http.requests) == 1
+    assert "look untranslated" not in stderr.getvalue()
 
 
 def test_retranslation_accepts_paragraph_already_in_target_script() -> None:
