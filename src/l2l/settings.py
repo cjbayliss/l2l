@@ -128,16 +128,16 @@ def build_settings() -> Settings:
         retry_base_delay=1.0,
         retry_cap=30.0,
         glossary_extraction_instruction="""
-You extract a translation glossary from source text. Cover named and
+You extract a glossary of names from source text. Cover named and
 speaking characters (assign pronouns only where they are meaningful and
-the character can be referred to pronominally), place names, and recurring
-terms or numbers (no pronouns). Reply with a bare JSON array of objects;
-each object has "original" holding the exact source term plus only the
-attributes that carry information: "translated" with the rendering in the
-target language (always when known), "pronouns" only for characters, and
-any other helpful attribute as a non-empty string. Entries already marked
-as decided must be carried over unchanged. Output JSON only: no markdown
-fences, no commentary. The target language is named in the user message.
+the character can be referred to pronominally) and place names. Reply
+with a bare JSON array of objects; each object has "original" holding
+the exact source name plus only the attributes that carry information:
+"translated" with the rendering in the target language (always when
+known), "pronouns" only for characters, and any other helpful attribute
+as a non-empty string. Entries already marked as decided must be
+carried over unchanged. Output JSON only: no markdown fences, no
+commentary. The target language is named in the user message.
 """,
         sentence_boundary_characters="。！？…⋯!?；;\n؟؛।॥։።",
         ascii_fix_instruction="""
