@@ -11,6 +11,7 @@ import pycurl
 from l2l.console import Console, StatusLine
 from l2l.effects import RunLog, Sleep
 from l2l.errors import TranslationError
+from l2l.glossary import GlossaryEntry
 from l2l.http import CurlResponse
 from l2l.monads import (
     IO,
@@ -188,6 +189,9 @@ def make_context(
     clock: Callable[[], float] = time.time,
     sleep: Sleep = no_sleep,
     best_effort: bool = False,
+    glossary_entries: tuple[GlossaryEntry, ...] = (),
+    glossary_update_path: str | None = None,
+    target_language: str = "English",
 ) -> Context:
     config = Config(
         base_url="http://endpoint.test/v1",
@@ -210,6 +214,9 @@ def make_context(
         sleep=sleep,
         stream=stream,
         best_effort=best_effort,
+        glossary_entries=glossary_entries,
+        glossary_update_path=glossary_update_path,
+        target_language=target_language,
     )
 
 

@@ -93,7 +93,8 @@ Empty input succeeds without calling the endpoint. To get started:
 - `--write-glossary FILE` - extract a starting glossary from the stdin
   text with one model call, write it to FILE, and exit. Existing
   `--glossary` entries are carried over unchanged.
-- `--target-language LANG` - target language for `--write-glossary`
+- `--target-language LANG` - target language for `--write-glossary` and
+  for `update_glossary` passes without their own `target_language`
   (default: English).
 - `--check-config` - print the resolved configuration and exit without
   translating.
@@ -193,7 +194,8 @@ environment, or the command line.
 Passes run in order; each pass's output is the next's input.
 
 - `name` (required) - non-empty string, used in logs and cache keys.
-- `instruction` or `instruction_file` (exactly one required) - the
+- `instruction` or `instruction_file` (exactly one required, except for
+  `mode = "update_glossary"` where both may be omitted) - the
   instruction as inline text, or a path to a text file (relative to the
   config file). The instruction defines the language pair and target
   style.
@@ -204,6 +206,8 @@ Passes run in order; each pass's output is the next's input.
   calls, merged over `[api] params`.
 - `ascii`, `ensure_paragraphs`, `retranslate_untranslated` - per-pass
   overrides of the `[options]` toggles below.
+- `target_language` - per-pass target language, currently used only by
+  `mode = "update_glossary"`; falls back to `--target-language`.
 
 Modes:
 
@@ -220,6 +224,18 @@ Modes:
   (outline, names, hard-to-translate items) that later passes include
   for context. The document must fit in one call; otherwise increase
   `max_tokens`.
+- `update_glossary` - makes one whole-document model call with the
+  built-in glossary extraction prompt, parses the JSON reply, and
+  appends only genuinely new entries to the glossary. Requires at least
+  one `--glossary FILE` on the command line; the first one is rewritten
+  with the updated entries. Existing entries always win: an extracted
+  entry whose `original` already exists is discarded (Chinese names
+  have many valid renderings and pronouns are context-dependent), so
+  place an `update_glossary` pass before the passes that translate. The
+  updated glossary flows into the system prompts of all later passes in
+  the same run. The pass's `instruction` is ignored; set
+  `target_language` (or rely on `--target-language`) to name the target
+  language for the extraction.
 
 A typical multi-pass setup pairs an `analysis` pass with a `chunk` pass.
 

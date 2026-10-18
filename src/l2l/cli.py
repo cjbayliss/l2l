@@ -324,6 +324,9 @@ def build_context(
         sleep=sleep,
         stream=parsed.stream,
         best_effort=parsed.best_effort,
+        glossary_entries=setup.glossary_entries,
+        glossary_update_path=parsed.glossary[0] if parsed.glossary else None,
+        target_language=parsed.target_language,
     )
 
 

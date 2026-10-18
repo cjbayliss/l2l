@@ -38,6 +38,15 @@ def analysis_information_message(pass_name: str, characters: int, tokens: int) -
     )
 
 
+def glossary_update_information_message(
+    pass_name: str, target_language: str, characters: int, tokens: int
+) -> str:
+    return (
+        "l2l: [%s] whole-document glossary update for %s "
+        "(%d characters, ~%d tokens)" % (pass_name, target_language, characters, tokens)
+    )
+
+
 def unit_failed_validation_final(
     pass_name: str, index: int, total: int, attempts: int, problem: str, kept: bool
 ) -> str:

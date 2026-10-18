@@ -8,6 +8,7 @@ from itertools import accumulate, chain
 from typing import Any
 
 from l2l.errors import HttpError, TranslationError, fail_budget, fail_pass
+from l2l.glossary import GlossaryEntry, render_glossary_block
 from l2l.messages import chunk_budget_violation_message
 from l2l.monads import IO, NOTHING, Err, Just, Maybe, Ok, Result
 from l2l.settings import (
@@ -241,8 +242,14 @@ def prompt_allowance(
     pass_definition: PassDefinition,
     earlier_pass_modes: PassModeSet,
 ) -> PromptAllowance:
+    glossary_tokens = (
+        estimate_tokens(render_glossary_block(run_context.glossary_entries))
+        if run_context.glossary_entries
+        else 0
+    )
     return PromptAllowance(
-        instruction_tokens=estimate_tokens(pass_definition.instruction),
+        instruction_tokens=estimate_tokens(pass_definition.instruction)
+        + glossary_tokens,
         analysis_tokens=(
             run_context.settings.analysis_reserve_tokens
             if "analysis" in earlier_pass_modes
@@ -298,6 +305,9 @@ def plan_violation(
 ) -> TranslationError | None:
     match pass_definition.mode:
         case "analysis":
+            return None
+
+        case "update_glossary":
             return None
 
         case _:
@@ -476,6 +486,7 @@ def plan_unit_calls(
     trailing_separators: tuple[str, ...],
     analysis: str | None,
     retry_attempt: int = 0,
+    glossary: tuple[GlossaryEntry, ...] = (),
 ) -> tuple[UnitCall, ...]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
     flat_plan = tuple(chain.from_iterable(plan))
@@ -500,7 +511,7 @@ def plan_unit_calls(
         return build_unit_call(
             model,
             parameters,
-            pass_salt(pass_definition, retry_attempt),
+            pass_salt(pass_definition, glossary, retry_attempt),
             trailing_separators,
             index,
             index,
@@ -522,6 +533,7 @@ def plan_retranslation_calls(
     flagged: tuple[int, ...],
     separators: tuple[str, ...],
     analysis: str | None,
+    glossary: tuple[GlossaryEntry, ...] = (),
 ) -> tuple[UnitCall, ...]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
 
@@ -539,7 +551,7 @@ def plan_retranslation_calls(
         return build_unit_call(
             model,
             parameters,
-            retranslation_salt(pass_definition),
+            retranslation_salt(pass_definition, glossary),
             separators,
             position,
             index,
@@ -573,6 +585,16 @@ def plan_report(
             case "analysis":
                 return ("%s: mode=analysis, 1 call with the whole document" % header,)
 
+            case "update_glossary":
+                return (
+                    "%s: mode=update_glossary, 1 call with the whole document, "
+                    "target language %s"
+                    % (
+                        header,
+                        pass_definition.target_language or run_context.target_language,
+                    ),
+                )
+
             case _:
                 pass_plan = plan_pass_chunks(
                     run_context,
@@ -599,6 +621,7 @@ def plan_report(
                     work_groups,
                     unit_separators(plan, separators),
                     None,
+                    glossary=run_context.glossary_entries,
                 )
                 budget_note = (
                     ", source budget ~%d tokens" % pass_plan.chunk_budget

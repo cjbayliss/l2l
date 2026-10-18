@@ -18,7 +18,6 @@ from l2l.effects import (
 from l2l.errors import TranslationError, fail_config, fail_missing_settings
 from l2l.glossary import (
     GlossaryEntry,
-    instruction_with_glossary,
     merge_glossary_entries,
     parse_glossary_document,
 )
@@ -455,9 +454,10 @@ def pass_definition_from(
     path: str, name: str, table: dict[str, Any], instruction: str
 ) -> Result[PassDefinition, TranslationError]:
     mode = table.get("mode", "chunk")
-    if mode not in ("analysis", "chunk", "paragraph"):
+    if mode not in ("analysis", "chunk", "paragraph", "update_glossary"):
         return fail_config(
-            "%s: [[pass]] %s: mode must be analysis, chunk, or paragraph" % (path, name)
+            "%s: [[pass]] %s: mode must be analysis, chunk, paragraph, or "
+            "update_glossary" % (path, name)
         )
 
     ascii_value = table.get("ascii")
@@ -488,6 +488,14 @@ def pass_definition_from(
             "%s: [[pass]] %s: model must be a non-empty string" % (path, name)
         )
 
+    target_language = table.get("target_language")
+    if target_language is not None and (
+        not isinstance(target_language, str) or not target_language.strip()
+    ):
+        return fail_config(
+            "%s: [[pass]] %s: target_language must be a non-empty string" % (path, name)
+        )
+
     parameters = table.get("params", {})
     if not isinstance(parameters, dict):
         return fail_config("%s: [[pass]] %s: params must be a table" % (path, name))
@@ -507,6 +515,9 @@ def pass_definition_from(
             ascii=ascii_value,
             ensure_paragraphs=ensure_paragraphs_value,
             retranslate_untranslated=retranslate_value,
+            target_language=(
+                target_language.strip() if target_language is not None else None
+            ),
         )
     )
 
@@ -550,7 +561,11 @@ def load_instruction_text(
     path: str, name: str, table: dict[str, Any], base_directory: str
 ) -> IO[Result[str, TranslationError]]:
     has_inline = "instruction" in table
-    if ("instruction_file" in table) == has_inline:
+    has_file = "instruction_file" in table
+    if table.get("mode") == "update_glossary" and not has_inline and not has_file:
+        return io_result(Ok(""))
+
+    if has_file == has_inline:
         return io_result(
             fail_config(
                 "%s: [[pass]] %s: exactly one of instruction_file "
@@ -859,17 +874,22 @@ def setup_with_glossary(setup: Setup, glossaries: Glossaries) -> Setup:
     paths, entries = glossaries
     return replace(
         setup,
-        passes=tuple(
-            replace(
-                pass_definition,
-                instruction=instruction_with_glossary(
-                    pass_definition.instruction, entries
-                ),
-            )
-            for pass_definition in setup.passes
-        ),
         glossary_paths=paths,
         glossary_entries=entries,
+    )
+
+
+def require_glossary_for_update_passes(
+    command_line_paths: tuple[str, ...], setup: Setup
+) -> Result[Setup, TranslationError]:
+    if command_line_paths or not any(
+        pass_definition.mode == "update_glossary" for pass_definition in setup.passes
+    ):
+        return Ok(setup)
+
+    return fail_config(
+        "an update_glossary pass requires at least one --glossary file "
+        "on the command line"
     )
 
 
@@ -922,10 +942,13 @@ def load_setup(arguments: Arguments, environment: Mapping[str, str]) -> IO[Setup
                     ),
                     lambda config: result_bind(
                         build_setup(config, resolved, arguments.ensure_paragraphs),
-                        lambda setup: result_map(
+                        lambda setup: result_bind(
                             glossaries,
-                            lambda resolved_glossaries: setup_with_glossary(
-                                setup, resolved_glossaries
+                            lambda resolved_glossaries: (
+                                require_glossary_for_update_passes(
+                                    arguments.glossary,
+                                    setup_with_glossary(setup, resolved_glossaries),
+                                )
                             ),
                         ),
                     ),

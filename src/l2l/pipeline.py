@@ -14,20 +14,30 @@ from l2l.cache import (
     non_empty,
 )
 from l2l.console import Console
-from l2l.effects import now, write_stdout
+from l2l.effects import now, write_stdout, write_text_file
 from l2l.errors import (
     TranslationError,
     describe,
     fail_budget,
+    fail_config,
     fail_invalid_output,
     fail_pass,
     fail_unit,
     fail_untranslated,
 )
+from l2l.glossary import (
+    GlossaryEntry,
+    append_glossary_entries,
+    entries_to_json_text,
+    extraction_user_message,
+    instruction_with_glossary,
+    parse_model_glossary_reply,
+)
 from l2l.http import RepairOutcome, chat, repaired_call
 from l2l.messages import (
     analysis_information_message,
     done_in_message,
+    glossary_update_information_message,
     paragraph_mismatch_message,
     paragraph_still_differs_message,
     pass_cache_hit_message,
@@ -116,6 +126,7 @@ class State:
     usage: Usage
     validated: bool = True
     problem: str | None = None
+    glossary: tuple[GlossaryEntry, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -146,22 +157,36 @@ def untranslated_majority(flagged: int, total: int) -> bool:
 def run_analysis(
     run_context: Context,
     pass_definition: PassDefinition,
+    glossary: tuple[GlossaryEntry, ...],
     text: str,
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
     return io_result_map(
-        chat(run_context, pass_definition.instruction, text, model, parameters, usage),
+        chat(
+            run_context,
+            instruction_with_glossary(pass_definition.instruction, glossary),
+            text,
+            model,
+            parameters,
+            usage,
+        ),
         lambda translated: Translated(translated.text.strip(), translated.usage),
     )
 
 
 def analyze_document(
-    run_context: Context, pass_definition: PassDefinition, full_text: str, usage: Usage
+    run_context: Context,
+    pass_definition: PassDefinition,
+    glossary: tuple[GlossaryEntry, ...],
+    full_text: str,
+    usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
     budget = max(
         run_context.config.maximum_tokens
-        - estimate_tokens(pass_definition.instruction)
+        - estimate_tokens(
+            instruction_with_glossary(pass_definition.instruction, glossary)
+        )
         - run_context.settings.analysis_reserve_tokens,
         1,
     )
@@ -182,20 +207,29 @@ def analyze_document(
             )
         )
 
-    return run_analysis(run_context, pass_definition, full_text, usage)
+    return run_analysis(run_context, pass_definition, glossary, full_text, usage)
 
 
 def run_analysis_once(
-    run_context: Context, pass_definition: PassDefinition, full_text: str, usage: Usage
+    run_context: Context,
+    pass_definition: PassDefinition,
+    glossary: tuple[GlossaryEntry, ...],
+    full_text: str,
+    usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
-    key = cache_key(full_text, model, pass_salt(pass_definition), overrides=parameters)
+    key = cache_key(
+        full_text,
+        model,
+        pass_salt(pass_definition, glossary),
+        overrides=parameters,
+    )
     return cached_translation(
         run_context,
         key,
         usage,
         compute=lambda: analyze_document(
-            run_context, pass_definition, full_text, usage
+            run_context, pass_definition, glossary, full_text, usage
         ),
         hit_log=verbose_log(run_context, pass_cache_hit_message(pass_definition.name)),
     )
@@ -256,7 +290,7 @@ def conclude_state(
     source_paragraphs: tuple[str, ...],
     retry_same_mode: PassRetry | None = None,
 ) -> IO[StateResult]:
-    if pass_definition.mode == "analysis":
+    if pass_definition.mode in ("analysis", "update_glossary"):
         return io_result(Ok(state))
 
     def ascii_stage(current: State) -> IO[StateResult]:
@@ -279,6 +313,7 @@ def conclude_state(
                     translated.usage,
                     state.validated,
                     state.problem,
+                    state.glossary,
                 ),
             )
 
@@ -304,6 +339,7 @@ def conclude_state(
                     if result.value.problem is not None
                     else state.problem
                 ),
+                state.glossary,
             )
         )
 
@@ -318,6 +354,7 @@ def conclude_state(
                 state.usage,
                 retranslation_started,
                 retry_same_mode,
+                state.glossary,
             ),
             after_retranslation,
         )
@@ -334,6 +371,7 @@ def retranslate_untranslated(
     usage: Usage,
     started_at: float,
     retry_same_mode: PassRetry | None = None,
+    glossary: tuple[GlossaryEntry, ...] = (),
 ) -> IO[Result[Translated, TranslationError]]:
     paragraphs, separators = split_paragraphs(text)
     if len(paragraphs) != len(source_paragraphs):
@@ -431,6 +469,7 @@ def retranslate_untranslated(
         flagged,
         separators,
         analysis,
+        glossary,
     )
     call_for = dict(zip(flagged, calls, strict=True))
 
@@ -456,6 +495,7 @@ def retranslate_untranslated(
                 call,
                 usage,
                 cacheable_retranslation(index),
+                glossary,
             ),
         )
 
@@ -593,6 +633,7 @@ def run_analysis_pass(
                 usage=outcome.usage,
                 validated=state.validated,
                 problem=state.problem,
+                glossary=state.glossary,
             ),
             started_at,
             source_paragraphs,
@@ -606,8 +647,128 @@ def run_analysis_pass(
             ),
         ),
         lambda _: io_bind(
-            run_analysis_once(run_context, pass_definition, state.text, state.usage),
+            run_analysis_once(
+                run_context, pass_definition, state.glossary, state.text, state.usage
+            ),
             after_analysis,
+        ),
+    )
+
+
+def effective_update_target_language(
+    run_context: Context, pass_definition: PassDefinition
+) -> str:
+    return (
+        pass_definition.target_language
+        if pass_definition.target_language is not None
+        else run_context.target_language
+    )
+
+
+def run_update_glossary_once(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    target_language: str,
+    state: State,
+) -> IO[Result[Translated, TranslationError]]:
+    model, parameters = resolve_call_settings(run_context.config, pass_definition)
+    key = cache_key(
+        state.text,
+        model,
+        pass_salt(pass_definition, state.glossary),
+        overrides=parameters,
+    )
+    return cached_translation(
+        run_context,
+        key,
+        state.usage,
+        compute=lambda: chat(
+            run_context,
+            run_context.settings.glossary_extraction_instruction,
+            extraction_user_message(target_language, state.glossary, state.text),
+            model,
+            parameters,
+            state.usage,
+        ),
+        hit_log=verbose_log(run_context, pass_cache_hit_message(pass_definition.name)),
+    )
+
+
+def run_update_glossary_pass(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    state: State,
+    started_at: float,
+    source_paragraphs: tuple[str, ...],
+) -> IO[StateResult]:
+    update_path = run_context.glossary_update_path
+    if update_path is None:
+        return io_result(
+            fail_pass(
+                pass_definition.name,
+                fail_config(
+                    "an update_glossary pass requires at least one --glossary "
+                    "file on the command line"
+                ).error,
+            )
+        )
+
+    target_language = effective_update_target_language(run_context, pass_definition)
+
+    def after_reply(
+        reply_result: Result[Translated, TranslationError],
+    ) -> IO[StateResult]:
+        if isinstance(reply_result, Err):
+            return io_result(fail_pass(pass_definition.name, reply_result.error))
+
+        reply_entries = parse_model_glossary_reply(reply_result.value.text, update_path)
+        if isinstance(reply_entries, Err):
+            return io_result(fail_pass(pass_definition.name, reply_entries.error))
+
+        merged = append_glossary_entries(state.glossary, reply_entries.value)
+
+        def after_write(
+            written: Result[None, TranslationError],
+        ) -> IO[StateResult]:
+            if isinstance(written, Err):
+                return io_result(fail_pass(pass_definition.name, written.error))
+
+            return finish_pass_stage(
+                run_context,
+                pass_definition,
+                state.usage,
+                State(
+                    text=state.text,
+                    analysis=state.analysis,
+                    usage=reply_result.value.usage,
+                    validated=state.validated,
+                    problem=state.problem,
+                    glossary=merged,
+                ),
+                started_at,
+                source_paragraphs,
+            )
+
+        return io_bind(
+            write_text_file(update_path, entries_to_json_text(merged), "glossary file"),
+            after_write,
+        )
+
+    return io_bind(
+        verbose_log(
+            run_context,
+            glossary_update_information_message(
+                pass_definition.name,
+                target_language,
+                len(state.text),
+                estimate_tokens(state.text),
+            ),
+        ),
+        lambda _: io_bind(
+            run_update_glossary_once(
+                run_context, pass_definition, target_language, state
+            ),
+            after_reply,
         ),
     )
 
@@ -617,6 +778,7 @@ def run_unit(
     pass_definition: PassDefinition,
     call: UnitCall,
     usage: Usage,
+    glossary: tuple[GlossaryEntry, ...] = (),
 ) -> IO[Result[UnitResult, TranslationError]]:
     def unit_tolerance() -> int | None:
         match pass_definition.mode:
@@ -682,7 +844,7 @@ def run_unit(
             run_context,
             call.model,
             call.parameters,
-            pass_definition.instruction,
+            instruction_with_glossary(pass_definition.instruction, glossary),
             build_pass_user(
                 call.source_chunk, call.work_chunk, call.analysis, call.context
             ),
@@ -702,6 +864,7 @@ def run_single_call(
     call: UnitCall,
     usage: Usage,
     cacheable: Callable[[str], bool] = always_acceptable,
+    glossary: tuple[GlossaryEntry, ...] = (),
 ) -> IO[Result[UnitResult, TranslationError]]:
     def store(
         result: Result[UnitResult, TranslationError],
@@ -753,7 +916,7 @@ def run_single_call(
             )
 
         return io_bind(
-            run_unit(run_context, pass_definition, call, usage),
+            run_unit(run_context, pass_definition, call, usage, glossary),
             store,
         )
 
@@ -769,6 +932,7 @@ def run_units(
     analysis: str | None,
     usage: Usage,
     retry_attempt: int = 0,
+    glossary: tuple[GlossaryEntry, ...] = (),
 ) -> IO[Result[UnitsSoFar, TranslationError]]:
     calls = plan_unit_calls(
         run_context,
@@ -778,6 +942,7 @@ def run_units(
         trailing_separators,
         analysis,
         retry_attempt,
+        glossary,
     )
 
     def unit_part(
@@ -796,7 +961,9 @@ def run_units(
                 ),
             )
 
-        return run_single_call(run_context, pass_definition, call, usage)
+        return run_single_call(
+            run_context, pass_definition, call, usage, glossary=glossary
+        )
 
     def first_unvalidated_problem(
         units: tuple[UnitResult, ...],
@@ -866,6 +1033,7 @@ def run_text_pass_once(
                     if units_result.value.problem is not None
                     else state.problem
                 ),
+                glossary=state.glossary,
             )
             return finish_pass_stage(
                 run_context,
@@ -892,6 +1060,7 @@ def run_text_pass_once(
                     state.analysis,
                     state.usage,
                     retry_attempt,
+                    state.glossary,
                 ),
                 after_units,
             ),
@@ -1033,6 +1202,11 @@ def run_pass(
                 run_context, pass_definition, state, started_at, source_paragraphs
             )
 
+        case "update_glossary":
+            return run_update_glossary_pass(
+                run_context, pass_definition, state, started_at, source_paragraphs
+            )
+
         case _:
             return run_text_pass(
                 run_context,
@@ -1128,7 +1302,12 @@ def run_pipeline(
         return run_passes(
             run_context,
             pass_definitions,
-            State(text=text, analysis=None, usage=Usage()),
+            State(
+                text=text,
+                analysis=None,
+                usage=Usage(),
+                glossary=run_context.glossary_entries,
+            ),
             source_paragraphs,
             separators,
             chunk_plans,
