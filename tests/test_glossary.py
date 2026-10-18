@@ -178,6 +178,23 @@ def test_parse_model_glossary_reply_strips_think_tags() -> None:
     assert result.value[0].original == "南京"
 
 
+def test_parse_model_glossary_reply_accepts_prose_around_json() -> None:
+    reply = (
+        "The source text contains no new names.\n\n"
+        '[{"original": "南京", "translated": "Nanjing"}]\n\n'
+        "All decided entries are carried over."
+    )
+    result = parse_model_glossary_reply(reply, "out.json")
+    assert isinstance(result, Ok)
+    assert result.value[0].original == "南京"
+
+
+def test_parse_model_glossary_reply_rejects_prose_without_json() -> None:
+    result = parse_model_glossary_reply("no names here", "out.json")
+    assert isinstance(result, Err)
+    assert "out.json: model reply is not valid JSON" in describe(result.error)
+
+
 def test_parse_model_glossary_reply_rejects_invalid_json() -> None:
     result = parse_model_glossary_reply("not json", "out.json")
     assert isinstance(result, Err)
