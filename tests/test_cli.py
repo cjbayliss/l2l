@@ -700,7 +700,7 @@ def test_update_glossary_cached_run_still_writes_the_file(tmp_path: Path) -> Non
     assert (first_code, second_code) == (0, 0)
     assert first_output == second_output == "Hello.\n"
     assert first_calls == 2
-    assert second_calls == 1
+    assert second_calls == 0
     assert "Done: 0.0s, prompt=0, completion=0" in second_stderr
     document = json.loads(glossary.read_text(encoding="utf-8"))
     assert [item["original"] for item in document] == ["大观园"]
