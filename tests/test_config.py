@@ -205,6 +205,44 @@ def test_parse_options_table() -> None:
 def test_pass_definition_from() -> None:
     result = pass_definition_from("f", "p", {"mode": "weird"}, "inst")
     assert isinstance(result, Err)
+    assert (
+        "f: [[pass]] p: mode must be analysis, chunk, paragraph, or "
+        "update_glossary" in describe(result.error)
+    )
+
+    result = pass_definition_from("f", "p", {"mode": "update_glossary"}, "inst")
+    assert isinstance(result, Ok)
+    assert result.value.mode == "update_glossary"
+    assert result.value.target_language is None
+
+    result = pass_definition_from(
+        "f", "p", {"mode": "update_glossary", "target_language": "Chinese"}, "inst"
+    )
+    assert isinstance(result, Ok)
+    assert result.value.target_language == "Chinese"
+
+    for bad_target_language in ("", "  ", 3, True):
+        result = pass_definition_from(
+            "f",
+            "p",
+            {"mode": "update_glossary", "target_language": bad_target_language},
+            "inst",
+        )
+        assert isinstance(result, Err)
+        assert "target_language must be a non-empty string" in describe(result.error)
+
+    result = parse_pass_table(
+        "f",
+        {
+            "name": "p",
+            "mode": "chunk",
+            "target_language": "French",
+            "instruction": "inst",
+        },
+        ".",
+    ).run()
+    assert isinstance(result, Ok)
+    assert result.value.target_language == "French"
 
     result = pass_definition_from(
         "f", "p", {"mode": "chunk", "params": {"t": 1}}, "inst"
@@ -363,7 +401,17 @@ def test_resolve_call_settings() -> None:
 
 def test_pass_salt() -> None:
     pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
-    assert pass_salt(pass_definition) == (CACHE_SALT_VERSION + "\x00p\x00i")
+    assert pass_salt(pass_definition) == (CACHE_SALT_VERSION + "\x00p\x00i\x00[]\n")
+
+
+def test_pass_salt_includes_the_glossary() -> None:
+    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
+    entries = (GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),)
+    salted = pass_salt(pass_definition, entries)
+    assert salted != pass_salt(pass_definition)
+    assert '"original": "南京"' in salted
+    assert '"translated": "Nanjing"' in salted
+    assert pass_salt(pass_definition, entries) == salted
 
 
 def test_retranslation_salt_extends_the_pass_salt() -> None:
@@ -728,9 +776,11 @@ def test_load_setup_resolves_and_merges_glossaries(tmp_path: Path) -> None:
         ("translated", "Aleph"),
     )
     for pass_definition in setup.passes:
-        assert "Glossary (mandatory)" in pass_definition.instruction
-        assert '- 甲 = "Aleph"' in pass_definition.instruction
-        assert '- 乙 = "Bee"' in pass_definition.instruction
+        assert pass_definition.instruction == "Translate."
+    assert [entry.original for entry in setup.glossary_entries] == ["甲", "乙"]
+    assert tuple(setup.glossary_entries[0].attributes.items()) == (
+        ("translated", "Aleph"),
+    )
 
 
 def test_load_setup_without_glossary_keeps_instructions(tmp_path: Path) -> None:
@@ -764,6 +814,51 @@ def test_load_setup_rejects_invalid_glossary_entries(tmp_path: Path) -> None:
     ).run()
     assert isinstance(result, Err)
     assert "entry 1" in describe(result.error)
+
+
+def test_load_setup_accepts_update_glossary_pass_with_cli_glossary(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "book.toml"
+    config_path.write_text(
+        SELECTED_CONFIG_TEXT.replace(
+            'mode = "chunk"', 'mode = "update_glossary"'
+        ).replace('name = "translate"', 'name = "glossary"'),
+        encoding="utf-8",
+    )
+    (tmp_path / "selected-glossary.json").write_text(
+        '[{"original": "甲", "translated": "Aleph"}]', encoding="utf-8"
+    )
+    cli_glossary = tmp_path / "cli-glossary.json"
+    cli_glossary.write_text("[]", encoding="utf-8")
+    arguments = replace(glossary_arguments(config_path), glossary=(str(cli_glossary),))
+    result = load_setup(arguments, {"XDG_CONFIG_HOME": str(tmp_path / "nouser")}).run()
+    assert isinstance(result, Ok)
+    setup = result.value
+    assert [item.mode for item in setup.passes] == ["update_glossary"]
+    assert [item.original for item in setup.glossary_entries] == ["甲"]
+
+
+def test_load_setup_rejects_update_glossary_pass_without_cli_glossary(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "book.toml"
+    config_path.write_text(
+        SELECTED_CONFIG_TEXT.replace('mode = "chunk"', 'mode = "update_glossary"'),
+        encoding="utf-8",
+    )
+    (tmp_path / "selected-glossary.json").write_text(
+        '[{"original": "甲", "translated": "Aleph"}]', encoding="utf-8"
+    )
+    result = load_setup(
+        glossary_arguments(config_path),
+        {"XDG_CONFIG_HOME": str(tmp_path / "nouser")},
+    ).run()
+    assert isinstance(result, Err)
+    assert (
+        "an update_glossary pass requires at least one --glossary file on the "
+        "command line" in describe(result.error)
+    )
 
 
 def test_setup_report_lists_glossary_when_configured() -> None:

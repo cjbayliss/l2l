@@ -513,3 +513,194 @@ def test_write_glossary_empty_stdin_exits_two(tmp_path: Path) -> None:
     assert code == 2
     assert "requires text on stdin" in stderr
     assert not output.exists()
+
+
+UPDATE_GLOSSARY_CONFIG_TEXT = CONFIG_TEXT.replace(
+    '\n[[pass]]\nname = "translate"\nmode = "chunk"\ninstruction = "Translate."',
+    "\n[[pass]]\n"
+    'name = "glossary"\n'
+    'mode = "update_glossary"\n'
+    "\n[[pass]]\n"
+    'name = "translate"\n'
+    'mode = "chunk"\n'
+    'instruction = "Translate."',
+)
+
+
+def write_update_glossary_config(tmp_path: Path) -> Path:
+    config_path = tmp_path / "l2l.toml"
+    config_path.write_text(UPDATE_GLOSSARY_CONFIG_TEXT)
+    return config_path
+
+
+def test_update_glossary_pass_updates_file_and_flows_into_later_passes(
+    tmp_path: Path,
+) -> None:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text(
+        '[{"original": "南京", "translated": "Nanjing"}]', encoding="utf-8"
+    )
+    extraction = glossary_reply(
+        [
+            {"original": "南京", "translated": "Nanking"},
+            {"original": "大观园", "translated": "Grand View Garden"},
+        ]
+    )
+    translation_chunks = [
+        *stream_chunks("Hello."),
+        {"choices": [{"delta": {}}], "usage": USAGE},
+    ]
+    http = FakeHttp([extraction, FakeStreamResponse(translation_chunks)])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(write_update_glossary_config(tmp_path)),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--no-cache",
+            "--glossary",
+            str(glossary),
+            "--target-language",
+            "French",
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue().strip() == "Hello."
+
+    document = json.loads(glossary.read_text(encoding="utf-8"))
+    assert [item["original"] for item in document] == ["南京", "大观园"]
+    assert document[0]["translated"] == "Nanjing"
+    assert document[1]["translated"] == "Grand View Garden"
+
+    extraction_payload = json.loads(http.requests[0].body)
+    extraction_user = extraction_payload["messages"][1]["content"]
+    assert "Target language: French" in extraction_user
+    assert "Already decided" in extraction_user
+
+    translation_payload = json.loads(http.requests[1].body)
+    translation_system = translation_payload["messages"][0]["content"]
+    assert '- 南京 = "Nanjing"' in translation_system
+    assert '- 大观园 = "Grand View Garden"' in translation_system
+
+    logged = stderr.getvalue()
+    assert "Starting pass 1/2 [glossary]..." in logged
+    assert "Starting pass 2/2 [translate]..." in logged
+    assert "TOTAL" in logged
+
+
+def test_update_glossary_pass_target_language_overrides_cli_flag(
+    tmp_path: Path,
+) -> None:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text("[]", encoding="utf-8")
+    config_path = tmp_path / "l2l.toml"
+    config_path.write_text(
+        UPDATE_GLOSSARY_CONFIG_TEXT.replace(
+            'mode = "update_glossary"',
+            'mode = "update_glossary"\ntarget_language = "Chinese"',
+        )
+    )
+    http = FakeHttp([glossary_reply([{"original": "大观园", "translated": "G"}])])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(config_path),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--no-cache",
+            "--glossary",
+            str(glossary),
+            "--target-language",
+            "French",
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 0
+    payload = json.loads(http.requests[0].body)
+    assert "Target language: Chinese" in payload["messages"][1]["content"]
+
+
+def test_update_glossary_pass_without_glossary_flag_exits_two(
+    tmp_path: Path,
+) -> None:
+    code, stdout, stderr = run_l2l(
+        tmp_path, [str(write_update_glossary_config(tmp_path)), "--dry-run"]
+    )
+    assert code == 2
+    assert stdout == ""
+    assert (
+        "an update_glossary pass requires at least one --glossary file on the "
+        "command line" in stderr
+    )
+
+
+def test_dry_run_shows_update_glossary_pass(tmp_path: Path) -> None:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text("[]", encoding="utf-8")
+    code, stdout, stderr = run_l2l(
+        tmp_path,
+        [
+            str(write_update_glossary_config(tmp_path)),
+            "--dry-run",
+            "--glossary",
+            str(glossary),
+        ],
+    )
+    assert code == 0
+    assert (
+        "pass 1/2 [glossary]: mode=update_glossary, 1 call with the whole "
+        "document, target language English" in stdout
+    )
+    assert "pass 2/2 [translate]: mode=chunk, 1 unit(s)" in stdout
+
+
+def test_update_glossary_cached_run_still_writes_the_file(tmp_path: Path) -> None:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text("[]", encoding="utf-8")
+    cache_directory = tmp_path / "cache"
+    extraction = glossary_reply([{"original": "大观园", "translated": "G"}])
+    translation_chunks = [
+        *stream_chunks("Hello."),
+        {"choices": [{"delta": {}}], "usage": USAGE},
+    ]
+
+    def run() -> tuple[int, str, int, str]:
+        http = FakeHttp([extraction, FakeStreamResponse(translation_chunks)])
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = cli.main(
+            [
+                str(write_update_glossary_config(tmp_path)),
+                "--cache-dir",
+                str(cache_directory),
+                "--glossary",
+                str(glossary),
+            ],
+            {},
+            io.StringIO("你好。"),
+            stdout,
+            stderr,
+            time.time,
+            http.open,
+        ).run()
+        return code, stdout.getvalue(), len(http.requests), stderr.getvalue()
+
+    first_code, first_output, first_calls, _first_stderr = run()
+    second_code, second_output, second_calls, second_stderr = run()
+    assert (first_code, second_code) == (0, 0)
+    assert first_output == second_output == "Hello.\n"
+    assert first_calls == 2
+    assert second_calls == 1
+    assert "Done: 0.0s, prompt=0, completion=0" in second_stderr
+    document = json.loads(glossary.read_text(encoding="utf-8"))
+    assert [item["original"] for item in document] == ["大观园"]

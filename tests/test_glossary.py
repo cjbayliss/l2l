@@ -4,6 +4,7 @@ from typing import Any
 from l2l.errors import describe
 from l2l.glossary import (
     GlossaryEntry,
+    append_glossary_entries,
     entries_to_json_text,
     extraction_user_message,
     instruction_with_glossary,
@@ -211,3 +212,44 @@ def test_extraction_user_message_combines_language_carried_and_text() -> None:
 def test_extraction_user_message_omits_carried_section_when_empty() -> None:
     message = extraction_user_message("English", (), "hello")
     assert message == "Target language: English\n\nSource text:\nhello"
+
+
+def test_append_glossary_entries_appends_new_originals_in_order() -> None:
+    existing = (
+        entry("南京", translated="Nanjing"),
+        entry("林黛玉", translated="Lin Daiyu", pronouns="she/her"),
+    )
+    extracted = (
+        entry("拳法", pronouns="it", style="internal martial art"),
+        entry("大观园", translated="Grand View Garden"),
+    )
+    merged = append_glossary_entries(existing, extracted)
+    assert [item.original for item in merged] == ["南京", "林黛玉", "拳法", "大观园"]
+    assert tuple(merged[2].attributes.items()) == (
+        ("pronouns", "it"),
+        ("style", "internal martial art"),
+    )
+
+
+def test_append_glossary_entries_keeps_existing_entries_on_conflicts() -> None:
+    existing = (
+        entry("南京", translated="Nanjing"),
+        entry("林黛玉", translated="Lin Daiyu", pronouns="she/her"),
+    )
+    extracted = (
+        entry("南京", translated="Nanking", note="variant"),
+        entry("林黛玉", translated="Daiyu"),
+        entry("贾宝玉", translated="Jia Baoyu"),
+    )
+    merged = append_glossary_entries(existing, extracted)
+    assert [item.original for item in merged] == ["南京", "林黛玉", "贾宝玉"]
+    assert tuple(merged[0].attributes.items()) == (("translated", "Nanjing"),)
+    assert tuple(merged[1].attributes.items()) == (
+        ("translated", "Lin Daiyu"),
+        ("pronouns", "she/her"),
+    )
+
+
+def test_append_glossary_entries_without_extracts_returns_existing() -> None:
+    existing = (entry("南京", translated="Nanjing"),)
+    assert append_glossary_entries(existing, ()) == existing

@@ -8,7 +8,7 @@ from typing import Any, Literal, Protocol
 from l2l.console import Console
 from l2l.effects import Clock, RunLog, Sleep
 from l2l.errors import TranslationError
-from l2l.glossary import GlossaryEntry
+from l2l.glossary import GlossaryEntry, entries_to_json_text
 from l2l.monads import IO, Result
 from l2l.text import CACHE_SALT_VERSION
 
@@ -23,7 +23,7 @@ class Config:
     parameters: Mapping[str, Any]
 
 
-PassMode = Literal["analysis", "chunk", "paragraph"]
+PassMode = Literal["analysis", "chunk", "paragraph", "update_glossary"]
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,7 @@ class PassDefinition:
     ascii: bool | None
     ensure_paragraphs: bool | int | None = None
     retranslate_untranslated: bool | None = None
+    target_language: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,9 @@ class Context:
     sleep: Sleep
     stream: bool | None = None
     best_effort: bool = False
+    glossary_entries: tuple[GlossaryEntry, ...] = ()
+    glossary_update_path: str | None = None
+    target_language: str = "English"
 
 
 def build_settings() -> Settings:
@@ -213,6 +217,7 @@ PASS_KEYS = (
     "retranslate_untranslated",
     "model",
     "params",
+    "target_language",
 )
 
 
@@ -285,10 +290,22 @@ def salt(*parts: str) -> str:
     return "\x00".join(parts)
 
 
-def pass_salt(pass_definition: PassDefinition, retry_attempt: int = 0) -> str:
-    base = salt(CACHE_SALT_VERSION, pass_definition.name, pass_definition.instruction)
+def pass_salt(
+    pass_definition: PassDefinition,
+    glossary: tuple[GlossaryEntry, ...] = (),
+    retry_attempt: int = 0,
+) -> str:
+    base = salt(
+        CACHE_SALT_VERSION,
+        pass_definition.name,
+        pass_definition.instruction,
+        entries_to_json_text(glossary),
+    )
     return salt(base, "retry%d" % retry_attempt) if retry_attempt else base
 
 
-def retranslation_salt(pass_definition: PassDefinition) -> str:
-    return salt(pass_salt(pass_definition), "retranslate")
+def retranslation_salt(
+    pass_definition: PassDefinition,
+    glossary: tuple[GlossaryEntry, ...] = (),
+) -> str:
+    return salt(pass_salt(pass_definition, glossary), "retranslate")

@@ -5,6 +5,7 @@ import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -21,6 +22,7 @@ from fakes import (
 from l2l import cli
 from l2l.ascii import ascii_collapse, stubborn_paragraphs
 from l2l.errors import TranslationError, describe, fail_http
+from l2l.glossary import GlossaryEntry
 from l2l.http import chat
 from l2l.monads import (
     IO,
@@ -1285,7 +1287,7 @@ def test_analysis_fails_fast_when_document_needs_multiple_parts() -> None:
     run_context = make_context(console, http.open, maximum_tokens=40)
     analysis_pass = PassDefinition("prep", "Brief.", "analysis", {}, None, False)
     result = analyze_document(
-        run_context, analysis_pass, "一。二。三。四。", Usage()
+        run_context, analysis_pass, (), "一。二。三。四。", Usage()
     ).run()
     assert isinstance(result, Err)
     assert "requires analysis in" in describe(result.error)
@@ -2096,3 +2098,170 @@ def test_main_log_keep_prunes_old_logs(tmp_path: Path) -> None:
     assert code == 0
     assert not ancient.exists()
     assert len(list(logs.glob("*.log"))) == 1
+
+
+def update_pass(
+    name: str = "glossary", target_language: str | None = None
+) -> PassDefinition:
+    return PassDefinition(
+        name,
+        "Extract.",
+        "update_glossary",
+        {},
+        None,
+        False,
+        target_language=target_language,
+    )
+
+
+def glossary_pairs(document: Any) -> list[tuple[str, str | None]]:
+    return [(item["original"], item.get("translated")) for item in document]
+
+
+def test_run_pipeline_updates_glossary_mid_run(tmp_path: Path) -> None:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text(
+        '[{"original": "南京", "translated": "Nanjing"}]', encoding="utf-8"
+    )
+    extraction = FakeStreamResponse(
+        with_usage(
+            stream_chunks(
+                "```json\n"
+                + json.dumps(
+                    [
+                        {"original": "南京", "translated": "Nanking"},
+                        {
+                            "original": "大观园",
+                            "translated": "Grand View Garden",
+                        },
+                    ],
+                    ensure_ascii=False,
+                )
+                + "\n```"
+            ),
+            USAGE,
+        )
+    )
+    http = FakeHttp(
+        [
+            extraction,
+            FakeStreamResponse(with_usage(stream_chunks("Brief."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+        ]
+    )
+    console, stderr = make_console()
+    run_context = make_context(
+        console,
+        http.open,
+        glossary_entries=(
+            GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),
+        ),
+        glossary_update_path=str(glossary),
+    )
+    stdout = io.StringIO()
+    code = run_pipeline(
+        run_context,
+        (
+            update_pass(target_language="Chinese"),
+            PassDefinition("prep", "Brief.", "analysis", {}, None, False),
+            chunk_pass(),
+            paragraph_pass("review"),
+        ),
+        "你好。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n"
+
+    document = json.loads(glossary.read_text(encoding="utf-8"))
+    assert glossary_pairs(document) == [
+        ("南京", "Nanjing"),
+        ("大观园", "Grand View Garden"),
+    ]
+
+    extraction_payload = json.loads(http.requests[0].body)
+    extraction_user = extraction_payload["messages"][1]["content"]
+    assert "Target language: Chinese" in extraction_user
+    assert "Already decided" in extraction_user
+    assert '"original": "南京"' in extraction_user
+    assert "你好。" in extraction_user
+
+    for request in http.requests[1:]:
+        system = json.loads(request.body)["messages"][0]["content"]
+        assert "Glossary (mandatory)" in system
+        assert '- 南京 = "Nanjing"' in system
+        assert '- 大观园 = "Grand View Garden"' in system
+
+    total_line = next(
+        line for line in stderr.getvalue().splitlines() if line.startswith("TOTAL")
+    )
+    assert "prompt=20" in total_line
+    assert "completion=24" in total_line
+
+
+def test_update_glossary_cached_reply_still_merges_and_writes(
+    tmp_path: Path,
+) -> None:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text("[]", encoding="utf-8")
+    cache_directory = tmp_path / "cache"
+    extraction = FakeStreamResponse(
+        with_usage(
+            stream_chunks(
+                '[{"original": "大观园", "translated": "Grand View Garden"}]'
+            ),
+            USAGE,
+        )
+    )
+
+    def run() -> tuple[int, str]:
+        console, _stderr = make_console()
+        http = FakeHttp([extraction])
+        stdout = io.StringIO()
+        code = run_pipeline(
+            make_context(
+                console,
+                http.open,
+                cache_directory=str(cache_directory),
+                use_cache=True,
+                glossary_update_path=str(glossary),
+            ),
+            (update_pass(),),
+            "你好。",
+            0.0,
+            stdout,
+        ).run()
+        return code, stdout.getvalue()
+
+    first_code, first_output = run()
+    second_code, second_output = run()
+    assert (first_code, second_code) == (0, 0)
+    assert first_output == second_output == "你好。\n"
+    document = json.loads(glossary.read_text(encoding="utf-8"))
+    assert glossary_pairs(document) == [
+        ("大观园", "Grand View Garden"),
+    ]
+
+
+def test_plan_report_shows_update_glossary_pass() -> None:
+    console, _stderr = make_console()
+    run_context = make_context(console, FakeHttp([]).open)
+    report = plan_report(
+        run_context,
+        (update_pass(target_language="Chinese"), chunk_pass()),
+        "你好。",
+    )
+    assert (
+        "pass 1/2 [glossary]: mode=update_glossary, 1 call with the whole "
+        "document, target language Chinese" in report
+    )
+    assert "pass 2/2 [translate]: mode=chunk, 1 unit(s)" in report
+
+
+def test_plan_report_update_glossary_falls_back_to_context_language() -> None:
+    console, _stderr = make_console()
+    run_context = make_context(console, FakeHttp([]).open, target_language="French")
+    report = plan_report(run_context, (update_pass(),), "你好。")
+    assert "target language French" in report

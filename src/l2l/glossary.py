@@ -129,6 +129,16 @@ def parse_glossary_document(
     )
 
 
+def append_glossary_entries(
+    existing: tuple[GlossaryEntry, ...],
+    extracted: tuple[GlossaryEntry, ...],
+) -> tuple[GlossaryEntry, ...]:
+    known_originals = {entry.original for entry in existing}
+    return existing + tuple(
+        entry for entry in extracted if entry.original not in known_originals
+    )
+
+
 def merge_glossary_entries(
     groups: tuple[tuple[GlossaryEntry, ...], ...],
 ) -> tuple[GlossaryEntry, ...]:
