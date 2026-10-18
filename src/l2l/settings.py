@@ -290,6 +290,15 @@ def salt(*parts: str) -> str:
     return "\x00".join(parts)
 
 
+def glossary_salt_component(
+    pass_definition: PassDefinition,
+    glossary: tuple[GlossaryEntry, ...],
+) -> str:
+    if pass_definition.mode == "update_glossary":
+        return pass_definition.target_language or ""
+    return entries_to_json_text(glossary)
+
+
 def pass_salt(
     pass_definition: PassDefinition,
     glossary: tuple[GlossaryEntry, ...] = (),
@@ -299,7 +308,7 @@ def pass_salt(
         CACHE_SALT_VERSION,
         pass_definition.name,
         pass_definition.instruction,
-        entries_to_json_text(glossary),
+        glossary_salt_component(pass_definition, glossary),
     )
     return salt(base, "retry%d" % retry_attempt) if retry_attempt else base
 

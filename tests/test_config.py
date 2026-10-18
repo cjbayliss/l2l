@@ -414,6 +414,18 @@ def test_pass_salt_includes_the_glossary() -> None:
     assert pass_salt(pass_definition, entries) == salted
 
 
+def test_pass_salt_omits_the_glossary_for_update_glossary_passes() -> None:
+    pass_definition = PassDefinition("p", "", "update_glossary", {}, None, False)
+    entries = (GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),)
+    assert pass_salt(pass_definition, entries) == pass_salt(pass_definition)
+
+
+def test_pass_salt_includes_target_language_for_update_glossary_passes() -> None:
+    pass_definition = PassDefinition("p", "", "update_glossary", {}, None, False)
+    localized = replace(pass_definition, target_language="Chinese")
+    assert pass_salt(localized) != pass_salt(pass_definition)
+
+
 def test_retranslation_salt_extends_the_pass_salt() -> None:
     pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
     assert retranslation_salt(pass_definition) == (
