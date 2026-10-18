@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Any
 
 from l2l.errors import TranslationError, fail_config
-from l2l.monads import Ok, Result, result_bind, result_sequence
+from l2l.monads import Err, Ok, Result, result_bind, result_sequence
 from l2l.text import strip_think_tag
 
 
@@ -156,17 +156,34 @@ def strip_markdown_fence(content: str) -> str:
     return "\n".join(body).strip()
 
 
+def decode_json_document(content: str) -> Result[Any, json.JSONDecodeError]:
+    try:
+        return Ok(json.loads(content))
+    except json.JSONDecodeError as strict_error:
+        array_start_index = content.find("[")
+        if array_start_index < 0:
+            return Err(strict_error)
+        try:
+            document, _end_index = json.JSONDecoder().raw_decode(
+                content, array_start_index
+            )
+            return Ok(document)
+        except json.JSONDecodeError:
+            return Err(strict_error)
+
+
 def parse_model_glossary_reply(
     text: str, path: str
 ) -> Result[tuple[GlossaryEntry, ...], TranslationError]:
     without_think, _reasoning = strip_think_tag(text)
     content = strip_markdown_fence(without_think)
-    try:
-        document = json.loads(content)
-    except json.JSONDecodeError as error:
-        return fail_config("%s: model reply is not valid JSON: %s" % (path, error))
+    decoded = decode_json_document(content)
+    if isinstance(decoded, Err):
+        return fail_config(
+            "%s: model reply is not valid JSON: %s" % (path, decoded.error)
+        )
 
-    return parse_glossary_document(path, document)
+    return parse_glossary_document(path, decoded.value)
 
 
 def entries_to_json_text(entries: tuple[GlossaryEntry, ...]) -> str:

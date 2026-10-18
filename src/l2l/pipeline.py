@@ -678,6 +678,15 @@ def run_update_glossary_once(
         pass_salt(pass_definition),
         overrides=parameters,
     )
+
+    def reply_is_parseable_glossary(reply_text: str) -> bool:
+        return isinstance(
+            parse_model_glossary_reply(
+                reply_text, run_context.glossary_update_path or "glossary"
+            ),
+            Ok,
+        )
+
     return cached_translation(
         run_context,
         key,
@@ -691,6 +700,7 @@ def run_update_glossary_once(
             state.usage,
         ),
         hit_log=verbose_log(run_context, pass_cache_hit_message(pass_definition.name)),
+        acceptable=reply_is_parseable_glossary,
     )
 
 
