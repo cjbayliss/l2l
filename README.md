@@ -118,6 +118,11 @@ defaults < user config < selected config < environment < command line
 - `130` - interrupted with Ctrl-C.
 - `141` - stdout closed early (SIGPIPE), e.g. piping into `head`.
 
+Error messages number paragraphs, units, and calls from 1, matching
+their position in the document (the first paragraph is paragraph 1); the
+error types themselves carry 0-based indices and `describe` adds one
+when rendering.
+
 When stderr is a terminal, press **Tab** during a run to toggle verbose
 output; the listener is off for pipes and CI.
 

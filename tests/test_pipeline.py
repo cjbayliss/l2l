@@ -20,7 +20,12 @@ from fakes import (
 
 from l2l import __version__, cli
 from l2l.ascii import ascii_collapse, stubborn_paragraphs
-from l2l.errors import TranslationError, describe, fail_http
+from l2l.errors import (
+    InvalidOutputError,
+    TranslationError,
+    describe,
+    fail_http,
+)
 from l2l.glossary import GlossaryEntry
 from l2l.http import chat
 from l2l.monads import (
@@ -34,7 +39,13 @@ from l2l.monads import (
     io_pure,
     io_result,
 )
-from l2l.pipeline import State, analyze_document, conclude_state, run_pipeline
+from l2l.pipeline import (
+    State,
+    analyze_document,
+    conclude_pass_result,
+    conclude_state,
+    run_pipeline,
+)
 from l2l.plans import (
     ascii_drop_warning,
     plan_retranslation_calls,
@@ -1124,10 +1135,22 @@ def test_strict_paragraph_pass_fails_when_counts_still_differ() -> None:
     logged = stderr.getvalue()
     assert "failed validation 2 time(s)" in logged
     assert "continuing" in logged
-    assert "pass [translate] failed" in logged
+    assert "pass [translate] output still failed validation" in logged
     assert "still failed validation after 2 repair attempt(s)" in logged
     assert "--best-effort" in logged
     assert len(http.requests) == 3
+
+
+def test_conclude_pass_result_attaches_the_pass_name_to_invalid_output() -> None:
+    console, _ = make_console()
+    run_context = make_context(console, FakeHttp([]).open)
+    state = State("One.\n\nTwo.", None, Usage(), validated=False, problem="bad shape")
+    result = conclude_pass_result(run_context, chunk_pass(), Ok(state))
+    assert isinstance(result, Err)
+    assert isinstance(result.error, InvalidOutputError)
+    assert result.error.pass_name == "translate"
+    assert result.error.attempts == run_context.settings.unit_fix_attempts
+    assert result.error.problem == "bad shape"
 
 
 def test_paragraph_pass_after_growth_passes_units_without_source() -> None:
@@ -1412,7 +1435,7 @@ def test_strict_chunk_pass_escalates_before_failing_on_exhaustion() -> None:
     logged = stderr.getvalue()
     assert "re-running the pass with one call per paragraph" in logged
     assert "failed validation 2 time(s)" in logged
-    assert "pass [translate] failed" in logged
+    assert "pass [translate] output still failed validation" in logged
     assert len(http.requests) == 9
 
 
@@ -1479,7 +1502,7 @@ def test_unit_validation_strict_mode_fails_and_skips_cache(tmp_path: Path) -> No
     assert stdout.getvalue() == ""
     logged = stderr.getvalue()
     assert "failed validation 2 time(s)" in logged
-    assert "pass [translate] failed" in logged
+    assert "pass [translate] output still failed validation" in logged
     assert "still failed validation after 2 repair attempt(s)" in logged
     assert len(http.requests) == 3
     assert list(cache_directory.glob("*.txt")) == []
@@ -1532,7 +1555,7 @@ def test_strict_mode_fails_the_run_on_empty_replies() -> None:
     assert stdout.getvalue() == ""
     logged = stderr.getvalue()
     assert "the reply was empty" in logged
-    assert "pass [translate] failed" in logged
+    assert "pass [translate] output still failed validation" in logged
     assert "still failed validation after 2 repair attempt(s)" in logged
     assert len(http.requests) == 3
 

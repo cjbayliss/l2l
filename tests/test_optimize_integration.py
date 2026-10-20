@@ -577,7 +577,7 @@ def test_prepare_version_reports_an_instruction_write_failure(tmp_path: Path) ->
     (prompts / "v1.txt").mkdir()
     outcome = prepare_version(environment, "v1", "evolved instruction").run()
     assert isinstance(outcome, Err)
-    assert "cannot write instruction file" in describe(outcome.error)
+    assert "could not write instruction file" in describe(outcome.error)
 
 
 def test_complete_warns_sleeps_and_retries_until_success(tmp_path: Path) -> None:
@@ -656,7 +656,7 @@ def test_candidate_prompt_reports_a_write_failure(tmp_path: Path) -> None:
         environment, state, "current", "history", "critiques"
     ).run()
     assert isinstance(outcome, Err)
-    assert "cannot write candidate instruction" in describe(outcome.error)
+    assert "could not write candidate instruction" in describe(outcome.error)
 
 
 def test_prepare_version_swaps_the_translator_model(tmp_path: Path) -> None:
@@ -693,7 +693,7 @@ def test_prepare_version_reports_a_generated_config_write_failure(
     (generation / "v1.toml").mkdir()
     outcome = prepare_version(environment, "v1", "evolved instruction").run()
     assert isinstance(outcome, Err)
-    assert "cannot write generated config" in describe(outcome.error)
+    assert "could not write generated config" in describe(outcome.error)
 
 
 def test_translate_chapter_reports_a_partial_write_failure(tmp_path: Path) -> None:
@@ -706,7 +706,7 @@ def test_translate_chapter_reports_a_partial_write_failure(tmp_path: Path) -> No
     chapter = str(working_directory / "chapters" / "ch1.txt")
     outcome = translate_chapter(environment, "v1", chapter).run()
     assert isinstance(outcome, Err)
-    assert "cannot write partial output" in describe(outcome.error)
+    assert "could not write partial output" in describe(outcome.error)
 
 
 def test_translate_chapter_reports_a_failed_finalization(tmp_path: Path) -> None:
@@ -767,7 +767,7 @@ def test_judge_step_reports_judging_and_verdict_failures(tmp_path: Path) -> None
     (verdict_directory / "r1-ch1.json").mkdir()
     written = judge_step(environment, 1, "v0")(Tally(), chapter).run()
     assert isinstance(written, Err)
-    assert "cannot write verdict file" in describe(written.error)
+    assert "could not write verdict file" in describe(written.error)
 
 
 def test_judge_step_reports_missing_texts(tmp_path: Path) -> None:
@@ -785,13 +785,13 @@ def test_record_duplicate_reports_ledger_and_history_failures(tmp_path: Path) ->
     (working_directory / "ledger.jsonl").mkdir()
     blocked = record_duplicate(environment, state, inputs, "v0").run()
     assert isinstance(blocked, Err)
-    assert "cannot append ledger" in describe(blocked.error)
+    assert "could not append to ledger" in describe(blocked.error)
 
     (working_directory / "ledger.jsonl").rmdir()
     (working_directory / "history.jsonl").mkdir()
     blocked_history = record_duplicate(environment, state, inputs, "v0").run()
     assert isinstance(blocked_history, Err)
-    assert "cannot append history" in describe(blocked_history.error)
+    assert "could not append to history" in describe(blocked_history.error)
 
 
 def test_conclude_round_reports_write_failures(tmp_path: Path) -> None:
@@ -804,19 +804,19 @@ def test_conclude_round_reports_write_failures(tmp_path: Path) -> None:
     (judge_directory / "r1-feedback.txt").mkdir()
     blocked_feedback = conclude_round(environment, state, inputs, tally).run()
     assert isinstance(blocked_feedback, Err)
-    assert "cannot write round feedback" in describe(blocked_feedback.error)
+    assert "could not write round feedback" in describe(blocked_feedback.error)
 
     (judge_directory / "r1-feedback.txt").rmdir()
     (working_directory / "ledger.jsonl").mkdir()
     blocked_ledger = conclude_round(environment, state, inputs, tally).run()
     assert isinstance(blocked_ledger, Err)
-    assert "cannot append ledger" in describe(blocked_ledger.error)
+    assert "could not append to ledger" in describe(blocked_ledger.error)
 
     (working_directory / "ledger.jsonl").rmdir()
     (working_directory / "history.jsonl").mkdir()
     blocked_history = conclude_round(environment, state, inputs, tally).run()
     assert isinstance(blocked_history, Err)
-    assert "cannot append history" in describe(blocked_history.error)
+    assert "could not append to history" in describe(blocked_history.error)
 
 
 def test_holdout_check_reports_judging_and_report_failures(tmp_path: Path) -> None:
@@ -833,7 +833,7 @@ def test_holdout_check_reports_judging_and_report_failures(tmp_path: Path) -> No
     (judge_directory / "holdout.json").mkdir()
     blocked = holdout_check(replace(environment, opener=make_opener(calls)), "v1").run()
     assert isinstance(blocked, Err)
-    assert "cannot write holdout verdict" in describe(blocked.error)
+    assert "could not write holdout verdict" in describe(blocked.error)
 
 
 def test_holdout_check_reports_missing_translations(tmp_path: Path) -> None:
@@ -910,7 +910,7 @@ def test_compare_step_reports_judging_and_verdict_failures(tmp_path: Path) -> No
     (verdict_directory / "ch1.json").mkdir()
     code, _stdout, stderr = run_main(argv, tmp_path, make_launcher([]), make_opener([]))
     assert code == 1
-    assert "cannot write chapter verdict" in stderr
+    assert "could not write chapter verdict" in stderr
 
 
 def test_compare_step_reports_missing_translations(tmp_path: Path) -> None:
@@ -1013,7 +1013,7 @@ def test_summarize_compare_reports_a_summary_write_failure(tmp_path: Path) -> No
     argv = compare_argv(base, working_directory, prompt_a, prompt_b, judge_template, [])
     code, _stdout, stderr = run_main(argv, tmp_path, make_launcher([]), make_opener([]))
     assert code == 1
-    assert "cannot write compare summary" in stderr
+    assert "could not write compare summary" in stderr
 
 
 def test_compare_rejects_identical_prompts(tmp_path: Path) -> None:

@@ -278,7 +278,7 @@ def test_strict_validation_failure_ends_the_cli_run(tmp_path: Path) -> None:
     assert stdout.getvalue() == ""
     logged = stderr.getvalue()
     assert "failed validation 2 time(s)" in logged
-    assert "pass [translate] failed" in logged
+    assert "pass [translate] output still failed validation" in logged
     assert "still failed validation after 2 repair attempt(s)" in logged
     assert len(http.requests) == 6
 
