@@ -31,7 +31,8 @@ from l2l.text import Usage
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
 CONFIG_TEXT = (
-    "[api]\n"
+    'target_language = "English"\n'
+    "\n[api]\n"
     'base_url = "http://endpoint.test/v1"\n'
     'api_key = "secret-key"\n'
     'model = "m"\n'

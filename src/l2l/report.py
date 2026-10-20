@@ -197,6 +197,7 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
     )
     return "\n".join(
         api_lines
+        + ("target_language: %s" % setup.target_language,)
         + pass_lines
         + glossary_lines
         + ("options.ensure_paragraphs: %s" % effective_ensure_paragraphs,)

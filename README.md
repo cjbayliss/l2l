@@ -91,9 +91,10 @@ Translation behaviour:
 - `-g`, `--glossary FILE` - JSON glossary file with mandatory term
   renderings; repeatable, later files override earlier entries, and
   generated or updated entries are written to the first file.
-- `-l`, `--target-language LANG` - target language for
-  `--extract-glossary` and for `update_glossary` passes without their
-  own `target_language` (default: English).
+- `-l`, `--target-language LANG` - target language; required unless
+  `target_language` is set in the config file. Used by
+  `--extract-glossary` and by `update_glossary` passes without their own
+  `target_language`.
 - `-P`, `--ensure-paragraphs` - check the paragraph count after each
   pass (see `ensure_paragraphs` under `[options]`).
 - `-b`, `--best-effort` - keep the last reply and continue when a unit
@@ -159,17 +160,26 @@ logged. Pass `--print-log-path` to print the log's path at startup.
 
 ## Configuration
 
-Configuration lives in a TOML file with up to three kinds of table:
+Configuration lives in a TOML file with a top-level `target_language`
+and up to three kinds of table:
 
 ```toml
+target_language = "English"
+
 [api]      # endpoint, key, model, limits, extra request parameters
 [[pass]]   # one or more passes, run in order
 [options]  # global toggles
 ```
 
+The top-level `target_language` is required unless `--target-language`
+is passed; it names the language produced by glossary extraction and
+`update_glossary` passes.
+
 A minimal example:
 
 ```toml
+target_language = "English"
+
 [api]
 base_url = "https://openrouter.ai/api/v1"
 api_key = "sk-..."
@@ -239,7 +249,8 @@ Passes run in order; each pass's output is the next's input.
 - `ascii`, `ensure_paragraphs`, `retranslate_untranslated` - per-pass
   overrides of the `[options]` toggles below.
 - `target_language` - per-pass target language, currently used only by
-  `mode = "update_glossary"`; falls back to `--target-language`.
+  `mode = "update_glossary"`; falls back to the resolved global target
+  language (config file or `--target-language`).
 
 Modes:
 
@@ -266,8 +277,8 @@ Modes:
   `update_glossary` pass before the passes that translate. The updated
   glossary flows into the system prompts of all later passes in the same
   run. The pass's `instruction` is ignored; set `target_language` (or
-  rely on `--target-language`) to name the target language for the
-  extraction.
+  rely on the global `target_language` or `--target-language`) to name
+  the target language for the extraction.
 
 A typical multi-pass setup pairs an `analysis` pass with a `chunk` pass.
 

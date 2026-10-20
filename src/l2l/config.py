@@ -57,11 +57,13 @@ def validate_document(
     if not document:
         return Ok(None)
 
-    unknown = sorted(set(document) - {"api", "options", "pass", "glossary"})
+    unknown = sorted(
+        set(document) - {"api", "options", "pass", "glossary", "target_language"}
+    )
     if unknown:
         return fail_config(
             "%s: unknown top-level key(s): %s (expected [api], [options], "
-            "glossary, [[pass]])" % (path, ", ".join(unknown))
+            "glossary, target_language, [[pass]])" % (path, ", ".join(unknown))
         )
 
     glossary = document.get("glossary")
@@ -898,6 +900,89 @@ def resolve_glossaries(
     )
 
 
+def document_target_language(
+    path: str | None, document: dict[str, Any]
+) -> Result[str | None, TranslationError]:
+    target_language = document.get("target_language")
+    if target_language is None:
+        return Ok(None)
+
+    if not isinstance(target_language, str) or not target_language.strip():
+        return fail_config(
+            "%s: target_language must be a non-empty string" % (path or "config")
+        )
+
+    return Ok(target_language.strip())
+
+
+def command_line_target_language(
+    target_language: str | None,
+) -> Result[str | None, TranslationError]:
+    if target_language is None:
+        return Ok(None)
+
+    if not target_language.strip():
+        return fail_config("--target-language must be a non-empty string")
+
+    return Ok(target_language.strip())
+
+
+def require_target_language(
+    target_language: str | None,
+) -> Result[str, TranslationError]:
+    if target_language is None:
+        return fail_config(
+            "target language is required; pass --target-language or set "
+            "target_language in a config file"
+        )
+
+    return Ok(target_language)
+
+
+def resolve_target_language(
+    command_line_value: str | None,
+    user_path: str,
+    user_document_result: DocumentResult,
+    selected_path: str | None,
+    selected_document_result: DocumentResult,
+) -> Result[str, TranslationError]:
+    def configured(
+        documents: tuple[dict[str, Any], dict[str, Any]],
+    ) -> Result[str, TranslationError]:
+        layers = tuple(
+            (path, document)
+            for path, document in (
+                (selected_path, documents[1]),
+                (user_path, documents[0]),
+            )
+            if document
+        )
+        resolved = reduce(
+            lambda found, layer: result_bind(
+                found,
+                lambda value: (
+                    Ok(value)
+                    if value is not None
+                    else document_target_language(layer[0], layer[1])
+                ),
+            ),
+            layers,
+            command_line_target_language(command_line_value),
+        )
+        return result_bind(resolved, require_target_language)
+
+    return result_bind(
+        result_bind(
+            user_document_result,
+            lambda user_document: result_map(
+                selected_document_result,
+                lambda selected_document: (user_document, selected_document),
+            ),
+        ),
+        configured,
+    )
+
+
 def setup_with_glossary(setup: Setup, glossaries: Glossaries) -> Setup:
     paths, entries = glossaries
     return replace(
@@ -924,6 +1009,7 @@ def require_glossary_for_update_passes(
 def build_setup(
     config: Config,
     pair: Result[ResolvedPasses, TranslationError],
+    target_language: str,
     ensure_paragraphs_flag: bool = False,
 ) -> Result[Setup, TranslationError]:
     def with_options(resolved: ResolvedPasses) -> Setup:
@@ -934,6 +1020,7 @@ def build_setup(
             config=config,
             passes=apply_default_options(resolved[1], resolved[0], effective),
             ensure_paragraphs=effective,
+            target_language=target_language,
         )
 
     return result_bind(pair, lambda resolved: Ok(with_options(resolved)))
@@ -959,6 +1046,13 @@ def load_setup(arguments: Arguments, environment: Mapping[str, str]) -> IO[Setup
                 ],
             ) -> SetupResult:
                 resolved, glossaries = pair
+                target_language = resolve_target_language(
+                    arguments.target_language,
+                    user_path,
+                    documents[0],
+                    selected_path,
+                    documents[1],
+                )
                 return result_bind(
                     merged_api_settings(
                         arguments,
@@ -969,14 +1063,22 @@ def load_setup(arguments: Arguments, environment: Mapping[str, str]) -> IO[Setup
                         documents[1],
                     ),
                     lambda config: result_bind(
-                        build_setup(config, resolved, arguments.ensure_paragraphs),
-                        lambda setup: result_bind(
-                            glossaries,
-                            lambda resolved_glossaries: (
-                                require_glossary_for_update_passes(
-                                    arguments.glossary,
-                                    setup_with_glossary(setup, resolved_glossaries),
-                                )
+                        target_language,
+                        lambda resolved_target_language: result_bind(
+                            build_setup(
+                                config,
+                                resolved,
+                                resolved_target_language,
+                                arguments.ensure_paragraphs,
+                            ),
+                            lambda setup: result_bind(
+                                glossaries,
+                                lambda resolved_glossaries: (
+                                    require_glossary_for_update_passes(
+                                        arguments.glossary,
+                                        setup_with_glossary(setup, resolved_glossaries),
+                                    )
+                                ),
                             ),
                         ),
                     ),

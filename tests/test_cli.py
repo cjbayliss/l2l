@@ -24,7 +24,8 @@ from l2l.monads import IO, Err, Just, Ok, Result, io_pure, io_result
 from l2l.settings import Arguments
 
 CONFIG_TEXT = (
-    "[api]\n"
+    'target_language = "English"\n'
+    "\n[api]\n"
     'base_url = "http://endpoint.test/v1"\n'
     'api_key = "secret-key"\n'
     'model = "m"\n'
@@ -86,6 +87,28 @@ def test_missing_config_fails_with_error(tmp_path: Path) -> None:
     assert "could not read" in stderr
 
 
+def test_missing_target_language_exits_two(tmp_path: Path) -> None:
+    config_path = tmp_path / "no-language.toml"
+    config_path.write_text(CONFIG_TEXT.replace('target_language = "English"\n', ""))
+    code, stdout, stderr = run_l2l(tmp_path, ["-c", str(config_path), "--check-config"])
+    assert code == 2
+    assert stdout == ""
+    assert (
+        "target language is required; pass --target-language or set "
+        "target_language in a config file" in stderr
+    )
+
+
+def test_cli_target_language_overrides_config(tmp_path: Path) -> None:
+    code, stdout, stderr = run_l2l(
+        tmp_path,
+        ["-c", str(write_config(tmp_path)), "--check-config", "-l", "French"],
+    )
+    assert code == 0
+    assert stderr == ""
+    assert "target_language: French" in stdout
+
+
 def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
     code, stdout, stderr = run_l2l(
         tmp_path, ["-c", str(write_config(tmp_path)), "--check-config"]
@@ -95,6 +118,7 @@ def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
     assert "api.base_url: http://endpoint.test/v1" in stdout
     assert "api.model: m" in stdout
     assert "api.api_key: secr...ey" in stdout
+    assert "target_language: English" in stdout
     assert "pass 1/1 [translate]: mode=chunk" in stdout
 
 
@@ -1050,6 +1074,7 @@ def test_parse_args_defaults() -> None:
     assert arguments.verbose
     assert arguments.cache_directory is None
     assert arguments.log_retention_days == 30
+    assert arguments.target_language is None
 
     arguments = cli.parse_args(["-c", "cfg.toml", "--ensure-paragraphs"])
     assert arguments.ensure_paragraphs

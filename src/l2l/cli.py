@@ -190,8 +190,8 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         "-l",
         "--target-language",
         metavar="LANG",
-        default="English",
-        help="target language for --extract-glossary (default: %(default)s)",
+        default=None,
+        help="target language; required unless target_language is set in a config file",
     )
     translation_group.add_argument(
         "-P",
@@ -426,7 +426,7 @@ def build_context(
         best_effort=parsed.best_effort,
         glossary_entries=setup.glossary_entries,
         glossary_update_path=parsed.glossary[0] if parsed.glossary else None,
-        target_language=parsed.target_language,
+        target_language=setup.target_language,
     )
 
 
@@ -721,7 +721,9 @@ def extract_glossary_program(
                             run_context,
                             run_context.settings.glossary_extraction_instruction,
                             extraction_user_message(
-                                parsed.target_language, setup.glossary_entries, text
+                                setup.target_language,
+                                setup.glossary_entries,
+                                text,
                             ),
                             run_context.config.model,
                             {},

@@ -73,7 +73,7 @@ class Arguments:
     best_effort: bool = False
     glossary: tuple[str, ...] = ()
     extract_glossary: str | None = None
-    target_language: str = "English"
+    target_language: str | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +81,7 @@ class Setup:
     config: Config
     passes: tuple[PassDefinition, ...]
     ensure_paragraphs: bool | int
+    target_language: str
     glossary_paths: tuple[str, ...] = ()
     glossary_entries: tuple[GlossaryEntry, ...] = ()
 
