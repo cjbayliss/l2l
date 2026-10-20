@@ -67,7 +67,11 @@ def store_translation(
     result: Result[Translated, TranslationError],
     acceptable: Callable[[str], bool],
 ) -> IO[Result[Translated, TranslationError]]:
-    if isinstance(result, Ok) and acceptable(result.value.text):
+    if (
+        isinstance(result, Ok)
+        and result.value.validated
+        and acceptable(result.value.text)
+    ):
         return io_map(
             cache_store(run_context, key, result.value.text, True), lambda _: result
         )

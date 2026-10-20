@@ -123,6 +123,22 @@ def test_cached_translation_does_not_store_unacceptable_result(tmp_path: Path) -
     assert cache_lookup(run_context, key).run() == NOTHING
 
 
+def test_cached_translation_does_not_store_unvalidated_result(tmp_path: Path) -> None:
+    run_context, _ = make_cached_context(tmp_path)
+    compute, calls = counting_compute(
+        [Translated("unverified output", Usage(1, 1, 0.0), False, "script mismatch")]
+    )
+    key = cache_key("source", "model-x")
+
+    result = cached_translation(run_context, key, Usage(), compute, io_pure(None)).run()
+
+    assert result == Ok(
+        Translated("unverified output", Usage(1, 1, 0.0), False, "script mismatch")
+    )
+    assert calls == [0]
+    assert cache_lookup(run_context, key).run() == NOTHING
+
+
 def test_cached_translation_error_is_returned_and_not_stored(tmp_path: Path) -> None:
     run_context, _ = make_cached_context(tmp_path)
     failure: Result[Translated, TranslationError] = fail_http("unreachable", "down")
