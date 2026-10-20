@@ -9,9 +9,9 @@ from l2l.ascii import enforce_pass_ascii
 from l2l.cache import (
     always_acceptable,
     cache_lookup,
-    cache_store,
     cached_translation,
     non_empty,
+    store_translation,
 )
 from l2l.console import Console
 from l2l.effects import now, write_stdout, write_text_file
@@ -876,11 +876,16 @@ def run_single_call(
 
         outcome = result.value
         stored = io_and_then(
-            cache_store(
+            store_translation(
                 run_context,
                 call.key,
-                outcome.text,
-                outcome.validated and cacheable(outcome.text),
+                result_map(
+                    result,
+                    lambda unit: Translated(
+                        unit.text, unit.usage, unit.validated, unit.problem
+                    ),
+                ),
+                cacheable,
             ),
             verbose_log(
                 run_context,
