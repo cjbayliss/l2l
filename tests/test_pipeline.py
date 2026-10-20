@@ -19,7 +19,7 @@ from fakes import (
     with_usage,
 )
 
-from l2l import cli
+from l2l import __version__, cli
 from l2l.ascii import ascii_collapse, stubborn_paragraphs
 from l2l.errors import TranslationError, describe, fail_http
 from l2l.glossary import GlossaryEntry
@@ -44,7 +44,7 @@ from l2l.plans import (
     plan_unit_calls,
     resolve_work_groups,
 )
-from l2l.settings import PassDefinition, build_settings
+from l2l.settings import Arguments, PassDefinition, build_settings
 from l2l.text import THINK_OPEN, AsciiDrop, Usage, unit_separators
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
@@ -1739,9 +1739,19 @@ def test_main_end_to_end_with_config(tmp_path: Path) -> None:
     assert len(http.requests) == 1
 
 
-def test_version_flag_exits() -> None:
-    with pytest.raises(SystemExit):
-        cli.parse_args(["--version"])
+def test_parse_arguments_returns_version_text() -> None:
+    result = cli.parse_arguments(["--version"]).run()
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, cli.EarlyExitText)
+    assert result.value.text == "l2l " + __version__
+
+
+def test_parse_arguments_returns_help_text() -> None:
+    result = cli.parse_arguments(["--help"]).run()
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, cli.EarlyExitText)
+    assert "usage:" in result.value.text
+    assert "--dry-run" in result.value.text
 
 
 def test_parse_arguments_reports_invalid_flags() -> None:
@@ -1750,9 +1760,112 @@ def test_parse_arguments_reports_invalid_flags() -> None:
     assert "invalid arguments" in describe(result.error)
 
 
-def test_parse_arguments_reraises_version_exit() -> None:
-    with pytest.raises(SystemExit):
-        cli.parse_arguments(["--version"]).run()
+def test_main_prints_version_and_returns_zero_without_http() -> None:
+    http = FakeHttp([])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        ["--version"],
+        {},
+        io.StringIO(),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "l2l " + __version__ + "\n"
+    assert stderr.getvalue() == ""
+    assert http.requests == []
+
+
+def test_main_prints_help_and_returns_zero_without_http() -> None:
+    http = FakeHttp([])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        ["--help"],
+        {},
+        io.StringIO(),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 0
+    assert "usage:" in stdout.getvalue()
+    assert stderr.getvalue() == ""
+    assert http.requests == []
+
+
+def test_parse_arguments_rejects_dry_run_with_write_glossary() -> None:
+    result = cli.parse_arguments(
+        ["cfg.toml", "--dry-run", "--write-glossary", "glossary.json"]
+    ).run()
+    assert isinstance(result, Err)
+    assert "--write-glossary cannot be combined with --dry-run" in describe(
+        result.error
+    )
+
+
+def test_parse_arguments_rejects_every_conflicting_mode_pair() -> None:
+    conflicting_argument_groups = (
+        ["cfg.toml", "--check-config", "--cache-prune", "7"],
+        ["cfg.toml", "--check-config", "--write-glossary", "glossary.json"],
+        ["cfg.toml", "--check-config", "--dry-run"],
+        ["cfg.toml", "--cache-prune", "7", "--write-glossary", "glossary.json"],
+        ["cfg.toml", "--cache-prune", "7", "--dry-run"],
+    )
+    for arguments in conflicting_argument_groups:
+        result = cli.parse_arguments(arguments).run()
+        assert isinstance(result, Err)
+        assert "cannot be combined with" in describe(result.error)
+
+
+def test_parse_arguments_still_accepts_single_modes() -> None:
+    for arguments in (
+        ["cfg.toml", "--check-config"],
+        ["cfg.toml", "--cache-prune", "7"],
+        ["cfg.toml", "--write-glossary", "glossary.json"],
+        ["cfg.toml", "--dry-run"],
+    ):
+        result = cli.parse_arguments(arguments).run()
+        assert isinstance(result, Ok)
+        assert isinstance(result.value, Arguments)
+
+
+def test_main_rejects_dry_run_with_write_glossary_without_http(tmp_path: Path) -> None:
+    config_path = tmp_path / "l2l.toml"
+    config_path.write_text(
+        "[api]\n"
+        'base_url = "http://endpoint.test/v1"\n'
+        'api_key = "key"\n'
+        'model = "m"\n'
+        "\n[[pass]]\n"
+        'name = "translate"\n'
+        'mode = "chunk"\n'
+        'instruction = "Translate."'
+    )
+    http = FakeHttp([])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(config_path),
+            "--dry-run",
+            "--write-glossary",
+            str(tmp_path / "glossary.json"),
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 2
+    assert (
+        "l2l: --write-glossary cannot be combined with --dry-run" in stderr.getvalue()
+    )
+    assert stdout.getvalue() == ""
+    assert http.requests == []
 
 
 def test_main_check_config_prints_report_without_http(tmp_path: Path) -> None:

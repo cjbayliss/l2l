@@ -5,7 +5,8 @@ import os
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
-from typing import TextIO
+from dataclasses import dataclass
+from typing import Any, TextIO
 
 from l2l import __version__
 from l2l.config import load_setup
@@ -58,11 +59,39 @@ from l2l.settings import Arguments, Context, OpenHTTP, Setup, build_settings
 from l2l.text import Translated, Usage
 
 
+@dataclass(frozen=True)
+class EarlyExitText(BaseException):
+    text: str
+
+
+class HelpExitAction(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
+        option_string: str | None = None,
+    ) -> None:
+        raise EarlyExitText(parser.format_help())
+
+
+class VersionExitAction(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
+        option_string: str | None = None,
+    ) -> None:
+        raise EarlyExitText("l2l " + __version__)
+
+
 def parse_args(arguments: Sequence[str]) -> Arguments:
     parser = argparse.ArgumentParser(
         prog="l2l",
         description="Translate text between any pair of languages on "
         "stdin/stdout using any OpenAI-compatible chat completions endpoint.",
+        add_help=False,
     )
     parser.add_argument(
         "config",
@@ -74,8 +103,9 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
     )
     parser.add_argument(
         "--version",
-        action="version",
-        version="l2l " + __version__,
+        action=VersionExitAction,
+        nargs=0,
+        help="show the version and exit",
     )
     parser.add_argument(
         "--base-url",
@@ -189,6 +219,13 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         help="delete run logs older than DAYS days at startup (0 keeps "
         "every log; default: %(default)s)",
     )
+    parser.add_argument(
+        "--help",
+        "-h",
+        action=HelpExitAction,
+        nargs=0,
+        help="show this help message and exit",
+    )
     parsed = parser.parse_args(arguments)
     return Arguments(
         config=parsed.config,
@@ -214,15 +251,40 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
     )
 
 
+type ParsedArguments = Result[Arguments | EarlyExitText, TranslationError]
+
+
+def active_mode_flags(parsed: Arguments) -> tuple[str, ...]:
+    return tuple(
+        flag_name
+        for flag_name, is_active in (
+            ("--check-config", parsed.check_config),
+            ("--cache-prune", parsed.cache_prune is not None),
+            ("--write-glossary", parsed.write_glossary is not None),
+            ("--dry-run", parsed.dry_run),
+        )
+        if is_active
+    )
+
+
+def reject_exclusive_modes(parsed: Arguments) -> ParsedArguments:
+    active = active_mode_flags(parsed)
+    if len(active) > 1:
+        return fail_config(
+            "%s cannot be combined with %s" % (" ".join(active[:-1]), active[-1])
+        )
+    return Ok(parsed)
+
+
 def parse_arguments(
     arguments: Sequence[str],
-) -> IO[Result[Arguments, TranslationError]]:
-    def thunk() -> Result[Arguments, TranslationError]:
+) -> IO[ParsedArguments]:
+    def thunk() -> ParsedArguments:
         try:
-            return Ok(parse_args(arguments))
-        except SystemExit as exit_error:
-            if exit_error.code == 0:
-                raise
+            return reject_exclusive_modes(parse_args(arguments))
+        except EarlyExitText as early_exit:
+            return Ok(early_exit)
+        except SystemExit:
             return fail_config("invalid arguments; run l2l --help")
 
     return IO(thunk)
@@ -245,7 +307,7 @@ def main(
     opener = open_http if open_http is not None else curl_open_http(environment)
 
     def after_parse(
-        parsed_result: Result[Arguments, TranslationError],
+        parsed_result: ParsedArguments,
     ) -> IO[int]:
         if isinstance(parsed_result, Err):
 
@@ -256,6 +318,9 @@ def main(
             return io_bind(stream_isatty(stderr), report_parse_failure)
 
         parsed = parsed_result.value
+        if isinstance(parsed, EarlyExitText):
+            return io_map(write_stdout(stdout, parsed.text), lambda _: 0)
+
         if parsed.check_config:
             return check_config_program(parsed, environment, stdout, stderr, clock)
 
