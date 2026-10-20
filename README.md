@@ -104,6 +104,10 @@ Empty input succeeds without calling the endpoint. To get started:
   paragraph cannot fit in a single request.
 - `--version` - print the version and exit.
 
+The modes `--check-config`, `--cache-prune`, `--write-glossary`, and
+`--dry-run` are mutually exclusive: combining any two fails with a
+configuration error (exit code 2) before any endpoint work starts.
+
 Precedence, from weakest to strongest:
 
 ```text
