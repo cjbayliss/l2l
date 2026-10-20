@@ -112,10 +112,8 @@ def load_toml(
         try:
             with open(path, "rb") as handle:
                 return Ok(tomllib.load(handle))
-        except FileNotFoundError:
-            return fail_config("%s not found: %s" % (description, path))
         except OSError as error:
-            return fail_config("cannot read %s: %s" % (description, error))
+            return fail_file_error(path, "read " + description, str(error))
         except tomllib.TOMLDecodeError as error:
             return fail_config("cannot parse %s %s: %s" % (description, path, error))
 
@@ -127,10 +125,8 @@ def load_json(path: str, description: str) -> IO[Result[Any, TranslationError]]:
         try:
             with open(path, encoding="utf-8") as handle:
                 return Ok(json.loads(handle.read()))
-        except FileNotFoundError:
-            return fail_config("%s not found: %s" % (description, path))
         except OSError as error:
-            return fail_config("cannot read %s: %s" % (description, error))
+            return fail_file_error(path, "read " + description, str(error))
         except json.JSONDecodeError as error:
             return fail_config("cannot parse %s %s: %s" % (description, path, error))
 
@@ -142,10 +138,8 @@ def read_text_file(path: str, description: str) -> IO[Result[str, TranslationErr
         try:
             with open(path, encoding="utf-8") as handle:
                 return Ok(handle.read())
-        except FileNotFoundError:
-            return fail_config("%s not found: %s" % (description, path))
         except OSError as error:
-            return fail_config("cannot read %s: %s" % (description, error))
+            return fail_file_error(path, "read " + description, str(error))
 
     return IO(thunk)
 

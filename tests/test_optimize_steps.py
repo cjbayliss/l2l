@@ -673,12 +673,12 @@ def test_round_texts_reports_missing_translations(tmp_path: Path) -> None:
     absent_chapter = str(working_directory / "chapters" / "absent.txt")
     missing_source = round_texts(environment, "v0", "v1", absent_chapter).run()
     assert isinstance(missing_source, Err)
-    assert "chapter not found" in describe(missing_source.error)
+    assert "could not read chapter" in describe(missing_source.error)
 
     chapter = str(working_directory / "chapters" / "ch1.txt")
     missing_translations = round_texts(environment, "v0", "v1", chapter).run()
     assert isinstance(missing_translations, Err)
-    assert "translation not found" in describe(missing_translations.error)
+    assert "could not read translation" in describe(missing_translations.error)
 
 
 def test_judge_step_reports_judging_and_verdict_failures(tmp_path: Path) -> None:
@@ -710,7 +710,7 @@ def test_judge_step_reports_missing_texts(tmp_path: Path) -> None:
     chapter = str(working_directory / "chapters" / "ch1.txt")
     outcome = judge_step(environment, 1, "v0")(Tally(), chapter).run()
     assert isinstance(outcome, Err)
-    assert "translation not found" in describe(outcome.error)
+    assert "could not read translation" in describe(outcome.error)
 
 
 def test_record_duplicate_reports_ledger_and_history_failures(tmp_path: Path) -> None:
@@ -778,7 +778,7 @@ def test_holdout_check_reports_missing_translations(tmp_path: Path) -> None:
     unreadable.mkdir()
     outcome = holdout_check(environment, "v1").run()
     assert isinstance(outcome, Err)
-    assert "cannot read translation" in describe(outcome.error)
+    assert "could not read translation" in describe(outcome.error)
 
 
 def test_holdout_check_writes_the_verdict(tmp_path: Path) -> None:
@@ -839,7 +839,7 @@ def test_compare_step_reports_missing_translations(tmp_path: Path) -> None:
     argv = compare_argv(base, working_directory, prompt_a, prompt_b, judge_template, [])
     code, _stdout, stderr = run_main(argv, tmp_path, make_launcher([]), make_opener([]))
     assert code == 1
-    assert "cannot read translation" in stderr
+    assert "could not read translation" in stderr
 
 
 def test_compare_finds_b_wins(tmp_path: Path) -> None:
@@ -879,7 +879,7 @@ def test_evolution_reports_a_missing_judge_template(tmp_path: Path) -> None:
     argv = evolve_argv(base, working_directory, seed, absent, rewrite_template, [])
     code, _stdout, stderr = run_main(argv, tmp_path, make_launcher([]), make_opener([]))
     assert code == 1
-    assert "judge template not found" in stderr
+    assert "could not read judge template" in stderr
 
 
 def test_evolution_reports_missing_endpoint_credentials(tmp_path: Path) -> None:
@@ -1021,7 +1021,7 @@ def test_evolution_reports_a_broken_rewrite_template(tmp_path: Path) -> None:
         make_opener([]),
     )
     assert code == 1
-    assert "rewrite template not found" in stderr
+    assert "could not read rewrite template" in stderr
 
     broken = tmp_path / "broken-rewrite.txt"
     broken.write_text("no tokens here", encoding="utf-8")

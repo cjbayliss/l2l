@@ -27,7 +27,7 @@ from l2l.config import (
     timeout_api_setting,
     validate_document,
 )
-from l2l.errors import TranslationError, describe
+from l2l.errors import FileError, TranslationError, describe
 from l2l.glossary import GlossaryEntry
 from l2l.monads import Err, Ok, Result, io_pure
 from l2l.report import mask_api_key, setup_report
@@ -685,7 +685,8 @@ def test_load_instruction_text_rejects_bad_file_settings(
         "f", "p", {"instruction_file": "missing.txt"}, str(tmp_path)
     ).run()
     assert isinstance(result, Err)
-    assert "instruction file not found" in describe(result.error)
+    assert isinstance(result.error, FileError)
+    assert "could not read f: [[pass]] p: instruction file" in describe(result.error)
 
 
 def test_read_document_without_a_file_is_empty() -> None:

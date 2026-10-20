@@ -55,13 +55,15 @@ def test_time_sleep_returns_after_the_requested_delay() -> None:
 def test_load_toml_reports_directory_reads(tmp_path: Path) -> None:
     result = load_toml(str(tmp_path), "config file").run()
     assert isinstance(result, Err)
-    assert "cannot read config file" in describe(result.error)
+    assert isinstance(result.error, FileError)
+    assert "could not read config file" in describe(result.error)
 
 
 def test_read_text_file_reports_directory_reads(tmp_path: Path) -> None:
     result = read_text_file(str(tmp_path), "instruction file").run()
     assert isinstance(result, Err)
-    assert "cannot read instruction file" in describe(result.error)
+    assert isinstance(result.error, FileError)
+    assert "could not read instruction file" in describe(result.error)
 
 
 def test_load_json_reads_documents(tmp_path: Path) -> None:
@@ -74,7 +76,8 @@ def test_load_json_reads_documents(tmp_path: Path) -> None:
 def test_load_json_reports_missing_files(tmp_path: Path) -> None:
     result = load_json(str(tmp_path / "absent.json"), "glossary file").run()
     assert isinstance(result, Err)
-    assert "glossary file not found" in describe(result.error)
+    assert isinstance(result.error, FileError)
+    assert "could not read glossary file" in describe(result.error)
 
 
 def test_load_json_reports_malformed_documents(tmp_path: Path) -> None:
