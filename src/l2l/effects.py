@@ -12,10 +12,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, TextIO
 
-from l2l.errors import TranslationError, fail_config
+from l2l.errors import TranslationError, fail_config, fail_file_error
 from l2l.monads import (
     IO,
     NOTHING,
+    Err,
     Just,
     Maybe,
     Nothing,
@@ -282,18 +283,24 @@ def log_error(log: RunLog, detail: str) -> IO[None]:
     return log_entry(log, "ERROR", detail)
 
 
-def cache_entry_paths(cache_directory: str) -> IO[tuple[str, ...]]:
-    def thunk() -> tuple[str, ...]:
+def cache_entry_paths(
+    cache_directory: str,
+) -> IO[Result[tuple[str, ...], TranslationError]]:
+    def thunk() -> Result[tuple[str, ...], TranslationError]:
         try:
             entries = tuple(os.scandir(cache_directory))
-        except OSError:
-            return ()
+        except FileNotFoundError:
+            return Ok(())
+        except OSError as error:
+            return fail_file_error(cache_directory, "list entries in", str(error))
 
-        return tuple(
-            entry.path
-            for entry in entries
-            if entry.is_file()
-            and (entry.name.endswith(".txt") or entry.name.endswith(".txt.tmp"))
+        return Ok(
+            tuple(
+                entry.path
+                for entry in entries
+                if entry.is_file()
+                and (entry.name.endswith(".txt") or entry.name.endswith(".txt.tmp"))
+            )
         )
 
     return IO(thunk)
@@ -322,17 +329,35 @@ def prune_old_logs(cache_directory: str, keep_days: int, clock: Clock) -> IO[int
     horizon = keep_days * LOG_SECONDS_PER_DAY
 
     def with_now(now_value: float) -> IO[int]:
+        def with_removal(
+            count: int, removal: Result[bool, TranslationError]
+        ) -> Result[int, TranslationError]:
+            match removal:
+                case Err(error):
+                    return Err(error)
+                case Ok(was_removed):
+                    return Ok(count + (1 if was_removed else 0))
+
+        def with_age(
+            count: int, path: str, aged: Result[float, TranslationError]
+        ) -> IO[Result[int, TranslationError]]:
+            match aged:
+                case Err(error):
+                    return io_result(Err(error))
+                case Ok(age):
+                    if age <= horizon:
+                        return io_result(Ok(count))
+
+                    return io_map(
+                        remove_file(path),
+                        lambda removal: with_removal(count, removal),
+                    )
+
         def step(count: int, path: str) -> IO[Result[int, TranslationError]]:
-            def decide(age: float) -> IO[Result[int, TranslationError]]:
-                if age <= horizon:
-                    return io_result(Ok(count))
-
-                return io_map(
-                    remove_file(path),
-                    lambda removed: Ok(count + (1 if removed else 0)),
-                )
-
-            return io_bind(file_age(path, now_value), decide)
+            return io_bind(
+                file_age(path, now_value),
+                lambda aged: with_age(count, path, aged),
+            )
 
         def report(pruned: Result[int, TranslationError]) -> int:
             return result_or_else(pruned, lambda: 0)
@@ -347,23 +372,27 @@ def prune_old_logs(cache_directory: str, keep_days: int, clock: Clock) -> IO[int
     return io_bind(now(clock), with_now)
 
 
-def file_age(path: str, now_value: float) -> IO[float]:
-    def thunk() -> float:
+def file_age(path: str, now_value: float) -> IO[Result[float, TranslationError]]:
+    def thunk() -> Result[float, TranslationError]:
         try:
-            return max(now_value - os.path.getmtime(path), 0.0)
-        except OSError:
-            return 0.0
+            return Ok(max(now_value - os.path.getmtime(path), 0.0))
+        except FileNotFoundError:
+            return Ok(0.0)
+        except OSError as error:
+            return fail_file_error(path, "read the age of", str(error))
 
     return IO(thunk)
 
 
-def remove_file(path: str) -> IO[bool]:
-    def thunk() -> bool:
+def remove_file(path: str) -> IO[Result[bool, TranslationError]]:
+    def thunk() -> Result[bool, TranslationError]:
         try:
             os.remove(path)
-            return True
-        except OSError:
-            return False
+            return Ok(True)
+        except FileNotFoundError:
+            return Ok(False)
+        except OSError as error:
+            return fail_file_error(path, "remove", str(error))
 
     return IO(thunk)
 

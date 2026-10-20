@@ -18,8 +18,8 @@ from fakes import (
 
 from l2l import cli, keys
 from l2l.console import toggle_verbose
-from l2l.errors import TranslationError
-from l2l.monads import IO, Just, Ok, Result
+from l2l.errors import FileError, TranslationError
+from l2l.monads import IO, Err, Just, Ok, Result, io_result
 
 CONFIG_TEXT = (
     "[api]\n"
@@ -143,6 +143,80 @@ def test_cache_prune_requires_positive_days(tmp_path: Path) -> None:
     )
     assert code == 2
     assert "positive number of days" in stderr
+
+
+def test_cache_prune_reports_scan_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+
+    monkeypatch.setattr(
+        cli,
+        "cache_entry_paths",
+        lambda directory: io_result(
+            Err(FileError(directory, "list entries in", "[Errno 13] Permission denied"))
+        ),
+    )
+
+    code, _, stderr = run_l2l(
+        tmp_path,
+        [str(tmp_path), "--cache-dir", str(cache_directory), "--cache-prune", "7"],
+    )
+    assert code == 2
+    assert "could not list entries in" in stderr
+    assert "pruned" not in stderr
+
+
+def test_cache_prune_reports_age_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+    (cache_directory / "stale.txt").write_text("old", encoding="utf-8")
+
+    monkeypatch.setattr(
+        cli,
+        "file_age",
+        lambda path, now_value: io_result(
+            Err(FileError(path, "read the age of", "[Errno 13] Permission denied"))
+        ),
+    )
+
+    code, _, stderr = run_l2l(
+        tmp_path,
+        [str(tmp_path), "--cache-dir", str(cache_directory), "--cache-prune", "7"],
+    )
+    assert code == 2
+    assert "could not read the age of" in stderr
+    assert "pruned" not in stderr
+
+
+def test_cache_prune_reports_removal_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+    stale = cache_directory / "stale.txt"
+    stale.write_text("old", encoding="utf-8")
+    stale_time = time.time() - 30 * 86400
+    os.utime(stale, (stale_time, stale_time))
+
+    monkeypatch.setattr(
+        cli,
+        "remove_file",
+        lambda path: io_result(
+            Err(FileError(path, "remove", "[Errno 13] Permission denied"))
+        ),
+    )
+
+    code, _, stderr = run_l2l(
+        tmp_path,
+        [str(tmp_path), "--cache-dir", str(cache_directory), "--cache-prune", "7"],
+    )
+    assert code == 2
+    assert "could not remove" in stderr
+    assert "pruned" not in stderr
 
 
 def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:

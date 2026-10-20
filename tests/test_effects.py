@@ -3,6 +3,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TextIO, cast
 
+import pytest
+
 from l2l.effects import (
     _no_append,
     _no_close,
@@ -29,7 +31,7 @@ from l2l.effects import (
     user_config_path,
     write_text_file,
 )
-from l2l.errors import describe
+from l2l.errors import FileError, describe
 from l2l.monads import NOTHING, Err, Just, Ok
 from l2l.text import cache_path
 
@@ -126,8 +128,8 @@ def test_concurrent_cache_writes_to_the_same_key_all_succeed(tmp_path: Path) -> 
     stored = cache_read(cache_directory, "shared-key").run()
     assert isinstance(stored, Just)
     assert stored.value in written_values
-    assert cache_entry_paths(cache_directory).run() == (
-        cache_path(cache_directory, "shared-key"),
+    assert cache_entry_paths(cache_directory).run() == Ok(
+        (cache_path(cache_directory, "shared-key"),)
     )
 
 
@@ -143,7 +145,7 @@ def test_cache_write_removes_its_temporary_file_when_replacement_fails(
     (tmp_path / "key1.txt").mkdir()
 
     assert cache_write(str(tmp_path), "key1", "value").run() is False
-    assert cache_entry_paths(str(tmp_path)).run() == ()
+    assert cache_entry_paths(str(tmp_path)).run() == Ok(())
 
 
 def test_cache_read_missing_returns_nothing(tmp_path: Path) -> None:
@@ -155,11 +157,30 @@ def test_cache_entry_paths_includes_tmp_orphans(tmp_path: Path) -> None:
     (tmp_path / "key.txt.tmp").write_text("partial", encoding="utf-8")
     (tmp_path / "note.log").write_text("log", encoding="utf-8")
     paths = cache_entry_paths(str(tmp_path)).run()
-    assert sorted(path.endswith((".txt", ".txt.tmp")) for path in paths) == [True, True]
+    assert isinstance(paths, Ok)
+    assert sorted(path.endswith((".txt", ".txt.tmp")) for path in paths.value) == [
+        True,
+        True,
+    ]
 
 
 def test_cache_entry_paths_tolerates_a_missing_directory(tmp_path: Path) -> None:
-    assert cache_entry_paths(str(tmp_path / "absent")).run() == ()
+    assert cache_entry_paths(str(tmp_path / "absent")).run() == Ok(())
+
+
+def test_cache_entry_paths_reports_scan_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    def refuse(directory: str) -> object:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(os, "scandir", refuse)
+
+    assert cache_entry_paths(str(tmp_path)).run() == Err(
+        FileError(str(tmp_path), "list entries in", "[Errno 13] Permission denied")
+    )
 
 
 def test_log_paths_tolerates_a_missing_log_directory(tmp_path: Path) -> None:
@@ -176,11 +197,44 @@ def test_log_paths_lists_log_files(tmp_path: Path) -> None:
 
 
 def test_file_age_reports_zero_for_missing_files() -> None:
-    assert file_age("absent/path", 100.0).run() == 0.0
+    assert file_age("absent/path", 100.0).run() == Ok(0.0)
 
 
-def test_remove_file_reports_failures() -> None:
-    assert remove_file("absent/path").run() is False
+def test_file_age_reports_unexpected_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    def refuse(path: str) -> float:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(os.path, "getmtime", refuse)
+
+    assert file_age("some/path", 100.0).run() == Err(
+        FileError("some/path", "read the age of", "[Errno 13] Permission denied")
+    )
+
+
+def test_remove_file_reports_false_for_missing_files() -> None:
+    assert remove_file("absent/path").run() == Ok(False)
+
+
+def test_remove_file_reports_unexpected_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    entry = tmp_path / "key.txt"
+    entry.write_text("value", encoding="utf-8")
+
+    def refuse(path: str) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(os, "remove", refuse)
+
+    assert remove_file(str(entry)).run() == Err(
+        FileError(str(entry), "remove", "[Errno 13] Permission denied")
+    )
 
 
 def test_ensure_directory_creates_nested_directories(tmp_path: Path) -> None:

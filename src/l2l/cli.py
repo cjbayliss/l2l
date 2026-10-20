@@ -51,7 +51,6 @@ from l2l.monads import (
     io_result,
     io_when_unit,
     maybe_either,
-    result_or_else,
 )
 from l2l.pipeline import run_pipeline
 from l2l.plans import plan_report, setup_report
@@ -388,14 +387,26 @@ def prune_program(
 
         def with_cache_directory(cache_directory: str) -> IO[int]:
             def removed(count: int, path: str) -> IO[Result[int, TranslationError]]:
-                def maybe_remove(age: float) -> IO[Result[int, TranslationError]]:
-                    if age <= days * 86400.0:
-                        return io_result(Ok(count))
+                def maybe_remove(
+                    aged: Result[float, TranslationError],
+                ) -> IO[Result[int, TranslationError]]:
+                    match aged:
+                        case Err(error):
+                            return io_result(Err(error))
+                        case Ok(age):
+                            if age <= days * 86400.0:
+                                return io_result(Ok(count))
 
-                    return io_map(
-                        remove_file(path),
-                        lambda was_removed: Ok(count + (1 if was_removed else 0)),
-                    )
+                            return io_map(remove_file(path), removal_outcome)
+
+                def removal_outcome(
+                    removal: Result[bool, TranslationError],
+                ) -> Result[int, TranslationError]:
+                    match removal:
+                        case Err(error):
+                            return Err(error)
+                        case Ok(was_removed):
+                            return Ok(count + (1 if was_removed else 0))
 
                 return io_bind(
                     now(clock),
@@ -403,18 +414,27 @@ def prune_program(
                 )
 
             def report(pruned: Result[int, TranslationError]) -> IO[int]:
-                count = result_or_else(pruned, lambda: 0)
-                noun = "entry" if count == 1 else "entries"
-                return io_map(
-                    console.log("l2l: pruned %d cache %s" % (count, noun)),
-                    lambda _: 0,
-                )
+                match pruned:
+                    case Err(error):
+                        return io_map(console.log(describe(error)), lambda _: 2)
+                    case Ok(count):
+                        noun = "entry" if count == 1 else "entries"
+                        return io_map(
+                            console.log("l2l: pruned %d cache %s" % (count, noun)),
+                            lambda _: 0,
+                        )
+
+            def with_entry_paths(
+                scanned: Result[tuple[str, ...], TranslationError],
+            ) -> IO[Result[int, TranslationError]]:
+                match scanned:
+                    case Err(error):
+                        return io_result(Err(error))
+                    case Ok(paths):
+                        return fold_io(paths, removed, Ok(0))
 
             return io_bind(
-                io_bind(
-                    cache_entry_paths(cache_directory),
-                    lambda paths: fold_io(paths, removed, Ok(0)),
-                ),
+                io_bind(cache_entry_paths(cache_directory), with_entry_paths),
                 report,
             )
 
