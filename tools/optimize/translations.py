@@ -42,7 +42,7 @@ def translate_chapter(
     )
     command = optimization_environment.l2l_command + (
         config_path,
-        "--cache-dir",
+        "--cache-directory",
         cache_directory,
     )
 

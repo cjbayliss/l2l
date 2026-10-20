@@ -66,7 +66,7 @@ def run_l2l(
 
 
 def test_empty_stdin_exits_zero_without_config(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(tmp_path, [str(tmp_path)], "")
+    code, stdout, stderr = run_l2l(tmp_path, [], "")
     assert code == 0
     assert stdout == ""
     assert stderr == ""
@@ -80,7 +80,7 @@ def test_invalid_arguments_exit_two(tmp_path: Path) -> None:
 
 
 def test_missing_config_fails_with_error(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(tmp_path, [str(tmp_path / "absent.toml")])
+    code, stdout, stderr = run_l2l(tmp_path, ["-c", str(tmp_path / "absent.toml")])
     assert code == 2
     assert stdout == ""
     assert "could not read" in stderr
@@ -88,7 +88,7 @@ def test_missing_config_fails_with_error(tmp_path: Path) -> None:
 
 def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
     code, stdout, stderr = run_l2l(
-        tmp_path, [str(write_config(tmp_path)), "--check-config"]
+        tmp_path, ["-c", str(write_config(tmp_path)), "--check-config"]
     )
     assert code == 0
     assert stderr == ""
@@ -101,14 +101,16 @@ def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
 def test_check_config_reports_setup_errors(tmp_path: Path) -> None:
     broken = tmp_path / "broken.toml"
     broken.write_text("[api]\nunknown_key = 1\n")
-    code, stdout, stderr = run_l2l(tmp_path, [str(broken), "--check-config"])
+    code, stdout, stderr = run_l2l(tmp_path, ["-c", str(broken), "--check-config"])
     assert code == 2
     assert stdout == ""
     assert "[api]: unknown key(s): unknown_key" in stderr
 
 
 def test_dry_run_prints_plan_without_calling_endpoint(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(tmp_path, [str(write_config(tmp_path)), "--dry-run"])
+    code, stdout, stderr = run_l2l(
+        tmp_path, ["-c", str(write_config(tmp_path)), "--dry-run"]
+    )
     assert code == 0
     assert stderr == ""
     assert "source: 3 character(s), 1 paragraph(s)" in stdout
@@ -117,7 +119,7 @@ def test_dry_run_prints_plan_without_calling_endpoint(tmp_path: Path) -> None:
     assert "cache key" in stdout
 
 
-def test_cache_prune_removes_old_entries(tmp_path: Path) -> None:
+def test_prune_cache_removes_old_entries(tmp_path: Path) -> None:
     cache_directory = tmp_path / "cache"
     cache_directory.mkdir()
     entry = cache_directory / "stale.txt"
@@ -131,7 +133,14 @@ def test_cache_prune_removes_old_entries(tmp_path: Path) -> None:
 
     code, _, stderr = run_l2l(
         tmp_path,
-        [str(tmp_path), "--cache-dir", str(cache_directory), "--cache-prune", "7"],
+        [
+            "-c",
+            str(tmp_path),
+            "--cache-directory",
+            str(cache_directory),
+            "--prune-cache",
+            "7",
+        ],
     )
     assert code == 0
     assert "pruned 1 cache entry" in stderr
@@ -139,16 +148,16 @@ def test_cache_prune_removes_old_entries(tmp_path: Path) -> None:
     assert fresh.exists()
 
 
-def test_cache_prune_requires_positive_days(tmp_path: Path) -> None:
+def test_prune_cache_requires_positive_days(tmp_path: Path) -> None:
     code, _, stderr = run_l2l(
         tmp_path,
-        [str(tmp_path), "--cache-dir", str(tmp_path), "--cache-prune", "0"],
+        ["-c", str(tmp_path), "--cache-directory", str(tmp_path), "--prune-cache", "0"],
     )
     assert code == 2
     assert "positive number of days" in stderr
 
 
-def test_cache_prune_reports_scan_failure(
+def test_prune_cache_reports_scan_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache_directory = tmp_path / "cache"
@@ -164,14 +173,21 @@ def test_cache_prune_reports_scan_failure(
 
     code, _, stderr = run_l2l(
         tmp_path,
-        [str(tmp_path), "--cache-dir", str(cache_directory), "--cache-prune", "7"],
+        [
+            "-c",
+            str(tmp_path),
+            "--cache-directory",
+            str(cache_directory),
+            "--prune-cache",
+            "7",
+        ],
     )
     assert code == 2
     assert "could not list entries in" in stderr
     assert "pruned" not in stderr
 
 
-def test_cache_prune_reports_age_failure(
+def test_prune_cache_reports_age_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache_directory = tmp_path / "cache"
@@ -188,14 +204,21 @@ def test_cache_prune_reports_age_failure(
 
     code, _, stderr = run_l2l(
         tmp_path,
-        [str(tmp_path), "--cache-dir", str(cache_directory), "--cache-prune", "7"],
+        [
+            "-c",
+            str(tmp_path),
+            "--cache-directory",
+            str(cache_directory),
+            "--prune-cache",
+            "7",
+        ],
     )
     assert code == 2
     assert "could not read the age of" in stderr
     assert "pruned" not in stderr
 
 
-def test_cache_prune_reports_removal_failure(
+def test_prune_cache_reports_removal_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache_directory = tmp_path / "cache"
@@ -215,7 +238,14 @@ def test_cache_prune_reports_removal_failure(
 
     code, _, stderr = run_l2l(
         tmp_path,
-        [str(tmp_path), "--cache-dir", str(cache_directory), "--cache-prune", "7"],
+        [
+            "-c",
+            str(tmp_path),
+            "--cache-directory",
+            str(cache_directory),
+            "--prune-cache",
+            "7",
+        ],
     )
     assert code == 2
     assert "could not remove" in stderr
@@ -235,8 +265,9 @@ def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(write_config(tmp_path)),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
         ],
@@ -265,8 +296,9 @@ def test_strict_validation_failure_ends_the_cli_run(tmp_path: Path) -> None:
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(write_config(tmp_path)),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
             "--ensure-paragraphs",
@@ -297,8 +329,9 @@ def test_best_effort_flag_keeps_the_unvalidated_reply(tmp_path: Path) -> None:
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(write_config(tmp_path)),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
             "--ensure-paragraphs",
@@ -328,8 +361,9 @@ def test_plain_call_end_to_end(tmp_path: Path) -> None:
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(write_config(tmp_path)),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
             "--no-stream",
@@ -361,7 +395,12 @@ def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
             )
         ]
     )
-    flags = [str(write_config(tmp_path)), "--cache-dir", str(tmp_path / "cache")]
+    flags = [
+        "-c",
+        str(write_config(tmp_path)),
+        "--cache-directory",
+        str(tmp_path / "cache"),
+    ]
 
     first_stdout, first_stderr = io.StringIO(), io.StringIO()
     first = cli.main(
@@ -428,8 +467,9 @@ def test_tab_key_toggles_verbose_during_a_live_run(
     try:
         code = cli.main(
             [
+                "-c",
                 str(write_config(tmp_path)),
-                "--cache-dir",
+                "--cache-directory",
                 str(tmp_path / "cache"),
                 "--no-cache",
             ],
@@ -464,8 +504,9 @@ def test_translation_request_carries_glossary_block(tmp_path: Path) -> None:
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(write_config(tmp_path)),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
             "--glossary",
@@ -485,7 +526,7 @@ def test_translation_request_carries_glossary_block(tmp_path: Path) -> None:
     assert '- 南京 = "Nanjing"' in system
 
 
-def run_write_glossary(
+def run_extract_glossary(
     tmp_path: Path,
     arguments: list[str],
     http: FakeHttp,
@@ -494,8 +535,9 @@ def run_write_glossary(
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(write_config(tmp_path)),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             *arguments,
         ],
@@ -517,7 +559,7 @@ def glossary_reply(entries: list[dict[str, Any]]) -> FakeStreamResponse:
     return FakeStreamResponse(chunks)
 
 
-def test_write_glossary_happy_path(tmp_path: Path) -> None:
+def test_extract_glossary_happy_path(tmp_path: Path) -> None:
     carried = tmp_path / "generic.json"
     carried.write_text(
         '[{"original": "南京", "translated": "Nanjing"}]', encoding="utf-8"
@@ -536,9 +578,9 @@ def test_write_glossary_happy_path(tmp_path: Path) -> None:
             )
         ]
     )
-    code, _, stderr = run_write_glossary(
+    code, _, stderr = run_extract_glossary(
         tmp_path,
-        ["--write-glossary", str(output), "--glossary", str(carried)],
+        ["--extract-glossary", str(output), "--glossary", str(carried)],
         http,
     )
     assert code == 0
@@ -554,12 +596,12 @@ def test_write_glossary_happy_path(tmp_path: Path) -> None:
     assert "book text" in user_message
 
 
-def test_write_glossary_target_language_reaches_the_payload(tmp_path: Path) -> None:
+def test_extract_glossary_target_language_reaches_the_payload(tmp_path: Path) -> None:
     output = tmp_path / "book-glossary.json"
     http = FakeHttp([glossary_reply([{"original": "南京", "translated": "Nanjing"}])])
-    code, _, _ = run_write_glossary(
+    code, _, _ = run_extract_glossary(
         tmp_path,
-        ["--write-glossary", str(output), "--target-language", "French"],
+        ["--extract-glossary", str(output), "--target-language", "French"],
         http,
     )
     assert code == 0
@@ -567,26 +609,26 @@ def test_write_glossary_target_language_reaches_the_payload(tmp_path: Path) -> N
     assert "Target language: French" in payload["messages"][1]["content"]
 
 
-def test_write_glossary_invalid_reply_exits_one(tmp_path: Path) -> None:
+def test_extract_glossary_invalid_reply_exits_one(tmp_path: Path) -> None:
     output = tmp_path / "book-glossary.json"
     chunks = [
         *stream_chunks("not json"),
         {"choices": [{"delta": {}}], "usage": USAGE},
     ]
     http = FakeHttp([FakeStreamResponse(chunks)])
-    code, _, stderr = run_write_glossary(
-        tmp_path, ["--write-glossary", str(output)], http
+    code, _, stderr = run_extract_glossary(
+        tmp_path, ["--extract-glossary", str(output)], http
     )
     assert code == 1
     assert "not valid JSON" in stderr
     assert not output.exists()
 
 
-def test_write_glossary_empty_stdin_exits_two(tmp_path: Path) -> None:
+def test_extract_glossary_empty_stdin_exits_two(tmp_path: Path) -> None:
     output = tmp_path / "book-glossary.json"
     code, _, stderr = run_l2l(
         tmp_path,
-        [str(write_config(tmp_path)), "--write-glossary", str(output)],
+        ["-c", str(write_config(tmp_path)), "--extract-glossary", str(output)],
         "",
     )
     assert code == 2
@@ -633,8 +675,9 @@ def test_update_glossary_pass_updates_file_and_flows_into_later_passes(
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(write_update_glossary_config(tmp_path)),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
             "--glossary",
@@ -695,8 +738,9 @@ def test_update_glossary_pass_writes_only_the_first_glossary_file(
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(write_update_glossary_config(tmp_path)),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
             "--glossary",
@@ -743,8 +787,9 @@ def test_update_glossary_pass_target_language_overrides_cli_flag(
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(config_path),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
             "--glossary",
@@ -768,7 +813,7 @@ def test_update_glossary_pass_without_glossary_flag_exits_two(
     tmp_path: Path,
 ) -> None:
     code, stdout, stderr = run_l2l(
-        tmp_path, [str(write_update_glossary_config(tmp_path)), "--dry-run"]
+        tmp_path, ["-c", str(write_update_glossary_config(tmp_path)), "--dry-run"]
     )
     assert code == 2
     assert stdout == ""
@@ -784,6 +829,7 @@ def test_dry_run_shows_update_glossary_pass(tmp_path: Path) -> None:
     code, stdout, _stderr = run_l2l(
         tmp_path,
         [
+            "-c",
             str(write_update_glossary_config(tmp_path)),
             "--dry-run",
             "--glossary",
@@ -813,8 +859,9 @@ def test_update_glossary_cached_run_still_writes_the_file(tmp_path: Path) -> Non
         stdout, stderr = io.StringIO(), io.StringIO()
         code = cli.main(
             [
+                "-c",
                 str(write_update_glossary_config(tmp_path)),
-                "--cache-dir",
+                "--cache-directory",
                 str(cache_directory),
                 "--glossary",
                 str(glossary),
@@ -860,23 +907,23 @@ def test_parse_arguments_reports_invalid_flags() -> None:
     assert "invalid arguments" in describe(result.error)
 
 
-def test_parse_arguments_rejects_dry_run_with_write_glossary() -> None:
+def test_parse_arguments_rejects_dry_run_with_extract_glossary() -> None:
     result = cli.parse_arguments(
-        ["cfg.toml", "--dry-run", "--write-glossary", "glossary.json"]
+        ["-c", "cfg.toml", "--dry-run", "--extract-glossary", "glossary.json"]
     ).run()
     assert isinstance(result, Err)
-    assert "--write-glossary cannot be combined with --dry-run" in describe(
+    assert "--extract-glossary cannot be combined with --dry-run" in describe(
         result.error
     )
 
 
 def test_parse_arguments_rejects_every_conflicting_mode_pair() -> None:
     conflicting_argument_groups = (
-        ["cfg.toml", "--check-config", "--cache-prune", "7"],
-        ["cfg.toml", "--check-config", "--write-glossary", "glossary.json"],
-        ["cfg.toml", "--check-config", "--dry-run"],
-        ["cfg.toml", "--cache-prune", "7", "--write-glossary", "glossary.json"],
-        ["cfg.toml", "--cache-prune", "7", "--dry-run"],
+        ["-c", "cfg.toml", "--check-config", "--prune-cache", "7"],
+        ["-c", "cfg.toml", "--check-config", "--extract-glossary", "glossary.json"],
+        ["-c", "cfg.toml", "--check-config", "--dry-run"],
+        ["-c", "cfg.toml", "--prune-cache", "7", "--extract-glossary", "glossary.json"],
+        ["-c", "cfg.toml", "--prune-cache", "7", "--dry-run"],
     )
     for arguments in conflicting_argument_groups:
         result = cli.parse_arguments(arguments).run()
@@ -886,10 +933,10 @@ def test_parse_arguments_rejects_every_conflicting_mode_pair() -> None:
 
 def test_parse_arguments_still_accepts_single_modes() -> None:
     for arguments in (
-        ["cfg.toml", "--check-config"],
-        ["cfg.toml", "--cache-prune", "7"],
-        ["cfg.toml", "--write-glossary", "glossary.json"],
-        ["cfg.toml", "--dry-run"],
+        ["-c", "cfg.toml", "--check-config"],
+        ["-c", "cfg.toml", "--prune-cache", "7"],
+        ["-c", "cfg.toml", "--extract-glossary", "glossary.json"],
+        ["-c", "cfg.toml", "--dry-run"],
     ):
         result = cli.parse_arguments(arguments).run()
         assert isinstance(result, Ok)
@@ -910,22 +957,25 @@ def test_main_prints_help_and_returns_zero_without_http(tmp_path: Path) -> None:
     assert stderr == ""
 
 
-def test_main_rejects_dry_run_with_write_glossary_without_http(tmp_path: Path) -> None:
+def test_main_rejects_dry_run_with_extract_glossary_without_http(
+    tmp_path: Path,
+) -> None:
     code, stdout, stderr = run_l2l(
         tmp_path,
         [
+            "-c",
             str(tmp_path / "l2l.toml"),
             "--dry-run",
-            "--write-glossary",
+            "--extract-glossary",
             str(tmp_path / "glossary.json"),
         ],
     )
     assert code == 2
     assert stdout == ""
-    assert "l2l: --write-glossary cannot be combined with --dry-run" in stderr
+    assert "l2l: --extract-glossary cannot be combined with --dry-run" in stderr
 
 
-def test_main_log_keep_prunes_old_logs(tmp_path: Path) -> None:
+def test_main_log_retention_days_prunes_old_logs(tmp_path: Path) -> None:
     config_path = write_config(tmp_path)
     cache_directory = tmp_path / "cache"
     logs = cache_directory / "logs"
@@ -940,11 +990,12 @@ def test_main_log_keep_prunes_old_logs(tmp_path: Path) -> None:
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(config_path),
-            "--cache-dir",
+            "--cache-directory",
             str(cache_directory),
             "--no-cache",
-            "--log-keep",
+            "--log-retention-days",
             "30",
         ],
         {},
@@ -992,19 +1043,84 @@ def test_cli_handles_broken_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_parse_args_defaults() -> None:
-    arguments = cli.parse_args(["cfg.toml", "--no-cache", "-v"])
+    arguments = cli.parse_args(["-c", "cfg.toml", "--no-cache", "-V"])
     assert arguments.config == "cfg.toml"
     assert arguments.no_cache
     assert not arguments.ensure_paragraphs
     assert arguments.verbose
     assert arguments.cache_directory is None
-    assert arguments.log_keep == 30
+    assert arguments.log_retention_days == 30
 
-    arguments = cli.parse_args(["cfg.toml", "--ensure-paragraphs"])
+    arguments = cli.parse_args(["-c", "cfg.toml", "--ensure-paragraphs"])
     assert arguments.ensure_paragraphs
 
-    arguments = cli.parse_args(["cfg.toml", "--log-keep", "0"])
-    assert arguments.log_keep == 0
+    arguments = cli.parse_args(["-c", "cfg.toml", "--log-retention-days", "0"])
+    assert arguments.log_retention_days == 0
+
+
+def test_parse_args_accepts_short_flags() -> None:
+    arguments = cli.parse_args(
+        [
+            "-c",
+            "cfg.toml",
+            "-u",
+            "http://endpoint.test/v1",
+            "-k",
+            "secret",
+            "-m",
+            "m",
+            "-t",
+            "5",
+            "-T",
+            "1000",
+            "-s",
+            "-g",
+            "first.json",
+            "-g",
+            "second.json",
+            "-l",
+            "French",
+            "-P",
+            "-b",
+            "-p",
+            "-n",
+            "-V",
+        ]
+    )
+    assert arguments.config == "cfg.toml"
+    assert arguments.base_url == "http://endpoint.test/v1"
+    assert arguments.api_key == "secret"
+    assert arguments.model == "m"
+    assert arguments.timeout == 5.0
+    assert arguments.maximum_tokens == 1000
+    assert arguments.stream is True
+    assert arguments.glossary == ("first.json", "second.json")
+    assert arguments.target_language == "French"
+    assert arguments.ensure_paragraphs
+    assert arguments.best_effort
+    assert arguments.print_log_path
+    assert arguments.dry_run
+    assert arguments.verbose
+
+
+def test_short_version_flag_exits_early() -> None:
+    result = cli.parse_arguments(["-v"]).run()
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, cli.EarlyExitText)
+    assert result.value.text == "l2l " + __version__
+
+
+def test_short_help_flag_exits_early() -> None:
+    result = cli.parse_arguments(["-h"]).run()
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, cli.EarlyExitText)
+    assert "usage:" in result.value.text
+
+
+def test_parse_arguments_rejects_abbreviated_long_options() -> None:
+    result = cli.parse_arguments(["-c", "cfg.toml", "--max"]).run()
+    assert isinstance(result, Err)
+    assert "invalid arguments" in describe(result.error)
 
 
 def test_update_glossary_pass_with_malformed_reply_exits_one(tmp_path: Path) -> None:
@@ -1018,8 +1134,9 @@ def test_update_glossary_pass_with_malformed_reply_exits_one(tmp_path: Path) -> 
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(write_update_glossary_config(tmp_path)),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
             "--glossary",
@@ -1052,8 +1169,9 @@ def test_update_glossary_pass_reports_a_failed_extraction_call(
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(write_update_glossary_config(tmp_path)),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
             "--glossary",
@@ -1094,8 +1212,9 @@ def test_update_glossary_pass_reports_a_glossary_write_failure(
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
         [
+            "-c",
             str(write_update_glossary_config(tmp_path)),
-            "--cache-dir",
+            "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
             "--glossary",

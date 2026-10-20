@@ -63,7 +63,7 @@ def test_describe_budget_single_request() -> None:
     text = describe(BudgetError(1200, 1000))
     assert text == (
         "request is ~1200 tokens, over the 1000-token budget; raise "
-        "api.max_tokens (--max-tokens / TRANSLATE_MAX_TOKENS) or shorten "
+        "api.max_tokens (--maximum-tokens / TRANSLATE_MAX_TOKENS) or shorten "
         "the input"
     )
 

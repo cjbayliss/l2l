@@ -120,7 +120,7 @@ def test_api_settings_from_arguments() -> None:
         no_cache=False,
         ensure_paragraphs=False,
         verbose=False,
-        show_log_path=False,
+        print_log_path=False,
         cache_directory=None,
     )
     result = api_settings_from_arguments(arguments)
@@ -141,7 +141,7 @@ def arguments_with_numeric_flags(
         no_cache=False,
         ensure_paragraphs=False,
         verbose=False,
-        show_log_path=False,
+        print_log_path=False,
         cache_directory=None,
     )
 
@@ -155,7 +155,7 @@ def test_api_settings_from_arguments_rejects_negative_timeout() -> None:
 def test_api_settings_from_arguments_rejects_zero_maximum_tokens() -> None:
     result = api_settings_from_arguments(arguments_with_numeric_flags(None, 0))
     assert isinstance(result, Err)
-    assert describe(result.error) == "l2l: --max-tokens must be positive"
+    assert describe(result.error) == "l2l: --maximum-tokens must be positive"
 
 
 def test_merged_api_settings_reports_invalid_numeric_flags() -> None:
@@ -178,7 +178,7 @@ def test_merged_api_settings_precedence() -> None:
         no_cache=False,
         ensure_paragraphs=False,
         verbose=False,
-        show_log_path=False,
+        print_log_path=False,
         cache_directory=None,
     )
     environment = {
@@ -739,7 +739,7 @@ def test_load_setup_reports_malformed_toml(tmp_path: Path) -> None:
         no_cache=False,
         ensure_paragraphs=False,
         verbose=False,
-        show_log_path=False,
+        print_log_path=False,
         cache_directory=None,
     )
     result = load_setup(arguments, {}).run()
@@ -785,7 +785,7 @@ def glossary_arguments(config_path: Path) -> Arguments:
         no_cache=False,
         ensure_paragraphs=False,
         verbose=False,
-        show_log_path=False,
+        print_log_path=False,
         cache_directory=None,
     )
 
