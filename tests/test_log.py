@@ -58,7 +58,13 @@ def run_l2l(
 ) -> tuple[int, str, str]:
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(
-        [str(config_path), "--cache-dir", str(tmp_path / "cache"), *flags],
+        [
+            "--config",
+            str(config_path),
+            "--cache-directory",
+            str(tmp_path / "cache"),
+            *flags,
+        ],
         {},
         io.StringIO("你好。"),
         stdout,
@@ -129,10 +135,10 @@ def test_run_log_captures_http_error(tmp_path: Path) -> None:
     assert "could not reach endpoint: down" in content
 
 
-def test_show_log_path_prints_log_path_to_stderr(tmp_path: Path) -> None:
+def test_print_log_path_prints_log_path_to_stderr(tmp_path: Path) -> None:
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
     code, _, stderr = run_l2l(
-        write_config(tmp_path), tmp_path, http.open, ["--no-cache", "-l"]
+        write_config(tmp_path), tmp_path, http.open, ["--no-cache", "-p"]
     )
     assert code == 0
 
@@ -141,9 +147,9 @@ def test_show_log_path_prints_log_path_to_stderr(tmp_path: Path) -> None:
     assert Path(match.group(1)).exists()
 
 
-def test_show_log_path_short_flag(tmp_path: Path) -> None:
+def test_print_log_path_short_flag(tmp_path: Path) -> None:
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
-    code, _, stderr = run_l2l(write_config(tmp_path), tmp_path, http.open, ["-l"])
+    code, _, stderr = run_l2l(write_config(tmp_path), tmp_path, http.open, ["-p"])
     assert code == 0
     assert "l2l: log: " in stderr
 
@@ -151,7 +157,7 @@ def test_show_log_path_short_flag(tmp_path: Path) -> None:
 def test_verbose_alone_does_not_print_log_path(tmp_path: Path) -> None:
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
     code, _, stderr = run_l2l(
-        write_config(tmp_path), tmp_path, http.open, ["--no-cache", "-v"]
+        write_config(tmp_path), tmp_path, http.open, ["--no-cache", "-V"]
     )
     assert code == 0
     assert "l2l: log:" not in stderr
@@ -171,7 +177,7 @@ def test_run_log_write_ignores_absent_path() -> None:
     log_error(RunLog(NOTHING, time.time), "boom").run()
 
 
-def test_parse_args_show_log_path() -> None:
-    assert cli.parse_args(["cfg.toml", "-l"]).show_log_path
-    assert cli.parse_args(["cfg.toml", "--show-log-path"]).show_log_path
-    assert not cli.parse_args(["cfg.toml"]).show_log_path
+def test_parse_args_print_log_path() -> None:
+    assert cli.parse_args(["-c", "cfg.toml", "-p"]).print_log_path
+    assert cli.parse_args(["-c", "cfg.toml", "--print-log-path"]).print_log_path
+    assert not cli.parse_args(["-c", "cfg.toml"]).print_log_path

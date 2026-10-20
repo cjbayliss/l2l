@@ -182,7 +182,7 @@ def describe_budget(error: BudgetError) -> str:
     )
     return (
         "%s, over the %d-token budget; raise api.max_tokens "
-        "(--max-tokens / TRANSLATE_MAX_TOKENS) or shorten the input"
+        "(--maximum-tokens / TRANSLATE_MAX_TOKENS) or shorten the input"
         % (subject, error.budget)
     )
 

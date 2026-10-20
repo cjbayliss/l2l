@@ -63,16 +63,16 @@ class Arguments:
     no_cache: bool
     ensure_paragraphs: bool
     verbose: bool
-    show_log_path: bool
+    print_log_path: bool
     cache_directory: str | None
     check_config: bool = False
     dry_run: bool = False
     stream: bool | None = None
-    cache_prune: int | None = None
-    log_keep: int = 30
+    prune_cache: int | None = None
+    log_retention_days: int = 30
     best_effort: bool = False
     glossary: tuple[str, ...] = ()
-    write_glossary: str | None = None
+    extract_glossary: str | None = None
     target_language: str = "English"
 
 

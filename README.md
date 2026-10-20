@@ -38,13 +38,13 @@ uv run l2l
 ## Usage
 
 ```sh
-l2l [options] [CONFIG] < input.txt > output.txt
+l2l [options] < input.txt > output.txt
 ```
 
 For example:
 
 ```sh
-l2l zh2en.toml < chapter1.txt > chapter1.en.txt
+l2l -c zh2en.toml < chapter1.txt > chapter1.en.txt
 ```
 
 Empty input succeeds without calling the endpoint. To get started:
@@ -58,53 +58,71 @@ Empty input succeeds without calling the endpoint. To get started:
 
 ### Options
 
-- `CONFIG` - optional path to a TOML config file; see
-  [Config file resolution](#config-file-resolution).
-- `--base-url URL` - API endpoint; overrides `[api] base_url` and
-  `TRANSLATE_BASE_URL`.
-- `--api-key KEY` - API key; overrides `[api] api_key` and
-  `TRANSLATE_API_KEY`.
-- `--model MODEL` - default model; overrides `[api] model` and
-  `TRANSLATE_MODEL`.
-- `--timeout SECONDS` - per-request timeout; overrides `[api] timeout`
-  and `TRANSLATE_TIMEOUT`.
-- `--max-tokens N` - per-request token budget; overrides
-  `[api] max_tokens` and `TRANSLATE_MAX_TOKENS`.
-- `--cache-dir DIR` - cache directory (default: `$XDG_CACHE_HOME/l2l`,
-  falling back to `~/.cache/l2l`).
-- `--no-cache` - bypass the translation cache for this run.
-- `--cache-prune DAYS` - delete cache entries older than DAYS days and
-  exit.
-- `--log-keep DAYS` - delete run logs older than DAYS days at startup
-  (default 30; `0` keeps every log).
-- `--ensure-paragraphs` - check the paragraph count after each pass (see
-  `ensure_paragraphs` under `[options]`).
-- `--best-effort` - keep the last reply and continue when a unit still
-  fails validation after all repair attempts (default: fail the run with
-  exit code 1). Unvalidated replies are never cached.
-- `--verbose`, `-v` - print chunking, cache, timing, and reasoning
+Short forms are listed before their long forms; long options are never
+abbreviated.
+
+Meta:
+
+- `-h`, `--help` - show the help message and exit.
+- `-v`, `--version` - print the version and exit.
+- `-V`, `--verbose` - print chunking, cache, timing, and reasoning
   diagnostics to stderr.
-- `--show-log-path`, `-l` - print the run log's path to stderr at
-  startup.
-- `--stream` / `--no-stream` - force streamed or plain responses;
+
+Configuration and API:
+
+- `-c`, `--config FILE` - path to a TOML config file; see
+  [Config file resolution](#config-file-resolution).
+- `-u`, `--base-url URL` - API endpoint; overrides `[api] base_url` and
+  `TRANSLATE_BASE_URL`.
+- `-k`, `--api-key KEY` - API key; overrides `[api] api_key` and
+  `TRANSLATE_API_KEY`.
+- `-m`, `--model MODEL` - default model; overrides `[api] model` and
+  `TRANSLATE_MODEL`.
+- `-t`, `--timeout SECONDS` - per-request timeout; overrides
+  `[api] timeout` and `TRANSLATE_TIMEOUT`.
+- `-T`, `--maximum-tokens N` - per-request token budget; overrides
+  `[api] max_tokens` and `TRANSLATE_MAX_TOKENS`.
+- `-s`, `--stream` / `--no-stream` - force streamed or plain responses;
   default follows `api.params.stream`.
-- `--glossary FILE` - JSON glossary file with mandatory term renderings;
-  repeatable, later files override earlier entries, and generated or
-  updated entries are written to the first file.
-- `--write-glossary FILE` - extract a starting glossary from the stdin
-  text with one model call, write it to FILE, and exit. Existing
-  `--glossary` entries are carried over unchanged.
-- `--target-language LANG` - target language for `--write-glossary` and
-  for `update_glossary` passes without their own `target_language`
-  (default: English).
+
+Translation behaviour:
+
+- `-g`, `--glossary FILE` - JSON glossary file with mandatory term
+  renderings; repeatable, later files override earlier entries, and
+  generated or updated entries are written to the first file.
+- `-l`, `--target-language LANG` - target language for
+  `--extract-glossary` and for `update_glossary` passes without their
+  own `target_language` (default: English).
+- `-P`, `--ensure-paragraphs` - check the paragraph count after each
+  pass (see `ensure_paragraphs` under `[options]`).
+- `-b`, `--best-effort` - keep the last reply and continue when a unit
+  still fails validation after all repair attempts (default: fail the
+  run with exit code 1). Unvalidated replies are never cached.
+
+Cache and logs:
+
+- `--cache-directory DIR` - cache directory (default:
+  `$XDG_CACHE_HOME/l2l`, falling back to `~/.cache/l2l`).
+- `--no-cache` - bypass the translation cache for this run.
+- `--log-retention-days DAYS` - delete run logs older than DAYS days at
+  startup (default 30; `0` keeps every log).
+- `-p`, `--print-log-path` - print the run log's path to stderr at
+  startup.
+
+Modes:
+
 - `--check-config` - print the resolved configuration and exit without
   translating.
-- `--dry-run` - print the per-pass call plan (units, token estimates,
-  cache keys) and exit without calling the endpoint; warns when a
-  paragraph cannot fit in a single request.
-- `--version` - print the version and exit.
+- `-n`, `--dry-run` - print the per-pass call plan (units, token
+  estimates, cache keys) and exit without calling the endpoint; warns
+  when a paragraph cannot fit in a single request.
+- `--extract-glossary FILE` - extract a starting glossary from the stdin
+  text with one model call, write it to FILE, and exit. Existing
+  `--glossary` entries are carried over unchanged.
+- `--prune-cache DAYS` - delete cache entries older than DAYS days and
+  exit.
 
-The modes `--check-config`, `--cache-prune`, `--write-glossary`, and
+The modes `--check-config`, `--prune-cache`, `--extract-glossary`, and
 `--dry-run` are mutually exclusive: combining any two fails with a
 configuration error (exit code 2) before any endpoint work starts.
 
@@ -113,6 +131,9 @@ Precedence, from weakest to strongest:
 ```text
 defaults < user config < selected config < environment < command line
 ```
+
+Config-file keys and `TRANSLATE_*` environment variables keep their
+existing names even though some command-line overrides were renamed.
 
 ### Exit codes
 
@@ -133,7 +154,7 @@ output; the listener is off for pipes and CI.
 Every run writes a log to `<cache-dir>/logs/<timestamp>-<pid>.log`, even
 with `--no-cache`. It records each request payload and everything
 received in reply; request headers - and therefore API keys - are never
-logged. Pass `--show-log-path` to print the log's path at startup.
+logged. Pass `--print-log-path` to print the log's path at startup.
 
 ## Configuration
 
@@ -164,7 +185,7 @@ instruction files in `docs/prompts/`.
 
 ### Config file resolution
 
-1. The positional `CONFIG` argument, if given.
+1. The `--config FILE` option, if given.
 2. The `TRANSLATE_CONFIG` environment variable.
 3. `./l2l.toml` in the current directory.
 4. `~/.config/l2l/config.toml` (or `$XDG_CONFIG_HOME/l2l/config.toml`).

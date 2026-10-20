@@ -302,7 +302,7 @@ def argument_timeout_setting(
 def argument_maximum_tokens_setting(
     arguments: Arguments,
 ) -> Result[float | None, TranslationError]:
-    return optional_positive_setting(arguments.maximum_tokens, "--max-tokens")
+    return optional_positive_setting(arguments.maximum_tokens, "--maximum-tokens")
 
 
 def api_settings_from_arguments(
