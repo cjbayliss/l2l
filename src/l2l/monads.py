@@ -238,14 +238,12 @@ def fold_io[S, A, E](
     initial: Result[A, E],
 ) -> IO[Result[A, E]]:
     def thunk() -> Result[A, E]:
-        outcome = initial
+        state: Reference[Result[A, E]] = Reference(initial)
+        advance = fold_io_push(step, state)
         for item in tuple(items):
-            if isinstance(outcome, Err):
-                return outcome
+            advance(item)
 
-            outcome = step(outcome.value, item).run()
-
-        return outcome
+        return read_reference(state).run()
 
     return IO(thunk)
 
