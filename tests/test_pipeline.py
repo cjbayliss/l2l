@@ -45,7 +45,7 @@ from l2l.plans import (
     resolve_work_groups,
 )
 from l2l.settings import PassDefinition, build_settings
-from l2l.text import AsciiDrop, Usage, unit_separators
+from l2l.text import THINK_OPEN, AsciiDrop, Usage, unit_separators
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -221,6 +221,19 @@ def test_chat_plain_when_stream_disabled() -> None:
     assert result.value.text == "Plain"
     payload = json.loads(http.requests[0].body)
     assert payload["stream"] is False
+
+
+def test_chat_plain_swallows_unterminated_think_prefix() -> None:
+    console, stderr = make_console()
+    body = {
+        "choices": [{"message": {"content": THINK_OPEN + "reasoning without close"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
+    }
+    http = FakeHttp([FakePlainResponse(body)])
+    run_context = make_context(console, http.open)
+    result = chat(run_context, "s", "u", "m", {"stream": False}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == ""
 
 
 def test_chat_rejects_oversized_request() -> None:

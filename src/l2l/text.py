@@ -379,8 +379,16 @@ def drop_non_ascii(
     )
 
 
+THINK_OPEN = "<think>"
+THINK_CLOSE = "</think>"
+
+THINK_REGION = re.compile(
+    r"\s*" + THINK_OPEN + "(.*?)(?:" + THINK_CLOSE + "|\\Z)", re.DOTALL
+)
+
+
 def strip_think_tag(content: str) -> tuple[str, Maybe[str]]:
-    match = re.match(r"\s*<think>(.*?)</think>", content, re.DOTALL)
+    match = THINK_REGION.match(content)
     if not match:
         return content, NOTHING
 
@@ -442,10 +450,6 @@ def sse_step(state: SseState, raw_line: bytes) -> tuple[SseState, SseFrame]:
         return replace(state, pending=state.pending + (payload,)), None
 
     return state, None
-
-
-THINK_OPEN = "<think>"
-THINK_CLOSE = "</think>"
 
 
 @dataclass(frozen=True)

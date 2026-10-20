@@ -21,6 +21,7 @@ from l2l.http import (
     parse_chunk_delta,
     plain_reply,
     stream_step,
+    stream_text,
     to_chat_reply,
 )
 from l2l.monads import (
@@ -106,6 +107,12 @@ def test_think_step_bounds_whitespace_hold() -> None:
 def test_stream_step_filters_think_content() -> None:
     state = feed(StreamState(), "<think>secret ", "reasoning</think>", "Translation.")
     assert "".join(cons_to_tuple(state.contents)) == "Translation."
+
+
+def test_stream_step_swallows_unterminated_think_block() -> None:
+    state = feed(StreamState(), THINK_OPEN + "secret ", "more reasoning")
+    assert "".join(cons_to_tuple(state.contents)) == ""
+    assert stream_text(state) == ""
 
 
 def test_stream_step_accumulates_reasoning_and_usage() -> None:
@@ -282,6 +289,16 @@ def test_strip_think_tag() -> None:
     content, think = strip_think_tag("Body")
     assert content == "Body"
     assert think == NOTHING
+
+
+def test_strip_think_tag_swallows_unterminated_block() -> None:
+    content, think = strip_think_tag(THINK_OPEN + "loose reasoning")
+    assert content == ""
+    assert think == Just("loose reasoning")
+
+    content, think = strip_think_tag("  " + THINK_OPEN + "loose reasoning\n")
+    assert content == ""
+    assert think == Just("loose reasoning")
 
 
 def test_plain_reply() -> None:
