@@ -92,7 +92,8 @@ def test_plan_report_lists_units_and_keys() -> None:
     )
     assert "unit 1/1: ~7 source tokens, cache key " in lines[2]
     assert lines[3] == "pass 2/2 [translate]: mode=paragraph, 2 unit(s)"
-    assert "unit 1/2:" in lines[4] and "unit 2/2:" in lines[5]
+    assert "unit 1/2:" in lines[4]
+    assert "unit 2/2:" in lines[5]
 
 
 def test_plan_report_reports_analysis_pass() -> None:

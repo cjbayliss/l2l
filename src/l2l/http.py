@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import reduce
 from types import MappingProxyType
 from typing import Any, assert_never
@@ -289,8 +289,8 @@ class StreamState:
     reported_usage: Mapping[str, Any] | None = None
     chunk_count: int = 0
     content_started: bool = False
-    think: ThinkState = ThinkState()
-    sse: SseState = SseState()
+    think: ThinkState = field(default_factory=ThinkState)
+    sse: SseState = field(default_factory=SseState)
     finish_reason: str | None = None
     completed: bool = False
     progress_update: ProgressUpdate | None = None

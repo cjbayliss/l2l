@@ -493,7 +493,7 @@ def blank_rewrite_opener(
 
 
 def test_rewrite_prompt_rejects_an_empty_instruction(tmp_path: Path) -> None:
-    working_directory, environment = seeded_environment(tmp_path)
+    _working_directory, environment = seeded_environment(tmp_path)
     outcome = rewrite_prompt(
         replace(environment, opener=blank_rewrite_opener([])),
         "current",
@@ -516,7 +516,7 @@ def test_prepare_version_reports_an_instruction_write_failure(tmp_path: Path) ->
 
 
 def test_complete_warns_sleeps_and_retries_until_success(tmp_path: Path) -> None:
-    working_directory, environment = seeded_environment(tmp_path)
+    _working_directory, environment = seeded_environment(tmp_path)
     calls: list[Mapping[str, Any]] = []
 
     def flaky(
@@ -541,7 +541,7 @@ def test_complete_warns_sleeps_and_retries_until_success(tmp_path: Path) -> None
 
 
 def test_judge_call_gives_up_after_repeated_transport_failures(tmp_path: Path) -> None:
-    working_directory, environment = seeded_environment(tmp_path)
+    _working_directory, environment = seeded_environment(tmp_path)
     calls: list[Mapping[str, Any]] = []
     outcome = judge_call(
         replace(environment, opener=failing_opener(calls)),
@@ -585,7 +585,7 @@ def test_candidate_prompt_reuses_an_existing_candidate_file(tmp_path: Path) -> N
 
 
 def test_candidate_prompt_reports_a_write_failure(tmp_path: Path) -> None:
-    working_directory, environment = seeded_environment(tmp_path)
+    _working_directory, environment = seeded_environment(tmp_path)
     state = RunState(round_no=1, incumbent="v0", stall=0, history=())
     outcome = candidate_prompt(
         environment, state, "current", "history", "critiques"
@@ -883,7 +883,7 @@ def test_evolution_reports_a_missing_judge_template(tmp_path: Path) -> None:
 
 
 def test_evolution_reports_missing_endpoint_credentials(tmp_path: Path) -> None:
-    working_directory, base, seed, judge_template, rewrite_template = workspace(
+    working_directory, _base, seed, judge_template, rewrite_template = workspace(
         tmp_path
     )
     credentialless = tmp_path / "credentialless.toml"
@@ -1010,7 +1010,7 @@ def test_compare_mode_reports_missing_chapters(tmp_path: Path) -> None:
 
 
 def test_evolution_reports_a_broken_rewrite_template(tmp_path: Path) -> None:
-    working_directory, base, seed, judge_template, rewrite_template = workspace(
+    working_directory, base, seed, judge_template, _rewrite_template = workspace(
         tmp_path
     )
     absent = tmp_path / "absent-rewrite.txt"
@@ -1037,7 +1037,7 @@ def test_evolution_reports_a_broken_rewrite_template(tmp_path: Path) -> None:
 
 
 def test_evolution_reports_base_config_failures(tmp_path: Path) -> None:
-    working_directory, base, seed, judge_template, rewrite_template = workspace(
+    working_directory, _base, seed, judge_template, rewrite_template = workspace(
         tmp_path
     )
     broken = tmp_path / "broken.toml"

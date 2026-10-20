@@ -1,3 +1,4 @@
+# The test suite is POSIX-only by design; CI runs on ubuntu-latest.
 name: ci
 
 on:
