@@ -11,9 +11,9 @@ from l2l.cache import (
     cache_store,
     cached_translation,
 )
+from l2l.context import Context
 from l2l.errors import TranslationError, fail_http
 from l2l.monads import IO, NOTHING, Err, Just, Ok, Result, io_pure
-from l2l.settings import Context
 from l2l.text import Translated, Usage, cache_key
 
 

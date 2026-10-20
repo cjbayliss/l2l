@@ -2,10 +2,8 @@ import threading
 
 from l2l.monads import (
     IO,
-    NOTHING,
     Cons,
     Err,
-    Just,
     Ok,
     Reference,
     Result,
@@ -25,8 +23,6 @@ from l2l.monads import (
     io_result_bind,
     io_result_map,
     io_traverse,
-    io_unless,
-    io_when,
     io_when_unit,
     line_push,
     read_reference,
@@ -36,10 +32,9 @@ from l2l.monads import (
     result_bind,
     result_either,
     result_map,
-    result_map2,
     result_map_error,
     result_or_else,
-    result_zip,
+    result_sequence,
     write_reference,
 )
 
@@ -69,26 +64,10 @@ def test_result_or_else_unwraps_or_falls_back() -> None:
     assert result_or_else(Err("boom"), lambda: 0) == 0
 
 
-def test_result_map2_combines_two_oks() -> None:
-    assert result_map2(Ok(2), Ok(3), lambda left, right: left + right) == Ok(5)
-
-
-def test_result_map2_left_error_wins() -> None:
-    assert result_map2(
-        Err("left"), Err("right"), lambda left, right: left + right
-    ) == Err("left")
-
-
-def test_result_map2_right_error_propagates() -> None:
-    assert result_map2(Ok(2), Err("boom"), lambda left, right: left + right) == Err(
-        "boom"
-    )
-
-
-def test_result_zip_pairs_values() -> None:
-    assert result_zip(Ok(1), Ok("a")) == Ok((1, "a"))
-    assert result_zip(Err("boom"), Ok("a")) == Err("boom")
-    assert result_zip(Ok(1), Err("boom")) == Err("boom")
+def test_result_sequence_collects_values_and_reports_first_error() -> None:
+    assert result_sequence((Ok(1), Ok(2), Ok(3))) == Ok((1, 2, 3))
+    outcome = result_sequence((Ok(1), Err("boom"), Err("later")))
+    assert outcome == Err("boom")
 
 
 def test_io_pure_map_bind_compose() -> None:
@@ -112,14 +91,6 @@ def test_io_and_then_runs_in_order_and_keeps_second() -> None:
     )
     assert program.run() == "B"
     assert log == ["first", "second"]
-
-
-def test_io_when_and_unless_gate_execution() -> None:
-    ran: IO[str] = io_pure("ran")
-    assert io_when(True, ran).run() == Just("ran")
-    assert io_when(False, ran).run() is NOTHING
-    assert io_unless(False, ran).run() == Just("ran")
-    assert io_unless(True, ran).run() is NOTHING
 
 
 def test_io_when_unit_gates_execution() -> None:

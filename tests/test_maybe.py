@@ -14,10 +14,8 @@ from l2l.monads import (
     maybe_map,
     maybe_or_else,
     maybe_or_else_get,
-    maybe_sequence,
     maybe_to_optional,
     maybe_to_result,
-    maybe_zip,
 )
 
 integers = st.integers()
@@ -73,12 +71,6 @@ def test_maybe_to_result_lifts_into_error_channel() -> None:
     assert maybe_to_result(NOTHING, lambda: "missing") == Err("missing")
 
 
-def test_maybe_zip_pairs_justs_only() -> None:
-    assert maybe_zip(Just(1), Just("a")) == Just((1, "a"))
-    assert maybe_zip(Just(1), NOTHING) == NOTHING
-    assert maybe_zip(NOTHING, Just("a")) == NOTHING
-
-
 def test_nothing_instances_are_equal() -> None:
     assert Nothing() == NOTHING
     assert maybe_to_optional(NOTHING) is None
@@ -120,12 +112,3 @@ def test_maybe_bind_associativity(value: int) -> None:
     left = maybe_bind(maybe_bind(Just(value), halve), stringify)
     right = maybe_bind(Just(value), lambda parsed: maybe_bind(halve(parsed), stringify))
     assert left == right
-
-
-@given(st.lists(maybe_integers))
-def test_maybe_sequence_matches_manual_fold(values: list[Maybe[int]]) -> None:
-    justs: list[Just[int]] = [maybe for maybe in values if isinstance(maybe, Just)]
-    if len(justs) != len(values):
-        assert maybe_sequence(values) == NOTHING
-    else:
-        assert maybe_sequence(values) == Just(tuple(maybe.value for maybe in justs))

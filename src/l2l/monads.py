@@ -56,47 +56,17 @@ def result_or_else[T, E](result: Result[T, E], fallback: Callable[[], T]) -> T:
     return result.value if isinstance(result, Ok) else fallback()
 
 
-def result_map2[T, E, R, A](
-    first: Result[T, E], second: Result[R, E], transform: Callable[[T, R], A]
-) -> Result[A, E]:
-    if isinstance(first, Err):
-        return first
-
-    if isinstance(second, Err):
-        return Err(second.error)
-
-    return Ok(transform(first.value, second.value))
-
-
-def result_zip[T, E, R](
-    first: Result[T, E], second: Result[R, E]
-) -> Result[tuple[T, R], E]:
-    return result_map2(first, second, lambda left, right: (left, right))
-
-
-def fold_while[S, A, E](
-    items: Iterable[S],
-    step: Callable[[A, S], Result[A, E]],
-    initial: Result[A, E],
-) -> Result[A, E]:
-    outcome = initial
-    iterator = iter(items)
-    while not isinstance(outcome, Err):
-        try:
-            item = next(iterator)
-        except StopIteration:
-            return outcome
-
-        outcome = step(outcome.value, item)
-
-    return outcome
-
-
 def result_sequence[T, E](results: Iterable[Result[T, E]]) -> Result[tuple[T, ...], E]:
-    def step(values: tuple[T, ...], result: Result[T, E]) -> Result[tuple[T, ...], E]:
-        return result_map(result, lambda value: values + (value,))
+    def collect_value(
+        collected: Result[tuple[T, ...], E], result: Result[T, E]
+    ) -> Result[tuple[T, ...], E]:
+        return result_bind(
+            collected,
+            lambda values: result_map(result, lambda value: values + (value,)),
+        )
 
-    return fold_while(results, step, Ok(()))
+    collected: Result[tuple[T, ...], E] = Ok(())
+    return reduce(collect_value, results, collected)
 
 
 @dataclass(frozen=True)
@@ -177,39 +147,6 @@ def maybe_or[T](first: Maybe[T], second: Maybe[T]) -> Maybe[T]:
     return first if isinstance(first, Just) else second
 
 
-def maybe_zip[T, R](first: Maybe[T], second: Maybe[R]) -> Maybe[tuple[T, R]]:
-    return (
-        Just((first.value, second.value))
-        if isinstance(first, Just) and isinstance(second, Just)
-        else NOTHING
-    )
-
-
-def fold_maybe[S, A](
-    items: Iterable[S],
-    step: Callable[[A, S], Maybe[A]],
-    initial: Maybe[A],
-) -> Maybe[A]:
-    outcome = initial
-    iterator = iter(items)
-    while isinstance(outcome, Just):
-        try:
-            item = next(iterator)
-        except StopIteration:
-            return outcome
-
-        outcome = step(outcome.value, item)
-
-    return outcome
-
-
-def maybe_sequence[T](maybes: Iterable[Maybe[T]]) -> Maybe[tuple[T, ...]]:
-    def step(collected: tuple[T, ...], maybe: Maybe[T]) -> Maybe[tuple[T, ...]]:
-        return maybe_map(maybe, lambda value: collected + (value,))
-
-    return fold_maybe(maybes, step, Just(()))
-
-
 @dataclass(frozen=True)
 class IO[T]:
     run: Callable[[], T]
@@ -240,17 +177,6 @@ def io_and_then[T, R](io_value: IO[T], next_value: IO[R]) -> IO[R]:
         return next_value.run()
 
     return IO(thunk)
-
-
-def io_when[T](condition: bool, io_value: IO[T]) -> IO[Maybe[T]]:
-    def thunk() -> Maybe[T]:
-        return Just(io_value.run()) if condition else NOTHING
-
-    return IO(thunk)
-
-
-def io_unless[T](condition: bool, io_value: IO[T]) -> IO[Maybe[T]]:
-    return io_when(not condition, io_value)
 
 
 def io_when_unit(condition: bool, action: IO[None]) -> IO[None]:
@@ -301,10 +227,6 @@ def io_catch_result[T, E](
             return handler(error)
 
     return IO(thunk)
-
-
-def io_sequence[T](io_values: Iterable[IO[T]]) -> IO[tuple[T, ...]]:
-    return IO(lambda: tuple(io_value.run() for io_value in io_values))
 
 
 def io_pair[T, R](first: IO[T], second: IO[R]) -> IO[tuple[T, R]]:
@@ -406,21 +328,6 @@ def io_result_bind[T, E, R](
     io_value: IOResult[T, E], transform: Callable[[T], IOResult[R, E]]
 ) -> IOResult[R, E]:
     return io_bind(io_value, lambda outcome: result_bind_io(outcome, transform))
-
-
-def io_memoize[T](io_value: IO[T]) -> IO[T]:
-    cached: Reference[Maybe[T]] = Reference[Maybe[T]](NOTHING)
-
-    def thunk() -> T:
-        with cached.lock:
-            current = cached.value
-            if isinstance(current, Nothing):
-                current = Just(io_value.run())
-                cached.value = current
-
-            return current.value
-
-    return IO(thunk)
 
 
 @dataclass

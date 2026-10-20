@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from l2l.context import Context
 from l2l.effects import cache_read, cache_write
 from l2l.errors import TranslationError
 from l2l.monads import (
@@ -17,7 +18,6 @@ from l2l.monads import (
     io_result,
     io_when_unit,
 )
-from l2l.settings import Context
 from l2l.text import Translated, Usage
 
 

@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from functools import reduce
 
 from l2l.cache import cached_translation
+from l2l.context import Context
 from l2l.effects import now
 from l2l.errors import TranslationError, fail_ascii, fail_ascii_collapse
 from l2l.http import repaired_call
@@ -35,7 +36,7 @@ from l2l.plans import (
     build_ascii_retry_user,
     verbose_log,
 )
-from l2l.settings import Context, PassDefinition, resolve_call_settings, salt
+from l2l.settings import PassDefinition, resolve_call_settings, salt
 from l2l.text import (
     CACHE_SALT_VERSION,
     Translated,

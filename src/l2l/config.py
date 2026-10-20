@@ -31,7 +31,7 @@ from l2l.monads import (
     io_pure,
     io_result,
     io_result_bind,
-    io_sequence,
+    io_traverse,
     result_bind,
     result_bind_io,
     result_map,
@@ -686,12 +686,11 @@ def document_passes(
             fail_config("%s: [[pass]] must define one or more pass tables" % path)
         )
 
-    return io_map(
-        io_sequence(
-            parse_pass_table(path, entry, os.path.dirname(os.path.abspath(path)))
-            for entry in entries
+    return io_traverse(
+        entries,
+        lambda entry: parse_pass_table(
+            path, entry, os.path.dirname(os.path.abspath(path))
         ),
-        result_sequence,
     )
 
 
@@ -878,9 +877,9 @@ def resolve_glossaries(
                 )
 
             return io_map(
-                io_map(
-                    io_sequence(load_json(path, "glossary file") for path in paths),
-                    result_sequence,
+                io_traverse(
+                    paths,
+                    lambda item_path: load_json(item_path, "glossary file"),
                 ),
                 parsed,
             )

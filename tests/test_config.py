@@ -30,7 +30,7 @@ from l2l.config import (
 from l2l.errors import TranslationError, describe
 from l2l.glossary import GlossaryEntry
 from l2l.monads import Err, Ok, Result, io_pure
-from l2l.plans import mask_api_key, setup_report
+from l2l.report import mask_api_key, setup_report
 from l2l.settings import (
     DEFAULT_API_SETTINGS,
     Arguments,

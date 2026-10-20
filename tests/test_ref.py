@@ -1,8 +1,6 @@
 import threading
 
 from l2l.monads import (
-    IO,
-    io_memoize,
     modify_reference,
     modify_reference_with,
     new_reference,
@@ -43,29 +41,6 @@ def test_ref_reads_reflect_writes() -> None:
     write_reference(reference, 1).run()
     modify_reference(reference, lambda value: value * 10).run()
     assert read_reference(reference).run() == 10
-
-
-def test_io_memoize_runs_effect_once() -> None:
-    executions: list[int] = []
-
-    def effect() -> int:
-        executions.append(len(executions))
-        return len(executions)
-
-    memoized = io_memoize(IO(effect))
-    assert memoized.run() == 1
-    assert memoized.run() == 1
-    assert len(executions) == 1
-
-
-def test_io_memoize_shares_value_across_calls() -> None:
-    counter = new_reference(0).run()
-
-    def effect() -> int:
-        return modify_reference(counter, lambda value: value + 1).run()
-
-    memoized = io_memoize(IO(effect))
-    assert memoized.run() == memoized.run() == 1
 
 
 def test_ref_survives_concurrent_modifications() -> None:

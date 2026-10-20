@@ -9,6 +9,7 @@ from typing import Any
 import pycurl
 
 from l2l.console import Console, StatusLine
+from l2l.context import Context
 from l2l.effects import RunLog, Sleep
 from l2l.errors import TranslationError
 from l2l.glossary import GlossaryEntry
@@ -26,7 +27,7 @@ from l2l.monads import (
     read_reference,
     write_reference,
 )
-from l2l.settings import Config, Context, build_settings
+from l2l.settings import Config, build_settings
 
 
 def no_sleep(seconds: float) -> None:
