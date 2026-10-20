@@ -44,6 +44,7 @@ from l2l.text import (
     SseState,
     ThinkState,
     Usage,
+    split_think_close,
     sse_step,
     strip_think_tag,
     think_step,
@@ -84,6 +85,14 @@ def test_think_step_close_across_chunks() -> None:
 def test_think_step_plain_text() -> None:
     _state, thinking, visible = think_step(ThinkState(), "Hello")
     assert (thinking, visible) == (False, "Hello")
+
+
+def test_split_think_close_separates_reasoning_from_visible_text() -> None:
+    assert split_think_close("reasoning" + THINK_CLOSE + "visible") == (
+        "reasoning",
+        "visible",
+    )
+    assert split_think_close("unterminated reasoning") is None
 
 
 def test_think_step_leading_whitespace() -> None:
