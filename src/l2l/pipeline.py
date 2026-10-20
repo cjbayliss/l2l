@@ -469,7 +469,7 @@ def retranslate_untranslated(
     )
     call_for = dict(zip(flagged, calls, strict=True))
 
-    def part(
+    def retranslate_indexed_paragraph(
         indexed: tuple[int, str],
     ) -> IO[Result[UnitResult, TranslationError]]:
         index, paragraph = indexed
@@ -495,7 +495,7 @@ def retranslate_untranslated(
             ),
         )
 
-    def settle(
+    def combine_unit_results(
         units: tuple[UnitResult, ...],
     ) -> IO[Result[Translated, TranslationError]]:
         texts = tuple(unit.text for unit in units)
@@ -588,8 +588,8 @@ def retranslate_untranslated(
 
     def start(_: None) -> IO[Result[Translated, TranslationError]]:
         return io_result_bind(
-            io_traverse(enumerate(paragraphs), part),
-            settle,
+            io_traverse(enumerate(paragraphs), retranslate_indexed_paragraph),
+            combine_unit_results,
         )
 
     return io_and_then(
@@ -866,7 +866,7 @@ def run_single_call(
     cacheable: Callable[[str], bool] = always_acceptable,
     glossary: tuple[GlossaryEntry, ...] = (),
 ) -> IO[Result[UnitResult, TranslationError]]:
-    def store(
+    def store_unit_result(
         result: Result[UnitResult, TranslationError],
     ) -> IO[Result[UnitResult, TranslationError]]:
         if isinstance(result, Err):
@@ -902,7 +902,7 @@ def run_single_call(
             ),
         )
 
-    def proceed(
+    def continue_after_cache_lookup(
         cached: Maybe[str],
     ) -> IO[Result[UnitResult, TranslationError]]:
         if isinstance(cached, Just):
@@ -920,10 +920,13 @@ def run_single_call(
 
         return io_bind(
             run_unit(run_context, pass_definition, call, usage, glossary),
-            store,
+            store_unit_result,
         )
 
-    return io_bind(cache_lookup(run_context, call.key, acceptable=non_empty), proceed)
+    return io_bind(
+        cache_lookup(run_context, call.key, acceptable=non_empty),
+        continue_after_cache_lookup,
+    )
 
 
 def run_units(
@@ -1019,7 +1022,7 @@ def run_text_pass_once(
         chunk_plan.chunk_budget,
     )
 
-    def proceed(_: None) -> IO[StateResult]:
+    def run_units_after_warning(_: None) -> IO[StateResult]:
         def after_units(
             units_result: Result[UnitsSoFar, TranslationError],
         ) -> IO[StateResult]:
@@ -1071,7 +1074,7 @@ def run_text_pass_once(
     reported_warning: IO[None] = maybe_either(
         warning, run_context.console.log, lambda: io_pure(None)
     )
-    return io_bind(reported_warning, proceed)
+    return io_bind(reported_warning, run_units_after_warning)
 
 
 def run_text_pass(
@@ -1084,7 +1087,7 @@ def run_text_pass(
     chunk_plan: PassPlan,
     paragraph_plan: tuple[tuple[str, ...], ...],
 ) -> IO[StateResult]:
-    def attempt(
+    def run_pass_attempt(
         pass_to_run: PassDefinition,
         current_state: State,
         attempt_started: float,
@@ -1096,7 +1099,7 @@ def run_text_pass(
             retry_state = current_state
 
             def retry(accumulated: Usage, retry_started: float) -> IO[StateResult]:
-                return attempt(
+                return run_pass_attempt(
                     pass_to_run,
                     replace(retry_state, usage=accumulated),
                     retry_started,
@@ -1120,7 +1123,7 @@ def run_text_pass(
     tolerance = paragraph_tolerance(pass_definition.ensure_paragraphs)
 
     if tolerance is None:
-        return attempt(pass_definition, state, started_at, escalate=True)
+        return run_pass_attempt(pass_definition, state, started_at, escalate=True)
 
     def mismatch_message(count: int, action: str) -> str:
         return paragraph_mismatch_message(
@@ -1147,7 +1150,7 @@ def run_text_pass(
             lambda _: result,
         )
 
-    def check(result: StateResult) -> IO[StateResult]:
+    def verify_paragraph_count(result: StateResult) -> IO[StateResult]:
         if isinstance(result, Err):
             return io_result(result)
 
@@ -1167,7 +1170,7 @@ def run_text_pass(
 
         def retry_at(retry_started: float) -> IO[StateResult]:
             return io_bind(
-                attempt(
+                run_pass_attempt(
                     replace(pass_definition, mode="paragraph"),
                     replace(state, usage=result.value.usage),
                     retry_started,
@@ -1185,7 +1188,10 @@ def run_text_pass(
             io_bind(now(run_context.clock), retry_at),
         )
 
-    return io_bind(attempt(pass_definition, state, started_at, escalate=True), check)
+    return io_bind(
+        run_pass_attempt(pass_definition, state, started_at, escalate=True),
+        verify_paragraph_count,
+    )
 
 
 def run_pass(
@@ -1254,7 +1260,7 @@ def run_passes(
     ) -> IO[StateResult]:
         number, pass_definition = indexed
 
-        def launch(stage_started: float) -> IO[StateResult]:
+        def begin_pass_at(stage_started: float) -> IO[StateResult]:
             return io_and_then(
                 run_context.console.log(
                     pass_started_message(
@@ -1278,7 +1284,7 @@ def run_passes(
                 ),
             )
 
-        return io_bind(now(run_context.clock), launch)
+        return io_bind(now(run_context.clock), begin_pass_at)
 
     return fold_io(enumerate(pass_definitions, 1), step, Ok(state))
 
@@ -1298,7 +1304,7 @@ def run_pipeline(
 
         return finish_output(run_context, result.value, started, stdout)
 
-    def launch(chunk_plans: tuple[PassPlan, ...]) -> IO[StateResult]:
+    def run_all_passes(chunk_plans: tuple[PassPlan, ...]) -> IO[StateResult]:
         return run_passes(
             run_context,
             pass_definitions,
@@ -1319,7 +1325,7 @@ def run_pipeline(
             io_result(
                 pass_chunk_plans(run_context, pass_definitions, source_paragraphs)
             ),
-            launch,
+            run_all_passes,
         ),
         conclude,
     )

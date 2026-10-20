@@ -207,22 +207,22 @@ def parse_arguments(argv: Sequence[str]) -> Result[Options, TranslationError]:
         (str(raw.compare[0]), str(raw.compare[1])) if raw.compare is not None else None
     )
 
-    def check(valid: bool, message: str) -> Result[None, TranslationError]:
+    def validate_option(valid: bool, message: str) -> Result[None, TranslationError]:
         return Ok(None) if valid else fail_config(message)
 
     checks = result_sequence(
         (
-            check(raw.rounds >= 1, "--rounds must be at least 1"),
-            check(raw.stall >= 1, "--stall must be at least 1"),
-            check(
+            validate_option(raw.rounds >= 1, "--rounds must be at least 1"),
+            validate_option(raw.stall >= 1, "--stall must be at least 1"),
+            validate_option(
                 not raw.holdout or compare is not None,
                 "--holdout requires --compare",
             ),
-            check(
+            validate_option(
                 not raw.chapters or compare is not None,
                 "--chapters requires --compare",
             ),
-            check(
+            validate_option(
                 compare is not None or raw.rewriter_model is not None,
                 "--rewriter-model is required unless --compare is given",
             ),

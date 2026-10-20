@@ -193,13 +193,15 @@ class PassPlan:
 def preceding_modes(
     pass_definitions: tuple[PassDefinition, ...],
 ) -> tuple[PassModeSet, ...]:
-    def grow(
+    def accumulate_modes_after_pass(
         accumulated: tuple[PassModeSet, ...], pass_definition: PassDefinition
     ) -> tuple[PassModeSet, ...]:
         previous = accumulated[-1] if accumulated else frozenset[PassMode]()
         return accumulated + (previous | {pass_definition.mode},)
 
-    modes_after_each_pass: tuple[PassModeSet, ...] = reduce(grow, pass_definitions, ())
+    modes_after_each_pass: tuple[PassModeSet, ...] = reduce(
+        accumulate_modes_after_pass, pass_definitions, ()
+    )
     return (frozenset[PassMode](),) + modes_after_each_pass[:-1]
 
 
@@ -504,14 +506,12 @@ def plan_retranslation_calls(
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
 
     def neighbour_context(index: int) -> tuple[str, ...]:
-        context: tuple[str, ...] = ()
-        if index > 0:
-            context += (source_paragraphs[index - 1],)
-
-        if index + 1 < len(source_paragraphs):
-            context += (source_paragraphs[index + 1],)
-
-        return context
+        neighbouring_indices = (index - 1, index + 1)
+        return tuple(
+            source_paragraphs[neighbour_index]
+            for neighbour_index in neighbouring_indices
+            if 0 <= neighbour_index < len(source_paragraphs)
+        )
 
     def call(position: int, index: int) -> UnitCall:
         return build_unit_call(

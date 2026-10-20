@@ -694,7 +694,8 @@ def verbose_retry_log(
 
 
 def with_retries[T](
-    run_context: Context, attempt: Callable[[], IO[Result[T, TranslationError]]]
+    run_context: Context,
+    retryable_action: Callable[[], IO[Result[T, TranslationError]]],
 ) -> IO[Result[T, TranslationError]]:
     delays = plan_backoff(
         run_context.settings.retry_base_delay,
@@ -722,7 +723,7 @@ def with_retries[T](
                 ),
             )
 
-        return io_bind(attempt(), decide)
+        return io_bind(retryable_action(), decide)
 
     return attempt_at(0)
 
@@ -765,7 +766,7 @@ def http_post_json(
             io_map(outcome.value.body(), parse_json_body), read_failure
         )
 
-    def attempt() -> IO[Result[tuple[str, Any], TranslationError]]:
+    def fetch_response_body() -> IO[Result[tuple[str, Any], TranslationError]]:
         return io_bind(IO(opened), transferred)
 
     def record(
@@ -783,7 +784,7 @@ def http_post_json(
         )
 
     return io_bind(
-        io_and_then(log_request(run_context.log, payload), attempt()),
+        io_and_then(log_request(run_context.log, payload), fetch_response_body()),
         record,
     )
 
@@ -825,7 +826,7 @@ def http_stream(
 
         return drive(opened.value)
 
-    def attempt(
+    def open_stream_and_respond(
         body: Mapping[str, Any], label: str
     ) -> IO[Result[StreamState, TranslationError]]:
         return io_bind(io_bind(open_stream(body, label), logged), respond)
@@ -841,12 +842,12 @@ def http_stream(
         ):
             return io_result(outcome)
 
-        return attempt(
+        return open_stream_and_respond(
             {key: value for key, value in payload.items() if key != "stream_options"},
             "REQUEST (stream, retry)",
         )
 
-    return io_bind(attempt(payload, "REQUEST (stream)"), decide)
+    return io_bind(open_stream_and_respond(payload, "REQUEST (stream)"), decide)
 
 
 def drive_stream(
@@ -1061,7 +1062,7 @@ def repaired_call(
     on_repair: Callable[[int, str], IO[None]],
     on_exhausted: Callable[[str, str], IO[None]] | None,
 ) -> Callable[[Usage], IO[Result[RepairOutcome, TranslationError]]]:
-    def attempt(
+    def request_and_repair_reply(
         user: str, failed: int, usage: Usage
     ) -> IO[Result[RepairOutcome, TranslationError]]:
         def assessed(
@@ -1089,7 +1090,7 @@ def repaired_call(
                 )
 
             def continued(_: None) -> IO[Result[RepairOutcome, TranslationError]]:
-                return attempt(
+                return request_and_repair_reply(
                     build_retry_user(reply.text, problem.value), failed + 1, reply.usage
                 )
 
@@ -1099,7 +1100,7 @@ def repaired_call(
             chat(run_context, instruction, user, model, parameters, usage), assessed
         )
 
-    return lambda usage: attempt(initial_user, 1, usage)
+    return lambda usage: request_and_repair_reply(initial_user, 1, usage)
 
 
 def conclude_chat(
