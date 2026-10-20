@@ -11,6 +11,7 @@ from l2l.config import (
     build_setup,
     document_api_settings,
     document_passes,
+    document_target_language,
     load_instruction_text,
     load_setup,
     maximum_tokens_api_setting,
@@ -393,7 +394,7 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
                 ),
             )
         )
-        result = build_setup(config, resolved, flag)
+        result = build_setup(config, resolved, "English", flag)
         assert isinstance(result, Ok)
         return result.value
 
@@ -590,6 +591,7 @@ def test_setup_report_lists_api_and_passes() -> None:
             ),
         ),
         ensure_paragraphs=False,
+        target_language="English",
     )
     report = setup_report(setup, True)
     assert "api.base_url: http://endpoint.test/v1" in report
@@ -762,6 +764,7 @@ def test_pass_params_must_contain_json_values() -> None:
 
 
 SELECTED_CONFIG_TEXT = (
+    'target_language = "English"\n'
     'glossary = ["selected-glossary.json"]\n'
     "\n[api]\n"
     'base_url = "http://endpoint.test/v1"\n'
@@ -792,6 +795,82 @@ def glossary_arguments(config_path: Path) -> Arguments:
 
 def test_validate_document_accepts_glossary_paths() -> None:
     assert isinstance(validate_document("f", {"glossary": ["a.json"]}), Ok)
+
+
+def test_validate_document_accepts_target_language() -> None:
+    assert isinstance(validate_document("f", {"target_language": "English"}), Ok)
+
+
+def test_document_target_language_validates() -> None:
+    assert document_target_language("f", {}) == Ok(None)
+    assert document_target_language("f", {"target_language": " French "}) == Ok(
+        "French"
+    )
+    for bad_target_language in ("", "  ", 3, True):
+        result = document_target_language("f", {"target_language": bad_target_language})
+        assert isinstance(result, Err)
+        assert "target_language must be a non-empty string" in describe(result.error)
+
+
+def test_load_setup_requires_target_language(tmp_path: Path) -> None:
+    config_path = tmp_path / "book.toml"
+    config_path.write_text(
+        SELECTED_CONFIG_TEXT.replace('target_language = "English"\n', ""),
+        encoding="utf-8",
+    )
+    result = load_setup(
+        glossary_arguments(config_path),
+        {"XDG_CONFIG_HOME": str(tmp_path / "nouser")},
+    ).run()
+    assert isinstance(result, Err)
+    assert (
+        "target language is required; pass --target-language or set "
+        "target_language in a config file" in describe(result.error)
+    )
+
+
+def test_load_setup_resolves_target_language_precedence(tmp_path: Path) -> None:
+    user_home = tmp_path / "user"
+    user_config_directory = user_home / "l2l"
+    user_config_directory.mkdir(parents=True)
+    (user_config_directory / "config.toml").write_text(
+        'target_language = "Japanese"\n', encoding="utf-8"
+    )
+
+    selected_directory = tmp_path / "selected"
+    selected_directory.mkdir()
+    selected_config = selected_directory / "book.toml"
+    selected_config.write_text(SELECTED_CONFIG_TEXT, encoding="utf-8")
+    (selected_directory / "selected-glossary.json").write_text("[]", encoding="utf-8")
+
+    environment = {"XDG_CONFIG_HOME": str(user_home)}
+    configured = load_setup(glossary_arguments(selected_config), environment).run()
+    assert isinstance(configured, Ok)
+    assert configured.value.target_language == "English"
+
+    from_command_line = load_setup(
+        replace(
+            glossary_arguments(selected_config),
+            target_language="German",
+        ),
+        environment,
+    ).run()
+    assert isinstance(from_command_line, Ok)
+    assert from_command_line.value.target_language == "German"
+
+
+def test_load_setup_rejects_blank_command_line_target_language(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "book.toml"
+    config_path.write_text(SELECTED_CONFIG_TEXT, encoding="utf-8")
+    (tmp_path / "selected-glossary.json").write_text("[]", encoding="utf-8")
+    result = load_setup(
+        replace(glossary_arguments(config_path), target_language="  "),
+        {"XDG_CONFIG_HOME": str(tmp_path / "nouser")},
+    ).run()
+    assert isinstance(result, Err)
+    assert "--target-language must be a non-empty string" in describe(result.error)
 
 
 def test_validate_document_rejects_bad_glossary_values() -> None:
@@ -943,6 +1022,7 @@ def test_setup_report_lists_glossary_when_configured() -> None:
         ),
         passes=(PassDefinition("translate", "T.", "chunk", {}, None, True, False),),
         ensure_paragraphs=False,
+        target_language="English",
         glossary_paths=("generic.json", "book.json"),
         glossary_entries=(
             GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),
@@ -966,5 +1046,6 @@ def test_setup_report_omits_glossary_when_unconfigured() -> None:
         ),
         passes=(PassDefinition("translate", "T.", "chunk", {}, None, True, False),),
         ensure_paragraphs=False,
+        target_language="English",
     )
     assert "glossary" not in setup_report(setup, False)

@@ -36,8 +36,8 @@ class Context:
     log: RunLog
     clock: Clock
     sleep: Sleep
+    target_language: str
     stream: bool | None = None
     best_effort: bool = False
     glossary_entries: tuple[GlossaryEntry, ...] = ()
     glossary_update_path: str | None = None
-    target_language: str = "English"
