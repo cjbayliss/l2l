@@ -77,8 +77,8 @@ Empty input succeeds without calling the endpoint. To get started:
   exit.
 - `--log-keep DAYS` - delete run logs older than DAYS days at startup
   (default 30; `0` keeps every log).
-- `--ensure-paragraphs` - enforce the paragraph count after each pass
-  (strict); equivalent to `ensure_paragraphs = true`, see `[options]`.
+- `--ensure-paragraphs` - check the paragraph count after each pass (see
+  `ensure_paragraphs` under `[options]`).
 - `--best-effort` - keep the last reply and continue when a unit still
   fails validation after all repair attempts (default: fail the run with
   exit code 1). Unvalidated replies are never cached.
@@ -244,14 +244,16 @@ A typical multi-pass setup pairs an `analysis` pass with a `chunk` pass.
 - `ascii` (default `false`) - enforce pure ASCII output. Assumes a
   Latin-script target language; leave it off for targets such as
   Russian, Greek, Japanese, or Chinese.
-- `ensure_paragraphs` (default `false`) - paragraph-count enforcement.
-  `true` requires each pass's output to match the source paragraph count
+- `ensure_paragraphs` (default `false`) - paragraph-count checking.
+  `true` asks each pass's output to match the source paragraph count
   exactly, re-running a mismatching chunk-mode pass with one call per
   paragraph; a positive integer sets a tolerance (`2` accepts outputs
-  within ±2 paragraphs); `false` disables the check. Chunk replies whose
-  count drifts beyond the tolerance are re-asked with corrective
-  feedback; `paragraph`-mode passes always require exactly one paragraph
-  per call.
+  within ±2 paragraphs); `false` disables the check. Replies whose count
+  drifts beyond the tolerance are re-asked with corrective feedback; a
+  count that still differs after the re-run is logged as a warning and
+  the pass keeps its output - the run continues and still succeeds (exit
+  code 0). `paragraph`-mode passes always use exactly one call per
+  paragraph.
 - `retranslate_untranslated` (default `false`) - after each pass, l2l
   flags output paragraphs that still read as their source (matching
   after mechanical ASCII folding, or carrying no letters of the detected
