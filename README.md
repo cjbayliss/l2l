@@ -1,6 +1,7 @@
 # l2l
 
-**NOTE:** This project is created using an LLM (mostly GLM 5.3 Flash).
+**NOTE:** This project is created using an LLM (mostly GLM 5.3 Flash,
+Kimi K3, and Deepseek V4.1 Flash 1017).
 
 l2l is a command-line translator: it reads text from stdin, translates
 it with any OpenAI-compatible chat completions endpoint, and writes the
