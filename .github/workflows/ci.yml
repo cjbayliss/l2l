@@ -52,5 +52,5 @@ jobs:
       - run: uv venv smoke-venv
       - run: uv pip install --python smoke-venv/bin/python --constraints requirements-smoke.txt dist/*.whl
       - run: smoke-venv/bin/l2l --version
-      - run: echo "你好，世界。" | smoke-venv/bin/l2l docs/configs/zh2en.toml --dry-run
-      - run: echo "こんにちは世界。" | smoke-venv/bin/l2l docs/configs/ja2en.toml --dry-run
+      - run: echo "你好，世界。" | smoke-venv/bin/l2l -c docs/configs/zh2en.toml --dry-run
+      - run: echo "こんにちは世界。" | smoke-venv/bin/l2l -c docs/configs/ja2en.toml --dry-run
