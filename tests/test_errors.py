@@ -4,6 +4,7 @@ from l2l.errors import (
     BudgetError,
     ConfigError,
     HttpError,
+    InvalidOutputError,
     MissingSettings,
     PassError,
     TranslationError,
@@ -15,6 +16,7 @@ from l2l.errors import (
     fail_budget,
     fail_config,
     fail_http,
+    fail_invalid_output,
     fail_missing_settings,
     fail_pass,
     fail_unit,
@@ -75,13 +77,13 @@ def test_describe_budget_analysis_parts() -> None:
 
 def test_describe_wraps_nested_errors_without_double_prefix() -> None:
     inner: TranslationError = fail_http("unreachable", "down").error
-    unit = UnitError("translate", 2, inner)
+    unit = UnitError("translate", 1, inner)
     assert describe(unit) == (
         "l2l: [translate] failed on unit 2: could not reach endpoint: down"
     )
 
     wrapped: TranslationError = fail_pass(
-        "prep", fail_unit("prep", 1, inner).error
+        "prep", fail_unit("prep", 0, inner).error
     ).error
     assert isinstance(wrapped, PassError)
     assert describe(wrapped) == (
@@ -119,6 +121,18 @@ def test_describe_untranslated_error() -> None:
     assert describe(failure.error) == (
         "l2l: pass [translate] paragraph 3 is still untranslated after "
         "retranslation: '你好。'"
+    )
+
+
+def test_describe_invalid_output_error_names_the_pass() -> None:
+    failure = fail_invalid_output("translate", 2, "the output failed validation")
+    assert isinstance(failure, Err)
+    assert isinstance(failure.error, InvalidOutputError)
+    assert failure.error.pass_name == "translate"
+    assert describe(failure.error) == (
+        "l2l: pass [translate] output still failed validation after 2 repair "
+        "attempt(s): the output failed validation; pass --best-effort to keep "
+        "the last reply instead"
     )
 
 

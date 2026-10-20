@@ -870,9 +870,7 @@ def run_single_call(
         result: Result[UnitResult, TranslationError],
     ) -> IO[Result[UnitResult, TranslationError]]:
         if isinstance(result, Err):
-            return io_result(
-                fail_unit(pass_definition.name, call.index + 1, result.error)
-            )
+            return io_result(fail_unit(pass_definition.name, call.index, result.error))
 
         outcome = result.value
         stored = io_and_then(
@@ -1235,12 +1233,10 @@ def conclude_pass_result(
     if result.value.validated or run_context.best_effort:
         return result
 
-    return fail_pass(
+    return fail_invalid_output(
         pass_definition.name,
-        fail_invalid_output(
-            run_context.settings.unit_fix_attempts,
-            result.value.problem or "the output failed validation",
-        ).error,
+        run_context.settings.unit_fix_attempts,
+        result.value.problem or "the output failed validation",
     )
 
 

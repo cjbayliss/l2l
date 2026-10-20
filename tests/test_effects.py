@@ -254,7 +254,8 @@ def test_write_text_file_roundtrips(tmp_path: Path) -> None:
 def test_write_text_file_reports_failures(tmp_path: Path) -> None:
     outcome = write_text_file(str(tmp_path), "content", "output file").run()
     assert isinstance(outcome, Err)
-    assert "cannot write output file" in describe(outcome.error)
+    assert isinstance(outcome.error, FileError)
+    assert "could not write output file" in describe(outcome.error)
 
 
 def test_append_text_file_appends(tmp_path: Path) -> None:
@@ -267,7 +268,8 @@ def test_append_text_file_appends(tmp_path: Path) -> None:
 def test_append_text_file_reports_failures(tmp_path: Path) -> None:
     outcome = append_text_file(str(tmp_path), "line\n", "ledger").run()
     assert isinstance(outcome, Err)
-    assert "cannot append ledger" in describe(outcome.error)
+    assert isinstance(outcome.error, FileError)
+    assert "could not append to ledger" in describe(outcome.error)
 
 
 def test_replace_file_moves_content(tmp_path: Path) -> None:

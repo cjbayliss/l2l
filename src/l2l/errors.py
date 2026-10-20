@@ -69,6 +69,7 @@ class UntranslatedError:
 
 @dataclass(frozen=True)
 class InvalidOutputError:
+    pass_name: str
     attempts: int
     problem: str
 
@@ -142,8 +143,10 @@ def fail_untranslated(pass_name: str, index: int, sample: str) -> Err[Translatio
     return Err(UntranslatedError(pass_name, index, sample))
 
 
-def fail_invalid_output(attempts: int, problem: str) -> Err[TranslationError]:
-    return Err(InvalidOutputError(attempts, problem))
+def fail_invalid_output(
+    pass_name: str, attempts: int, problem: str
+) -> Err[TranslationError]:
+    return Err(InvalidOutputError(pass_name, attempts, problem))
 
 
 def fail_file_error(path: str, operation: str, detail: str) -> Err[TranslationError]:
@@ -207,7 +210,7 @@ def describe(error: TranslationError) -> str:
         case UnitError():
             return "l2l: [%s] failed on unit %d: %s" % (
                 error.pass_name,
-                error.unit_index,
+                error.unit_index + 1,
                 describe(error.inner),
             )
 
@@ -232,9 +235,9 @@ def describe(error: TranslationError) -> str:
 
         case InvalidOutputError():
             return (
-                "output still failed validation after %d repair attempt(s): %s; "
-                "pass --best-effort to keep the last reply instead"
-                % (error.attempts, error.problem)
+                "l2l: pass [%s] output still failed validation after %d repair "
+                "attempt(s): %s; pass --best-effort to keep the last reply instead"
+                % (error.pass_name, error.attempts, error.problem)
             )
 
         case FileError():

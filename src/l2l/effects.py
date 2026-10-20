@@ -412,7 +412,7 @@ def write_text_file(
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(content)
         except OSError as error:
-            return fail_config("cannot write %s %s: %s" % (description, path, error))
+            return fail_file_error(path, "write " + description, str(error))
 
         return Ok(None)
 
@@ -427,7 +427,7 @@ def append_text_file(
             with open(path, "a", encoding="utf-8") as handle:
                 handle.write(content)
         except OSError as error:
-            return fail_config("cannot append %s %s: %s" % (description, path, error))
+            return fail_file_error(path, "append to " + description, str(error))
 
         return Ok(None)
 
