@@ -293,9 +293,10 @@ def salt(*parts: str) -> str:
 def glossary_salt_component(
     pass_definition: PassDefinition,
     glossary: tuple[GlossaryEntry, ...],
+    effective_language: str = "",
 ) -> str:
     if pass_definition.mode == "update_glossary":
-        return pass_definition.target_language or ""
+        return effective_language or pass_definition.target_language or ""
     return entries_to_json_text(glossary)
 
 
@@ -303,12 +304,13 @@ def pass_salt(
     pass_definition: PassDefinition,
     glossary: tuple[GlossaryEntry, ...] = (),
     retry_attempt: int = 0,
+    effective_language: str = "",
 ) -> str:
     base = salt(
         CACHE_SALT_VERSION,
         pass_definition.name,
         pass_definition.instruction,
-        glossary_salt_component(pass_definition, glossary),
+        glossary_salt_component(pass_definition, glossary, effective_language),
     )
     return salt(base, "retry%d" % retry_attempt) if retry_attempt else base
 
