@@ -13,7 +13,6 @@ from l2l.monads import (
     maybe_from_optional,
     maybe_map,
     maybe_or_else,
-    maybe_or_else_get,
     maybe_to_optional,
     maybe_to_result,
 )
@@ -44,16 +43,16 @@ def test_maybe_either_folds_both_branches() -> None:
 
 
 def test_maybe_or_else_unwraps_or_falls_back() -> None:
-    assert maybe_or_else(Just(1), 0) == 1
-    assert maybe_or_else(NOTHING, 0) == 0
+    assert maybe_or_else(Just(1), lambda: 0) == 1
+    assert maybe_or_else(NOTHING, lambda: 0) == 0
 
 
-def test_maybe_or_else_get_is_lazy() -> None:
+def test_maybe_or_else_is_lazy() -> None:
     def fallback() -> int:
         raise AssertionError("fallback must not run")
 
-    assert maybe_or_else_get(Just(1), fallback) == 1
-    assert maybe_or_else_get(NOTHING, lambda: 0) == 0
+    assert maybe_or_else(Just(1), fallback) == 1
+    assert maybe_or_else(NOTHING, lambda: 0) == 0
 
 
 def test_maybe_from_optional_wraps_none_as_nothing() -> None:

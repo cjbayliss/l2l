@@ -123,11 +123,7 @@ def maybe_either[T, R](
     return on_just(maybe.value) if isinstance(maybe, Just) else on_nothing()
 
 
-def maybe_or_else[T](maybe: Maybe[T], fallback: T) -> T:
-    return maybe.value if isinstance(maybe, Just) else fallback
-
-
-def maybe_or_else_get[T](maybe: Maybe[T], fallback: Callable[[], T]) -> T:
+def maybe_or_else[T](maybe: Maybe[T], fallback: Callable[[], T]) -> T:
     return maybe.value if isinstance(maybe, Just) else fallback()
 
 

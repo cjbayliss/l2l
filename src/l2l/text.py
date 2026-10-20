@@ -12,7 +12,7 @@ from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import Any
 
-from l2l.monads import NOTHING, Just, Maybe, maybe_or_else_get
+from l2l.monads import NOTHING, Just, Maybe, maybe_or_else
 
 
 @dataclass(frozen=True)
@@ -165,7 +165,7 @@ def split_units_to_budget(
 def unit_separators(
     plan: tuple[tuple[str, ...], ...], separators: tuple[str, ...]
 ) -> tuple[str, ...]:
-    def trailing(index: int, end: int) -> str:
+    def separator_after_unit(index: int, end: int) -> str:
         if index >= len(plan) - 1:
             return ""
 
@@ -173,7 +173,8 @@ def unit_separators(
         return separators[position] if position < len(separators) else ""
 
     return tuple(
-        trailing(index, end) for index, end in enumerate(accumulate(map(len, plan)))
+        separator_after_unit(index, end)
+        for index, end in enumerate(accumulate(map(len, plan)))
     )
 
 
@@ -210,11 +211,11 @@ def parse_float(value: Any) -> Maybe[float]:
 
 
 def parse_cost(value: Any) -> float:
-    return maybe_or_else_get(parse_float(value), lambda: 0.0)
+    return maybe_or_else(parse_float(value), lambda: 0.0)
 
 
 def parse_tokens(value: Any) -> int:
-    return int(maybe_or_else_get(parse_float(value), lambda: 0.0))
+    return int(maybe_or_else(parse_float(value), lambda: 0.0))
 
 
 def add_usage(usage: Usage, reported: Mapping[str, Any]) -> Usage:

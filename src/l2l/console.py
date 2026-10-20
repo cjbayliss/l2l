@@ -224,7 +224,7 @@ class StatusLine:
                 io_bind(modify_reference_with(self.view, render), self.write_rendered),
             )
 
-        def launch(_: None) -> IO[None]:
+        def spawn_ticker_thread(_: None) -> IO[None]:
             thread = threading.Thread(
                 target=repeat_until(self.tick_action(), self.halt, TICK_SECONDS),
                 daemon=True,
@@ -239,7 +239,9 @@ class StatusLine:
 
             return io_bind(write_reference(self.worker, thread), boot)
 
-        return io_when_unit(self.live, io_and_then(drawn(None), launch(None)))
+        return io_when_unit(
+            self.live, io_and_then(drawn(None), spawn_ticker_thread(None))
+        )
 
     def progress(self, label: str, count: int = 1) -> IO[None]:
         def updated(view: StatusView) -> StatusView:
