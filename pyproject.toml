@@ -32,13 +32,22 @@ line-length = 88
 target-version = "py315"
 
 [tool.ruff.lint]
-select = ["C4", "E", "F", "PERF", "FURB", "W", "I", "B", "SIM", "RET", "UP", "PLW0602", "PLW0603"]
+select = ["C4", "E", "F", "PERF", "FURB", "W", "I", "B", "SIM", "RET", "UP", "N", "PT", "RUF", "PLW0602", "PLW0603"]
 ignore = [
     # The package standardises on printf-style formatting.
     "UP031",
     # `IO[None]` thunks keep an explicit `return None` on early exits.
     "RET501",
+    # The package translates text; strings legitimately contain fullwidth
+    # and lookalike characters.
+    "RUF001",
+    # The package standardises on `+` list concatenation.
+    "RUF005",
 ]
+
+# ARG (unused arguments) is deliberately not enabled: argparse actions,
+# protocol handlers, and test fakes deliberately keep signature-complete
+# parameters.
 
 [tool.ruff.lint.per-file-ignores]
 # The run-log handle intentionally outlives `open_run_log`; `close_run_log` closes it.

@@ -73,7 +73,7 @@ def test_fold_io_short_circuits_on_error() -> None:
 
 
 def test_chat_streamed_reports_usage() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hi"), USAGE))])
     run_context = make_context(console, http.open)
     result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
@@ -83,7 +83,7 @@ def test_chat_streamed_reports_usage() -> None:
 
 
 def test_chat_streamed_filters_think_prefix() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     chunks = stream_chunks("<think>h</think>", "Body")
     http = FakeHttp([FakeStreamResponse(with_usage(chunks, USAGE))])
     run_context = make_context(console, http.open)
@@ -93,7 +93,7 @@ def test_chat_streamed_filters_think_prefix() -> None:
 
 
 def test_chat_plain_when_stream_disabled() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     body = {
         "choices": [{"message": {"content": "Plain"}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
@@ -108,7 +108,7 @@ def test_chat_plain_when_stream_disabled() -> None:
 
 
 def test_chat_plain_swallows_unterminated_think_prefix() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     body = {
         "choices": [{"message": {"content": THINK_OPEN + "reasoning without close"}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
@@ -121,7 +121,7 @@ def test_chat_plain_swallows_unterminated_think_prefix() -> None:
 
 
 def test_chat_rejects_oversized_request() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     http = FakeHttp([])
     run_context = make_context(console, http.open, maximum_tokens=1)
     result = chat(run_context, "s", "u", "m", {}, Usage()).run()
@@ -131,7 +131,7 @@ def test_chat_rejects_oversized_request() -> None:
 
 
 def test_run_pipeline_runs_analysis_before_translation() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     brief = with_usage(stream_chunks("Names: Qin Yu."), USAGE)
     translated = with_usage(stream_chunks("Hello."), USAGE)
     http = FakeHttp([FakeStreamResponse(brief), FakeStreamResponse(translated)])
@@ -163,7 +163,7 @@ def test_run_pipeline_wraps_analysis_failure() -> None:
 
 
 def test_run_pipeline_repairs_non_ascii_via_llm() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     http = FakeHttp(
         [
             FakeStreamResponse(with_usage(stream_chunks("Hi 中"), USAGE)),
@@ -237,7 +237,7 @@ def test_retranslation_retranslates_an_echoed_paragraph() -> None:
 
 
 def test_ascii_stage_preserves_retranslation_validated_and_problem() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     http = FakeHttp(
         [
             FakeStreamResponse(with_usage(stream_chunks("世界。"), USAGE)),
@@ -920,7 +920,7 @@ def test_run_pipeline_total_elapsed_measures_since_started() -> None:
     assert code == 0
     assert stdout.getvalue() == "Hello.\n"
     elapsed = readings[-1] - readings[0]
-    total = [line for line in stderr.getvalue().splitlines() if "TOTAL" in line][0]
+    total = next(line for line in stderr.getvalue().splitlines() if "TOTAL" in line)
     assert "TOTAL: %.1fs" % elapsed in total
     rate = USAGE["completion_tokens"] / elapsed if elapsed > 0 else 0.0
     assert "%.1f tok/s" % rate in total
@@ -1097,7 +1097,7 @@ def test_run_pipeline_cache_hit(tmp_path: Path) -> None:
     chunks = with_usage(stream_chunks("Hello."), USAGE)
 
     def run() -> tuple[int, str, int]:
-        console, stderr = make_console()
+        console, _stderr = make_console()
         http = FakeHttp([FakeStreamResponse(chunks)])
         run_context = make_context(
             console, http.open, cache_directory=str(cache_directory), use_cache=True
@@ -1114,7 +1114,7 @@ def test_run_pipeline_cache_hit(tmp_path: Path) -> None:
 
 
 def test_analysis_fails_fast_when_document_needs_multiple_parts() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     http = FakeHttp([])
     run_context = make_context(console, http.open, maximum_tokens=40)
     analysis_pass = PassDefinition("prep", "Brief.", "analysis", {}, None, False)
@@ -1217,7 +1217,7 @@ def test_strict_chunk_pass_escalates_before_failing_on_exhaustion() -> None:
 
 
 def test_unit_validation_repairs_hallucinated_paragraph(tmp_path: Path) -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     cache_directory = tmp_path / "cache"
     cache_directory.mkdir()
     http = FakeHttp(
@@ -1338,7 +1338,7 @@ def test_strict_mode_fails_the_run_on_empty_replies() -> None:
 
 
 def test_unit_validation_repairs_dropped_chunk_paragraph() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     http = FakeHttp(
         [
             FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
@@ -1416,7 +1416,7 @@ def test_ensure_paragraphs_tolerance_exceeded_retries_in_paragraph_mode() -> Non
 
 
 def test_paragraph_mode_stays_strict_despite_tolerance() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     http = FakeHttp(
         [
             FakeStreamResponse(with_usage(stream_chunks("One.\n\nTwo."), USAGE)),
@@ -1436,7 +1436,7 @@ def test_paragraph_mode_stays_strict_despite_tolerance() -> None:
 
 
 def test_unit_validation_rejects_implausible_length() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     http = FakeHttp(
         [
             FakeStreamResponse(with_usage(stream_chunks("word " * 40), USAGE)),
@@ -1454,7 +1454,7 @@ def test_unit_validation_rejects_implausible_length() -> None:
 
 
 def test_paragraph_mode_supplies_neighbour_context() -> None:
-    console, stderr = make_console()
+    console, _stderr = make_console()
     http = FakeHttp(
         [
             FakeStreamResponse(with_usage(stream_chunks("One."), USAGE)),

@@ -61,11 +61,11 @@ def feed(state: StreamState, *texts: str) -> StreamState:
 
 
 def test_think_step_holds_partial_prefix() -> None:
-    state, thinking, visible = think_step(ThinkState(), "<th")
+    state, _thinking, visible = think_step(ThinkState(), "<th")
     assert visible == ""
     assert (state.checking, state.open) == (True, False)
 
-    state, thinking, visible = think_step(state, "ink>hidden")
+    state, _thinking, visible = think_step(state, "ink>hidden")
     assert visible == ""
     assert (state.checking, state.open) == (True, True)
 
@@ -82,14 +82,14 @@ def test_think_step_close_across_chunks() -> None:
 
 
 def test_think_step_plain_text() -> None:
-    state, thinking, visible = think_step(ThinkState(), "Hello")
+    _state, thinking, visible = think_step(ThinkState(), "Hello")
     assert (thinking, visible) == (False, "Hello")
 
 
 def test_think_step_leading_whitespace() -> None:
-    state, thinking, visible = think_step(ThinkState(), "  ")
+    state, _thinking, visible = think_step(ThinkState(), "  ")
     assert visible == ""
-    state, thinking, visible = think_step(state, "hi")
+    state, _thinking, visible = think_step(state, "hi")
     assert visible == "  hi"
 
 
@@ -313,7 +313,8 @@ def test_plain_reply() -> None:
     reply = result.value
     assert reply.content == "Hello"
     assert reply.reasoning == (" why",)
-    assert reply.reported_usage is not None and reply.reported_usage["cost"] == 0.1
+    assert reply.reported_usage is not None
+    assert reply.reported_usage["cost"] == 0.1
 
 
 def test_plain_reply_bad_shape() -> None:

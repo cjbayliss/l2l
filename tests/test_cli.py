@@ -781,7 +781,7 @@ def test_update_glossary_pass_without_glossary_flag_exits_two(
 def test_dry_run_shows_update_glossary_pass(tmp_path: Path) -> None:
     glossary = tmp_path / "glossary.json"
     glossary.write_text("[]", encoding="utf-8")
-    code, stdout, stderr = run_l2l(
+    code, stdout, _stderr = run_l2l(
         tmp_path,
         [
             str(write_update_glossary_config(tmp_path)),

@@ -438,7 +438,7 @@ class Console:
                 )
 
                 def counted(verbose: bool) -> IO[None]:
-                    if raw or verbose_only and not verbose:
+                    if raw or (verbose_only and not verbose):
                         return io_pure(None)
 
                     return io_map(
