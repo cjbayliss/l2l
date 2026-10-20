@@ -160,7 +160,8 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         metavar="FILE",
         default=[],
         help="JSON glossary file with mandatory renderings; repeatable; "
-        "later files override earlier entries",
+        "later files override earlier entries; generated and updated "
+        "entries are written to the first file",
     )
     parser.add_argument(
         "--write-glossary",
