@@ -2231,6 +2231,7 @@ def test_update_glossary_cached_reply_still_merges_and_writes(
     glossary = tmp_path / "glossary.json"
     glossary.write_text("[]", encoding="utf-8")
     cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
     extraction = FakeStreamResponse(
         with_usage(
             stream_chunks(
@@ -2267,6 +2268,51 @@ def test_update_glossary_cached_reply_still_merges_and_writes(
     assert glossary_pairs(document) == [
         ("大观园", "Grand View Garden"),
     ]
+
+
+def test_update_glossary_cache_respects_effective_target_language(
+    tmp_path: Path,
+) -> None:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text("[]", encoding="utf-8")
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+    extraction = FakeStreamResponse(
+        with_usage(
+            stream_chunks(
+                '[{"original": "大观园", "translated": "Grand View Garden"}]'
+            ),
+            USAGE,
+        )
+    )
+
+    def run(target_language: str) -> tuple[FakeHttp, int]:
+        console, _stderr = make_console()
+        http = FakeHttp([extraction])
+        stdout = io.StringIO()
+        code = run_pipeline(
+            make_context(
+                console,
+                http.open,
+                cache_directory=str(cache_directory),
+                use_cache=True,
+                glossary_update_path=str(glossary),
+                target_language=target_language,
+            ),
+            (update_pass(),),
+            "你好。",
+            0.0,
+            stdout,
+        ).run()
+        return http, code
+
+    first_http, first_code = run("English")
+    second_http, second_code = run("French")
+    assert (first_code, second_code) == (0, 0)
+    assert len(first_http.requests) == 1
+    assert len(second_http.requests) == 1
+    second_payload = json.loads(second_http.requests[0].body)
+    assert "Target language: French" in second_payload["messages"][1]["content"]
 
 
 def test_plan_report_shows_update_glossary_pass() -> None:

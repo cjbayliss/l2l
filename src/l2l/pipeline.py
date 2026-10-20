@@ -668,7 +668,7 @@ def run_update_glossary_once(
     key = cache_key(
         state.text,
         model,
-        pass_salt(pass_definition),
+        pass_salt(pass_definition, effective_language=target_language),
         overrides=parameters,
     )
 

@@ -426,6 +426,24 @@ def test_pass_salt_includes_target_language_for_update_glossary_passes() -> None
     assert pass_salt(localized) != pass_salt(pass_definition)
 
 
+def test_pass_salt_uses_effective_language_for_update_glossary_passes() -> None:
+    pass_definition = PassDefinition("p", "", "update_glossary", {}, None, False)
+    localized = replace(pass_definition, target_language="Chinese")
+    assert pass_salt(pass_definition, effective_language="French") != pass_salt(
+        pass_definition, effective_language="Chinese"
+    )
+    assert pass_salt(pass_definition, effective_language="Chinese") == pass_salt(
+        localized
+    )
+
+
+def test_pass_salt_ignores_effective_language_for_other_modes() -> None:
+    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
+    assert pass_salt(pass_definition, effective_language="French") == pass_salt(
+        pass_definition, effective_language="Chinese"
+    )
+
+
 def test_retranslation_salt_extends_the_pass_salt() -> None:
     pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
     assert retranslation_salt(pass_definition) == (
