@@ -123,9 +123,48 @@ def test_api_settings_from_arguments() -> None:
         show_log_path=False,
         cache_directory=None,
     )
-    assert api_settings_from_arguments(arguments) == PartialApiSettings(
-        api_key="k", timeout=2.0
+    result = api_settings_from_arguments(arguments)
+    assert isinstance(result, Ok)
+    assert result.value == PartialApiSettings(api_key="k", timeout=2.0)
+
+
+def arguments_with_numeric_flags(
+    timeout: float | None, maximum_tokens: int | None
+) -> Arguments:
+    return Arguments(
+        config=None,
+        base_url=None,
+        api_key=None,
+        model=None,
+        timeout=timeout,
+        maximum_tokens=maximum_tokens,
+        no_cache=False,
+        ensure_paragraphs=False,
+        verbose=False,
+        show_log_path=False,
+        cache_directory=None,
     )
+
+
+def test_api_settings_from_arguments_rejects_negative_timeout() -> None:
+    result = api_settings_from_arguments(arguments_with_numeric_flags(-5.0, None))
+    assert isinstance(result, Err)
+    assert describe(result.error) == "l2l: --timeout must be positive"
+
+
+def test_api_settings_from_arguments_rejects_zero_maximum_tokens() -> None:
+    result = api_settings_from_arguments(arguments_with_numeric_flags(None, 0))
+    assert isinstance(result, Err)
+    assert describe(result.error) == "l2l: --max-tokens must be positive"
+
+
+def test_merged_api_settings_reports_invalid_numeric_flags() -> None:
+    arguments = arguments_with_numeric_flags(-5.0, None)
+    user: Result[dict[str, Any], TranslationError] = Ok({})
+    selected: Result[dict[str, Any], TranslationError] = Ok({})
+    result = merged_api_settings(arguments, {}, "user", user, None, selected)
+    assert isinstance(result, Err)
+    assert describe(result.error) == "l2l: --timeout must be positive"
 
 
 def test_merged_api_settings_precedence() -> None:
