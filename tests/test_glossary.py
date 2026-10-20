@@ -270,3 +270,9 @@ def test_append_glossary_entries_keeps_existing_entries_on_conflicts() -> None:
 def test_append_glossary_entries_without_extracts_returns_existing() -> None:
     existing = (entry("南京", translated="Nanjing"),)
     assert append_glossary_entries(existing, ()) == existing
+
+
+def test_parse_model_glossary_reply_rejects_a_broken_json_array() -> None:
+    result = parse_model_glossary_reply('[{"original": ', "out.json")
+    assert isinstance(result, Err)
+    assert "out.json: model reply is not valid JSON" in describe(result.error)

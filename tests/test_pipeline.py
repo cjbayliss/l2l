@@ -1,25 +1,22 @@
 import io
 import json
-import os
-import sys
-import time
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-import pytest
 from fakes import (
     FakeHttp,
     FakePlainResponse,
     FakeStreamResponse,
+    chunk_pass,
     make_console,
     make_context,
+    paragraph_pass,
     stream_chunks,
+    update_pass,
     with_usage,
 )
 
-from l2l import __version__, cli
-from l2l.ascii import ascii_collapse, stubborn_paragraphs
 from l2l.errors import (
     InvalidOutputError,
     TranslationError,
@@ -31,8 +28,6 @@ from l2l.http import chat
 from l2l.monads import (
     IO,
     Err,
-    Just,
-    Nothing,
     Ok,
     Result,
     fold_io,
@@ -46,50 +41,10 @@ from l2l.pipeline import (
     conclude_state,
     run_pipeline,
 )
-from l2l.plans import (
-    ascii_drop_warning,
-    plan_retranslation_calls,
-    plan_unit_calls,
-    resolve_work_groups,
-)
-from l2l.report import plan_report
-from l2l.settings import Arguments, PassDefinition, build_settings
-from l2l.text import THINK_OPEN, AsciiDrop, Usage, unit_separators
+from l2l.settings import PassDefinition
+from l2l.text import THINK_OPEN, Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
-
-
-def chunk_pass(
-    name: str = "translate",
-    ascii_output: bool = False,
-    ensure_paragraphs: bool | int = False,
-    retranslate_untranslated: bool = False,
-) -> PassDefinition:
-    return PassDefinition(
-        name,
-        "T.",
-        "chunk",
-        {},
-        None,
-        ascii_output,
-        ensure_paragraphs,
-        retranslate_untranslated,
-    )
-
-
-def paragraph_pass(
-    name: str = "translate", retranslate_untranslated: bool = False
-) -> PassDefinition:
-    return PassDefinition(
-        name,
-        "T.",
-        "paragraph",
-        {},
-        None,
-        False,
-        False,
-        retranslate_untranslated,
-    )
 
 
 def test_fold_io_handles_thousands_of_items() -> None:
@@ -99,69 +54,6 @@ def test_fold_io_handles_thousands_of_items() -> None:
     outcome = fold_io(range(5000), step, Ok((0, None))).run()
     assert isinstance(outcome, Ok)
     assert outcome.value[0] == 5000
-
-
-def test_plan_unit_calls_builds_keys_and_context() -> None:
-    console, _ = make_console()
-    run_context = make_context(console, FakeHttp([]).open)
-    plan = (("一。",), ("二。",), ("三。",))
-    separators = unit_separators(plan, ("s1", "s2", "s3"))
-    calls = plan_unit_calls(
-        run_context,
-        paragraph_pass(),
-        plan,
-        (("一。",), ("二。",), ("三。",)),
-        separators,
-        None,
-    )
-    assert [call.source_chunk for call in calls] == ["一。", "二。", "三。"]
-    assert [call.analysis for call in calls] == [None, None, None]
-    assert [call.context for call in calls] == [("二。",), ("一。", "三。"), ("二。",)]
-    assert [call.trailing_separator for call in calls] == ["s1", "s2", ""]
-    assert len({call.key for call in calls}) == 3
-    briefed = plan_unit_calls(
-        run_context,
-        paragraph_pass(),
-        plan,
-        (("一。",), ("二。",), ("三。",)),
-        separators,
-        "Brief.",
-    )
-    assert [call.analysis for call in briefed] == ["Brief.", "Brief.", "Brief."]
-    assert [call.key for call in briefed] != [call.key for call in calls]
-
-
-def test_plan_retranslation_calls_targets_flagged_paragraphs() -> None:
-    console, _ = make_console()
-    run_context = make_context(console, FakeHttp([]).open)
-    sources = ("一。", "二。", "三。")
-    calls = plan_retranslation_calls(
-        run_context,
-        paragraph_pass(),
-        sources,
-        sources,
-        (0, 2),
-        ("s1", "s2", "s3"),
-        None,
-    )
-    assert [call.source_chunk for call in calls] == ["一。", "三。"]
-    assert [call.work_chunk for call in calls] == ["一。", "三。"]
-    assert [call.index for call in calls] == [0, 1]
-    assert [call.total for call in calls] == [2, 2]
-    assert [call.trailing_separator for call in calls] == ["s1", "s3"]
-    assert [call.context for call in calls] == [("二。",), ("二。",)]
-    assert len({call.key for call in calls}) == 2
-    plan = (("一。",), ("二。",), ("三。",))
-    unit_calls = plan_unit_calls(
-        run_context,
-        paragraph_pass(),
-        plan,
-        plan,
-        unit_separators(plan, ("s1", "s2", "s3")),
-        None,
-    )
-    assert calls[0].key != unit_calls[0].key
-    assert calls[1].key != unit_calls[2].key
 
 
 def test_fold_io_short_circuits_on_error() -> None:
@@ -1034,14 +926,6 @@ def test_run_pipeline_total_elapsed_measures_since_started() -> None:
     assert "%.1f tok/s" % rate in total
 
 
-def test_ascii_drop_warning_mentions_paragraph_sample_and_attempts() -> None:
-    warning = ascii_drop_warning(AsciiDrop(index=1, sample="中", attempts=3))
-    assert warning == (
-        "l2l: ascii: warning: paragraph 2 still contained non-ASCII "
-        "characters (中) after 3 LLM attempts; dropping them"
-    )
-
-
 def test_run_pipeline_reports_unit_failure() -> None:
     console, stderr = make_console()
 
@@ -1175,99 +1059,6 @@ def test_paragraph_pass_after_growth_passes_units_without_source() -> None:
     assert "你好。" in users[1]
 
 
-def test_ascii_enforcement_reports_a_failing_repair_call() -> None:
-    console, stderr = make_console()
-    requests: list[Any] = []
-
-    def open_once_then_fail(
-        request: Any, timeout: float
-    ) -> Result[Any, TranslationError]:
-        requests.append(request)
-        if len(requests) == 1:
-            return Ok(FakeStreamResponse(with_usage(stream_chunks("Hi 中"), USAGE)))
-
-        return fail_http("unreachable", "down")
-
-    run_context = make_context(console, open_once_then_fail)
-    code = run_pipeline(
-        run_context, (chunk_pass(ascii_output=True),), "文本。", 0.0, io.StringIO()
-    ).run()
-    assert code == 1
-    logged = stderr.getvalue()
-    assert "pass [translate] ascii enforcement failed" in logged
-    assert "could not reach endpoint: down" in logged
-    assert len(requests) == 4
-
-
-def test_ascii_collapse_requires_majority_and_floor() -> None:
-    assert not ascii_collapse(1, 1, 4)
-    assert not ascii_collapse(3, 5, 4)
-    assert not ascii_collapse(2, 5, 4)
-    assert ascii_collapse(4, 5, 4)
-    assert ascii_collapse(5, 5, 4)
-
-
-def test_stubborn_paragraphs_skip_mechanically_fixable_text() -> None:
-    character_map = build_settings().ascii_character_map
-    stubborn = stubborn_paragraphs(("Café.", "你好。", "Plain."), character_map)
-    assert stubborn == ("你好。",)
-
-
-def test_ascii_enforcement_fails_fast_when_most_paragraphs_need_llm_repair() -> None:
-    console, stderr = make_console()
-    http = FakeHttp(
-        [
-            FakeStreamResponse(
-                with_usage(stream_chunks("一。\n\n二。\n\n三。\n\n四。\n\n五。"), USAGE)
-            )
-        ]
-    )
-    run_context = make_context(console, http.open)
-    code = run_pipeline(
-        run_context,
-        (chunk_pass(ascii_output=True),),
-        "1。\n\n2。\n\n3。\n\n4。\n\n5。",
-        0.0,
-        io.StringIO(),
-    ).run()
-    assert code == 1
-    assert len(http.requests) == 1
-    logged = stderr.getvalue()
-    assert "5 of 5 paragraph(s) would need LLM ASCII repair" in logged
-    assert "untranslated text instead of translating" in logged
-
-
-def test_ascii_enforcement_repairs_a_minority_of_stubborn_paragraphs() -> None:
-    console, _ = make_console()
-    http = FakeHttp(
-        [
-            FakeStreamResponse(
-                with_usage(
-                    stream_chunks("Hi 中。\n\nYo 中。\n\nHey 中。\n\nCafé.\n\nPlain."),
-                    USAGE,
-                )
-            ),
-            FakeStreamResponse(with_usage(stream_chunks("Hi there."), USAGE)),
-            FakeStreamResponse(with_usage(stream_chunks("Yo there."), USAGE)),
-            FakeStreamResponse(with_usage(stream_chunks("Hey there."), USAGE)),
-        ]
-    )
-    run_context = make_context(console, http.open)
-    stdout = io.StringIO()
-    code = run_pipeline(
-        run_context,
-        (chunk_pass(ascii_output=True),),
-        "一。\n\n二。\n\n三。\n\n四。\n\n五。",
-        0.0,
-        stdout,
-    ).run()
-    assert code == 0
-    assert stdout.getvalue() == (
-        "Hi there.\n\nYo there.\n\nHey there.\n\nCafe.\n\nPlain.\n"
-    )
-    assert len(http.requests) == 4
-
-
 def test_refine_pass_echoing_source_language_is_repaired_with_draft() -> None:
     console, stderr = make_console()
     http = FakeHttp(
@@ -1333,20 +1124,6 @@ def test_analysis_fails_fast_when_document_needs_multiple_parts() -> None:
     assert isinstance(result, Err)
     assert "requires analysis in" in describe(result.error)
     assert http.requests == []
-
-
-def test_run_pipeline_enforces_ascii_mechanically() -> None:
-    console, stderr = make_console()
-    chunks = with_usage(stream_chunks("Café — déjà."), USAGE)
-    http = FakeHttp([FakeStreamResponse(chunks)])
-    run_context = make_context(console, http.open)
-    stdout = io.StringIO()
-    code = run_pipeline(
-        run_context, (chunk_pass(ascii_output=True),), "文本。", 0.0, stdout
-    ).run()
-    assert code == 0
-    assert stdout.getvalue() == "Cafe - deja.\n"
-    assert len(http.requests) == 1
 
 
 def test_ensure_paragraphs_retries_pass_in_paragraph_mode() -> None:
@@ -1706,402 +1483,6 @@ def test_paragraph_mode_supplies_neighbour_context() -> None:
     assert "一。" not in users[2]
 
 
-def test_main_empty_stdin_succeeds_without_config() -> None:
-    code = cli.main(
-        [], {}, io.StringIO("   "), io.StringIO(), io.StringIO(), time.time
-    ).run()
-    assert code == 0
-
-
-def test_main_end_to_end_with_config(tmp_path: Path) -> None:
-    config_path = tmp_path / "l2l.toml"
-    config_path.write_text(
-        "[api]\n"
-        'base_url = "http://endpoint.test/v1"\n'
-        'api_key = "key"\n'
-        'model = "m"\n'
-        "max_tokens = 1000\n"
-        "\n[[pass]]\n"
-        'name = "translate"\n'
-        'mode = "chunk"\n'
-        'instruction = "Translate."'
-    )
-    chunks = with_usage(stream_chunks("Hello."), USAGE)
-    http = FakeHttp([FakeStreamResponse(chunks)])
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        [str(config_path), "--cache-dir", str(tmp_path / "cache"), "--no-cache"],
-        {},
-        io.StringIO("你好。"),
-        stdout,
-        stderr,
-        time.time,
-        http.open,
-    ).run()
-    assert code == 0
-    assert stdout.getvalue() == "Hello.\n"
-    assert len(http.requests) == 1
-
-
-def test_parse_arguments_returns_version_text() -> None:
-    result = cli.parse_arguments(["--version"]).run()
-    assert isinstance(result, Ok)
-    assert isinstance(result.value, cli.EarlyExitText)
-    assert result.value.text == "l2l " + __version__
-
-
-def test_parse_arguments_returns_help_text() -> None:
-    result = cli.parse_arguments(["--help"]).run()
-    assert isinstance(result, Ok)
-    assert isinstance(result.value, cli.EarlyExitText)
-    assert "usage:" in result.value.text
-    assert "--dry-run" in result.value.text
-
-
-def test_parse_arguments_reports_invalid_flags() -> None:
-    result = cli.parse_arguments(["--nope"]).run()
-    assert isinstance(result, Err)
-    assert "invalid arguments" in describe(result.error)
-
-
-def test_main_prints_version_and_returns_zero_without_http() -> None:
-    http = FakeHttp([])
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        ["--version"],
-        {},
-        io.StringIO(),
-        stdout,
-        stderr,
-        time.time,
-        http.open,
-    ).run()
-    assert code == 0
-    assert stdout.getvalue() == "l2l " + __version__ + "\n"
-    assert stderr.getvalue() == ""
-    assert http.requests == []
-
-
-def test_main_prints_help_and_returns_zero_without_http() -> None:
-    http = FakeHttp([])
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        ["--help"],
-        {},
-        io.StringIO(),
-        stdout,
-        stderr,
-        time.time,
-        http.open,
-    ).run()
-    assert code == 0
-    assert "usage:" in stdout.getvalue()
-    assert stderr.getvalue() == ""
-    assert http.requests == []
-
-
-def test_parse_arguments_rejects_dry_run_with_write_glossary() -> None:
-    result = cli.parse_arguments(
-        ["cfg.toml", "--dry-run", "--write-glossary", "glossary.json"]
-    ).run()
-    assert isinstance(result, Err)
-    assert "--write-glossary cannot be combined with --dry-run" in describe(
-        result.error
-    )
-
-
-def test_parse_arguments_rejects_every_conflicting_mode_pair() -> None:
-    conflicting_argument_groups = (
-        ["cfg.toml", "--check-config", "--cache-prune", "7"],
-        ["cfg.toml", "--check-config", "--write-glossary", "glossary.json"],
-        ["cfg.toml", "--check-config", "--dry-run"],
-        ["cfg.toml", "--cache-prune", "7", "--write-glossary", "glossary.json"],
-        ["cfg.toml", "--cache-prune", "7", "--dry-run"],
-    )
-    for arguments in conflicting_argument_groups:
-        result = cli.parse_arguments(arguments).run()
-        assert isinstance(result, Err)
-        assert "cannot be combined with" in describe(result.error)
-
-
-def test_parse_arguments_still_accepts_single_modes() -> None:
-    for arguments in (
-        ["cfg.toml", "--check-config"],
-        ["cfg.toml", "--cache-prune", "7"],
-        ["cfg.toml", "--write-glossary", "glossary.json"],
-        ["cfg.toml", "--dry-run"],
-    ):
-        result = cli.parse_arguments(arguments).run()
-        assert isinstance(result, Ok)
-        assert isinstance(result.value, Arguments)
-
-
-def test_main_rejects_dry_run_with_write_glossary_without_http(tmp_path: Path) -> None:
-    config_path = tmp_path / "l2l.toml"
-    config_path.write_text(
-        "[api]\n"
-        'base_url = "http://endpoint.test/v1"\n'
-        'api_key = "key"\n'
-        'model = "m"\n'
-        "\n[[pass]]\n"
-        'name = "translate"\n'
-        'mode = "chunk"\n'
-        'instruction = "Translate."'
-    )
-    http = FakeHttp([])
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        [
-            str(config_path),
-            "--dry-run",
-            "--write-glossary",
-            str(tmp_path / "glossary.json"),
-        ],
-        {},
-        io.StringIO("你好。"),
-        stdout,
-        stderr,
-        time.time,
-        http.open,
-    ).run()
-    assert code == 2
-    assert (
-        "l2l: --write-glossary cannot be combined with --dry-run" in stderr.getvalue()
-    )
-    assert stdout.getvalue() == ""
-    assert http.requests == []
-
-
-def test_main_check_config_prints_report_without_http(tmp_path: Path) -> None:
-    config_path = tmp_path / "l2l.toml"
-    config_path.write_text(
-        "[api]\n"
-        'base_url = "http://endpoint.test/v1"\n'
-        'api_key = "secret-key"\n'
-        'model = "m"\n'
-        "\n[[pass]]\n"
-        'name = "translate"\n'
-        'mode = "chunk"\n'
-        'instruction = "Translate."'
-    )
-    http = FakeHttp([])
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        [str(config_path), "--check-config"],
-        {},
-        io.StringIO("你好。"),
-        stdout,
-        stderr,
-        time.time,
-        http.open,
-    ).run()
-    assert code == 0
-    report = stdout.getvalue()
-    assert "api.base_url: http://endpoint.test/v1" in report
-    assert "api.model: m" in report
-    assert "api.api_key: secr...ey" in report
-    assert "pass 1/1 [translate]: mode=chunk" in report
-    assert http.requests == []
-
-
-def test_main_check_config_reports_config_errors(tmp_path: Path) -> None:
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        [str(tmp_path / "missing.toml"), "--check-config"],
-        {},
-        io.StringIO(""),
-        stdout,
-        stderr,
-        time.time,
-        FakeHttp([]).open,
-    ).run()
-    assert code == 2
-    assert "l2l: config file not found" in stderr.getvalue()
-
-
-def test_main_dry_run_prints_plan_without_http(tmp_path: Path) -> None:
-    config_path = tmp_path / "l2l.toml"
-    config_path.write_text(
-        "[api]\n"
-        'base_url = "http://endpoint.test/v1"\n'
-        'api_key = "key"\n'
-        'model = "m"\n'
-        "\n[[pass]]\n"
-        'name = "translate"\n'
-        'mode = "chunk"\n'
-        'instruction = "Translate."'
-    )
-    http = FakeHttp([])
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        [str(config_path), "--dry-run"],
-        {},
-        io.StringIO("你好。\n\n世界。"),
-        stdout,
-        stderr,
-        time.time,
-        http.open,
-    ).run()
-    assert code == 0
-    plan = stdout.getvalue()
-    assert "source: 8 character(s), 2 paragraph(s), ~7 tokens" in plan
-    assert "pass 1/1 [translate]: mode=chunk, 1 unit(s)" in plan
-    assert "cache key " in plan
-    assert http.requests == []
-
-
-def test_main_no_stream_flag_forces_plain_responses(tmp_path: Path) -> None:
-    config_path = tmp_path / "l2l.toml"
-    config_path.write_text(
-        "[api]\n"
-        'base_url = "http://endpoint.test/v1"\n'
-        'api_key = "key"\n'
-        'model = "m"\n'
-        "max_tokens = 1000\n"
-        "\n[[pass]]\n"
-        'name = "translate"\n'
-        'mode = "chunk"\n'
-        'instruction = "Translate."'
-    )
-    body = {
-        "choices": [{"message": {"content": "Plain."}}],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
-    }
-    http = FakeHttp([FakePlainResponse(body)])
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        [str(config_path), "--no-stream", "--no-cache"],
-        {},
-        io.StringIO("你好。"),
-        stdout,
-        stderr,
-        time.time,
-        http.open,
-    ).run()
-    assert code == 0
-    assert stdout.getvalue() == "Plain.\n"
-    assert json.loads(http.requests[0].body)["stream"] is False
-
-
-def test_main_cache_prune_removes_old_entries(tmp_path: Path) -> None:
-    cache_directory = tmp_path / "cache"
-    cache_directory.mkdir()
-    old = cache_directory / "old.txt"
-    old.write_text("stale", encoding="utf-8")
-    fresh = cache_directory / "fresh.txt"
-    fresh.write_text("keep", encoding="utf-8")
-    month_ago = time.time() - 40 * 86400
-    os.utime(old, (month_ago, month_ago))
-
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        [
-            str(tmp_path / "unused.toml"),
-            "--cache-prune",
-            "30",
-            "--cache-dir",
-            str(cache_directory),
-        ],
-        {},
-        io.StringIO(""),
-        stdout,
-        stderr,
-        time.time,
-        FakeHttp([]).open,
-    ).run()
-    assert code == 0
-    assert not old.exists()
-    assert fresh.exists()
-    assert "pruned 1 cache entry" in stderr.getvalue()
-
-
-def test_main_cache_prune_rejects_non_positive_days(tmp_path: Path) -> None:
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        ["--cache-prune", "0", "--cache-dir", str(tmp_path)],
-        {},
-        io.StringIO(""),
-        stdout,
-        stderr,
-        time.time,
-        FakeHttp([]).open,
-    ).run()
-    assert code == 2
-    assert "positive number of days" in stderr.getvalue()
-
-
-def test_cli_exits_with_program_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    exits: list[int] = []
-    monkeypatch.setattr(cli, "main", lambda *arguments: io_pure(3))
-    monkeypatch.setattr(sys, "exit", exits.append)
-    cli.cli()
-    assert exits == [3]
-
-
-def test_cli_handles_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
-    def interrupted(*arguments: Any, **keyword_arguments: Any) -> Any:
-        raise KeyboardInterrupt
-
-    exits: list[int] = []
-    monkeypatch.setattr(cli, "main", interrupted)
-    monkeypatch.setattr(sys, "exit", exits.append)
-    cli.cli()
-    assert exits == [130]
-
-
-def test_cli_handles_broken_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
-    def broken(*arguments: Any, **keyword_arguments: Any) -> Any:
-        raise BrokenPipeError
-
-    exits: list[int] = []
-    monkeypatch.setattr(cli, "main", broken)
-    monkeypatch.setattr(os, "open", lambda path, flags: -1)
-    monkeypatch.setattr(os, "dup2", lambda fd, target: None)
-    monkeypatch.setattr(sys, "exit", exits.append)
-    cli.cli()
-    assert exits == [141]
-
-
-def test_parse_args_defaults() -> None:
-    arguments = cli.parse_args(["cfg.toml", "--no-cache", "-v"])
-    assert arguments.config == "cfg.toml"
-    assert arguments.no_cache
-    assert not arguments.ensure_paragraphs
-    assert arguments.verbose
-    assert arguments.cache_directory is None
-    assert arguments.log_keep == 30
-
-    arguments = cli.parse_args(["cfg.toml", "--ensure-paragraphs"])
-    assert arguments.ensure_paragraphs
-
-    arguments = cli.parse_args(["cfg.toml", "--log-keep", "0"])
-    assert arguments.log_keep == 0
-
-
-def test_plan_report_lists_units_and_keys() -> None:
-    console, _ = make_console()
-    run_context = make_context(console, FakeHttp([]).open)
-    text = "你好。\n\n世界。"
-    report = plan_report(run_context, (chunk_pass(), paragraph_pass()), text)
-    lines = report.splitlines()
-    assert lines[0] == "source: 8 character(s), 2 paragraph(s), ~7 tokens"
-    assert (
-        lines[1]
-        == "pass 1/2 [translate]: mode=chunk, 1 unit(s), source budget ~3500 tokens"
-    )
-    assert "unit 1/1: ~7 source tokens, cache key " in lines[2]
-    assert lines[3] == "pass 2/2 [translate]: mode=paragraph, 2 unit(s)"
-    assert "unit 1/2:" in lines[4] and "unit 2/2:" in lines[5]
-
-
-def test_plan_report_reports_analysis_pass() -> None:
-    console, _ = make_console()
-    run_context = make_context(console, FakeHttp([]).open)
-    analysis = PassDefinition("prep", "Brief.", "analysis", {}, None, False)
-    report = plan_report(run_context, (analysis,), "你好。")
-    assert "pass 1/1 [prep]: mode=analysis, 1 call with the whole document" in report
-
-
 def test_chunk_planning_splits_paragraphs_to_request_budget() -> None:
     console, stderr = make_console()
     paragraph = "a" * 600
@@ -2137,32 +1518,6 @@ def test_chunk_planning_fails_fast_on_oversized_paragraph() -> None:
     assert "over the 200-token budget" in logged
 
 
-def test_plan_report_exposes_budget_violations() -> None:
-    console, _ = make_console()
-    run_context = make_context(console, FakeHttp([]).open, maximum_tokens=200)
-    report = plan_report(run_context, (chunk_pass(),), "a" * 1200)
-    assert "source budget ~183 tokens" in report
-    assert (
-        "warning: [translate] paragraph 1 is ~300 source tokens, "
-        "over the ~183-token source budget" in report
-    )
-
-
-def test_plan_report_reserves_draft_space_in_later_passes() -> None:
-    console, _ = make_console()
-    run_context = make_context(console, FakeHttp([]).open, maximum_tokens=400)
-    paragraph = "a" * 400
-    text = paragraph + "\n\n" + paragraph
-    report = plan_report(run_context, (chunk_pass(), chunk_pass("polish")), text)
-    assert (
-        "pass 1/2 [translate]: mode=chunk, 1 unit(s), source budget ~383 tokens"
-        in report
-    )
-    assert (
-        "pass 2/2 [polish]: mode=chunk, 2 unit(s), source budget ~191 tokens" in report
-    )
-
-
 def test_later_pass_with_draft_splits_to_request_budget() -> None:
     console, stderr = make_console()
     paragraph = "a" * 400
@@ -2183,89 +1538,6 @@ def test_later_pass_with_draft_splits_to_request_budget() -> None:
     assert stdout.getvalue() == "One.\n\nTwo.\n"
     assert len(http.requests) == 3
     assert "budget" not in stderr.getvalue()
-
-
-def test_resolve_work_groups_regroups_paragraph_mode_independently() -> None:
-    paragraphs = ("一。", "二。", "三。")
-    stale_plan = (("一。", "二。"),)
-    groups, warning = resolve_work_groups("paragraph", paragraphs, stale_plan, "p", 100)
-    assert groups == (("一。",), ("二。",), ("三。",))
-    assert isinstance(warning, Just)
-
-
-def test_resolve_work_groups_rechunks_chunk_mode_independently() -> None:
-    paragraphs = tuple("一。" for _ in range(5))
-    stale_plan = (("一。",),)
-    groups, warning = resolve_work_groups("chunk", paragraphs, stale_plan, "p", 1)
-    assert all(len(group) == 1 for group in groups)
-    assert len(groups) == 5
-    assert isinstance(warning, Just)
-
-
-def test_resolve_work_groups_keeps_matching_plan() -> None:
-    paragraphs = ("一。", "二。")
-    plan = (("一。",), ("二。",))
-    groups, warning = resolve_work_groups("chunk", paragraphs, plan, "p", 100)
-    assert groups == (("一。",), ("二。",))
-    assert isinstance(warning, Nothing)
-
-
-def test_main_log_keep_prunes_old_logs(tmp_path: Path) -> None:
-    config_path = tmp_path / "l2l.toml"
-    config_path.write_text(
-        "[api]\n"
-        'base_url = "http://endpoint.test/v1"\n'
-        'api_key = "key"\n'
-        'model = "m"\n'
-        "\n[[pass]]\n"
-        'name = "translate"\n'
-        'mode = "chunk"\n'
-        'instruction = "Translate."'
-    )
-    cache_directory = tmp_path / "cache"
-    logs = cache_directory / "logs"
-    logs.mkdir(parents=True)
-    ancient = logs / "ancient.log"
-    ancient.write_text("old", encoding="utf-8")
-    month_ago = time.time() - 40 * 86400
-    os.utime(ancient, (month_ago, month_ago))
-
-    chunks = with_usage(stream_chunks("Hello."), USAGE)
-    http = FakeHttp([FakeStreamResponse(chunks)])
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        [
-            str(config_path),
-            "--cache-dir",
-            str(cache_directory),
-            "--no-cache",
-            "--log-keep",
-            "30",
-        ],
-        {},
-        io.StringIO("你好。"),
-        stdout,
-        stderr,
-        time.time,
-        http.open,
-    ).run()
-    assert code == 0
-    assert not ancient.exists()
-    assert len(list(logs.glob("*.log"))) == 1
-
-
-def update_pass(
-    name: str = "glossary", target_language: str | None = None
-) -> PassDefinition:
-    return PassDefinition(
-        name,
-        "Extract.",
-        "update_glossary",
-        {},
-        None,
-        False,
-        target_language=target_language,
-    )
 
 
 def glossary_pairs(document: Any) -> list[tuple[str, str | None]]:
@@ -2445,23 +1717,15 @@ def test_update_glossary_cache_respects_effective_target_language(
     assert "Target language: French" in second_payload["messages"][1]["content"]
 
 
-def test_plan_report_shows_update_glossary_pass() -> None:
-    console, _stderr = make_console()
-    run_context = make_context(console, FakeHttp([]).open)
-    report = plan_report(
-        run_context,
-        (update_pass(target_language="Chinese"), chunk_pass()),
-        "你好。",
-    )
+def test_update_glossary_pass_without_glossary_path_fails_the_run() -> None:
+    console, stderr = make_console()
+    http = FakeHttp([])
+    run_context = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(run_context, (update_pass(),), "你好。", 0.0, stdout).run()
+    assert code == 1
+    assert http.requests == []
     assert (
-        "pass 1/2 [glossary]: mode=update_glossary, 1 call with the whole "
-        "document, target language Chinese" in report
+        "an update_glossary pass requires at least one --glossary file on the "
+        "command line" in stderr.getvalue()
     )
-    assert "pass 2/2 [translate]: mode=chunk, 1 unit(s)" in report
-
-
-def test_plan_report_update_glossary_falls_back_to_context_language() -> None:
-    console, _stderr = make_console()
-    run_context = make_context(console, FakeHttp([]).open, target_language="French")
-    report = plan_report(run_context, (update_pass(),), "你好。")
-    assert "target language French" in report
