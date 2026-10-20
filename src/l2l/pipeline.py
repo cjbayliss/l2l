@@ -307,13 +307,10 @@ def conclude_state(
                     current.usage,
                     ascii_started,
                 ),
-                lambda translated: State(
-                    translated.text,
-                    state.analysis,
-                    translated.usage,
-                    state.validated,
-                    state.problem,
-                    state.glossary,
+                lambda translated: replace(
+                    current,
+                    text=translated.text,
+                    usage=translated.usage,
                 ),
             )
 
@@ -329,17 +326,16 @@ def conclude_state(
             return io_result(Err(result.error))
 
         return ascii_stage(
-            State(
-                result.value.text,
-                state.analysis,
-                result.value.usage,
-                state.validated and result.value.validated,
-                (
+            replace(
+                state,
+                text=result.value.text,
+                usage=result.value.usage,
+                validated=state.validated and result.value.validated,
+                problem=(
                     result.value.problem
                     if result.value.problem is not None
                     else state.problem
                 ),
-                state.glossary,
             )
         )
 
@@ -627,13 +623,10 @@ def run_analysis_pass(
             run_context,
             pass_definition,
             state.usage,
-            State(
-                text=state.text,
+            replace(
+                state,
                 analysis=outcome.text,
                 usage=outcome.usage,
-                validated=state.validated,
-                problem=state.problem,
-                glossary=state.glossary,
             ),
             started_at,
             source_paragraphs,
@@ -747,12 +740,9 @@ def run_update_glossary_pass(
                 run_context,
                 pass_definition,
                 state.usage,
-                State(
-                    text=state.text,
-                    analysis=state.analysis,
+                replace(
+                    state,
                     usage=reply_result.value.usage,
-                    validated=state.validated,
-                    problem=state.problem,
                     glossary=merged,
                 ),
                 started_at,
@@ -1033,9 +1023,9 @@ def run_text_pass_once(
             if isinstance(units_result, Err):
                 return io_result(units_result)
 
-            next_state = State(
+            next_state = replace(
+                state,
                 text=ensure_blank_line_separators("".join(units_result.value.outputs)),
-                analysis=state.analysis,
                 usage=units_result.value.usage,
                 validated=state.validated and units_result.value.validated,
                 problem=(
@@ -1043,7 +1033,6 @@ def run_text_pass_once(
                     if units_result.value.problem is not None
                     else state.problem
                 ),
-                glossary=state.glossary,
             )
             return finish_pass_stage(
                 run_context,

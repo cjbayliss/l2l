@@ -36,7 +36,7 @@ from l2l.monads import (
     io_pure,
     io_result,
 )
-from l2l.pipeline import analyze_document, run_pipeline
+from l2l.pipeline import State, analyze_document, conclude_state, run_pipeline
 from l2l.plans import (
     ascii_drop_warning,
     plan_report,
@@ -337,6 +337,30 @@ def test_retranslation_retranslates_an_echoed_paragraph() -> None:
     assert "你好。" in retry_user
     assert "三。" in retry_user
     assert retry_user.endswith("世界。")
+
+
+def test_ascii_stage_preserves_retranslation_validated_and_problem() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("世界。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("世界。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("世界。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("(world)."), USAGE)),
+        ]
+    )
+    run_context = make_context(console, http.open, best_effort=True)
+    pass_definition = chunk_pass(ascii_output=True, retranslate_untranslated=True)
+    state = State("Hello.\n\n世界。", None, Usage())
+    result = conclude_state(
+        run_context, pass_definition, state, ("你好。", "世界。")
+    ).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == "Hello.\n\n(world)."
+    assert result.value.validated is False
+    assert result.value.problem is not None
+    assert "世界。" in result.value.problem
+    assert len(http.requests) == 4
 
 
 def test_retranslation_accepts_non_latin_targets() -> None:
