@@ -27,7 +27,54 @@ from l2l.monads import (
     read_reference,
     write_reference,
 )
-from l2l.settings import Config, build_settings
+from l2l.settings import Config, PassDefinition, build_settings
+
+
+def chunk_pass(
+    name: str = "translate",
+    ascii_output: bool = False,
+    ensure_paragraphs: bool | int = False,
+    retranslate_untranslated: bool = False,
+) -> PassDefinition:
+    return PassDefinition(
+        name,
+        "T.",
+        "chunk",
+        {},
+        None,
+        ascii_output,
+        ensure_paragraphs,
+        retranslate_untranslated,
+    )
+
+
+def paragraph_pass(
+    name: str = "translate", retranslate_untranslated: bool = False
+) -> PassDefinition:
+    return PassDefinition(
+        name,
+        "T.",
+        "paragraph",
+        {},
+        None,
+        False,
+        False,
+        retranslate_untranslated,
+    )
+
+
+def update_pass(
+    name: str = "glossary", target_language: str | None = None
+) -> PassDefinition:
+    return PassDefinition(
+        name,
+        "Extract.",
+        "update_glossary",
+        {},
+        None,
+        False,
+        target_language=target_language,
+    )
 
 
 def no_sleep(seconds: float) -> None:

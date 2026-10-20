@@ -2,6 +2,7 @@ import io
 import json
 import os
 import pty
+import sys
 import threading
 import time
 from pathlib import Path
@@ -16,10 +17,11 @@ from fakes import (
     with_usage,
 )
 
-from l2l import cli, keys
+from l2l import __version__, cli, keys, pipeline
 from l2l.console import toggle_verbose
-from l2l.errors import FileError, TranslationError
-from l2l.monads import IO, Err, Just, Ok, Result, io_result
+from l2l.errors import FileError, TranslationError, describe, fail_http
+from l2l.monads import IO, Err, Just, Ok, Result, io_pure, io_result
+from l2l.settings import Arguments
 
 CONFIG_TEXT = (
     "[api]\n"
@@ -91,6 +93,7 @@ def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
     assert code == 0
     assert stderr == ""
     assert "api.base_url: http://endpoint.test/v1" in stdout
+    assert "api.model: m" in stdout
     assert "api.api_key: secr...ey" in stdout
     assert "pass 1/1 [translate]: mode=chunk" in stdout
 
@@ -245,7 +248,8 @@ def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:
         http.open,
     ).run()
     assert code == 0
-    assert stdout.getvalue().strip() == "Hello."
+    assert stdout.getvalue() == "Hello.\n"
+    assert len(http.requests) == 1
     assert "Starting pass 1/1 [translate]..." in stderr.getvalue()
     assert "Done: " in stderr.getvalue()
     assert "TOTAL" in stderr.getvalue()
@@ -338,7 +342,8 @@ def test_plain_call_end_to_end(tmp_path: Path) -> None:
         http.open,
     ).run()
     assert code == 0
-    assert stdout.getvalue().strip() == "Plain."
+    assert stdout.getvalue() == "Plain.\n"
+    assert json.loads(http.requests[0].body)["stream"] is False
 
 
 def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
@@ -832,3 +837,278 @@ def test_update_glossary_cached_run_still_writes_the_file(tmp_path: Path) -> Non
     assert "Done: 0.0s, prompt=0, completion=0" in second_stderr
     document = json.loads(glossary.read_text(encoding="utf-8"))
     assert [item["original"] for item in document] == ["大观园"]
+
+
+def test_parse_arguments_returns_version_text() -> None:
+    result = cli.parse_arguments(["--version"]).run()
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, cli.EarlyExitText)
+    assert result.value.text == "l2l " + __version__
+
+
+def test_parse_arguments_returns_help_text() -> None:
+    result = cli.parse_arguments(["--help"]).run()
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, cli.EarlyExitText)
+    assert "usage:" in result.value.text
+    assert "--dry-run" in result.value.text
+
+
+def test_parse_arguments_reports_invalid_flags() -> None:
+    result = cli.parse_arguments(["--nope"]).run()
+    assert isinstance(result, Err)
+    assert "invalid arguments" in describe(result.error)
+
+
+def test_parse_arguments_rejects_dry_run_with_write_glossary() -> None:
+    result = cli.parse_arguments(
+        ["cfg.toml", "--dry-run", "--write-glossary", "glossary.json"]
+    ).run()
+    assert isinstance(result, Err)
+    assert "--write-glossary cannot be combined with --dry-run" in describe(
+        result.error
+    )
+
+
+def test_parse_arguments_rejects_every_conflicting_mode_pair() -> None:
+    conflicting_argument_groups = (
+        ["cfg.toml", "--check-config", "--cache-prune", "7"],
+        ["cfg.toml", "--check-config", "--write-glossary", "glossary.json"],
+        ["cfg.toml", "--check-config", "--dry-run"],
+        ["cfg.toml", "--cache-prune", "7", "--write-glossary", "glossary.json"],
+        ["cfg.toml", "--cache-prune", "7", "--dry-run"],
+    )
+    for arguments in conflicting_argument_groups:
+        result = cli.parse_arguments(arguments).run()
+        assert isinstance(result, Err)
+        assert "cannot be combined with" in describe(result.error)
+
+
+def test_parse_arguments_still_accepts_single_modes() -> None:
+    for arguments in (
+        ["cfg.toml", "--check-config"],
+        ["cfg.toml", "--cache-prune", "7"],
+        ["cfg.toml", "--write-glossary", "glossary.json"],
+        ["cfg.toml", "--dry-run"],
+    ):
+        result = cli.parse_arguments(arguments).run()
+        assert isinstance(result, Ok)
+        assert isinstance(result.value, Arguments)
+
+
+def test_main_prints_version_and_returns_zero_without_http(tmp_path: Path) -> None:
+    code, stdout, stderr = run_l2l(tmp_path, ["--version"], "")
+    assert code == 0
+    assert stdout == "l2l " + __version__ + "\n"
+    assert stderr == ""
+
+
+def test_main_prints_help_and_returns_zero_without_http(tmp_path: Path) -> None:
+    code, stdout, stderr = run_l2l(tmp_path, ["--help"], "")
+    assert code == 0
+    assert "usage:" in stdout
+    assert stderr == ""
+
+
+def test_main_rejects_dry_run_with_write_glossary_without_http(tmp_path: Path) -> None:
+    code, stdout, stderr = run_l2l(
+        tmp_path,
+        [
+            str(tmp_path / "l2l.toml"),
+            "--dry-run",
+            "--write-glossary",
+            str(tmp_path / "glossary.json"),
+        ],
+    )
+    assert code == 2
+    assert stdout == ""
+    assert "l2l: --write-glossary cannot be combined with --dry-run" in stderr
+
+
+def test_main_log_keep_prunes_old_logs(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    cache_directory = tmp_path / "cache"
+    logs = cache_directory / "logs"
+    logs.mkdir(parents=True)
+    ancient = logs / "ancient.log"
+    ancient.write_text("old", encoding="utf-8")
+    month_ago = time.time() - 40 * 86400
+    os.utime(ancient, (month_ago, month_ago))
+
+    chunks = with_usage(stream_chunks("Hello."), USAGE)
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(config_path),
+            "--cache-dir",
+            str(cache_directory),
+            "--no-cache",
+            "--log-keep",
+            "30",
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 0
+    assert not ancient.exists()
+    assert len(list(logs.glob("*.log"))) == 1
+
+
+def test_cli_exits_with_program_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    exits: list[int] = []
+    monkeypatch.setattr(cli, "main", lambda *arguments: io_pure(3))
+    monkeypatch.setattr(sys, "exit", exits.append)
+    cli.cli()
+    assert exits == [3]
+
+
+def test_cli_handles_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    def interrupted(*arguments: Any, **keyword_arguments: Any) -> Any:
+        raise KeyboardInterrupt
+
+    exits: list[int] = []
+    monkeypatch.setattr(cli, "main", interrupted)
+    monkeypatch.setattr(sys, "exit", exits.append)
+    cli.cli()
+    assert exits == [130]
+
+
+def test_cli_handles_broken_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*arguments: Any, **keyword_arguments: Any) -> Any:
+        raise BrokenPipeError
+
+    exits: list[int] = []
+    monkeypatch.setattr(cli, "main", broken)
+    monkeypatch.setattr(os, "open", lambda path, flags: -1)
+    monkeypatch.setattr(os, "dup2", lambda fd, target: None)
+    monkeypatch.setattr(sys, "exit", exits.append)
+    cli.cli()
+    assert exits == [141]
+
+
+def test_parse_args_defaults() -> None:
+    arguments = cli.parse_args(["cfg.toml", "--no-cache", "-v"])
+    assert arguments.config == "cfg.toml"
+    assert arguments.no_cache
+    assert not arguments.ensure_paragraphs
+    assert arguments.verbose
+    assert arguments.cache_directory is None
+    assert arguments.log_keep == 30
+
+    arguments = cli.parse_args(["cfg.toml", "--ensure-paragraphs"])
+    assert arguments.ensure_paragraphs
+
+    arguments = cli.parse_args(["cfg.toml", "--log-keep", "0"])
+    assert arguments.log_keep == 0
+
+
+def test_update_glossary_pass_with_malformed_reply_exits_one(tmp_path: Path) -> None:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text("[]", encoding="utf-8")
+    chunks = [
+        *stream_chunks("not json at all"),
+        {"choices": [{"delta": {}}], "usage": USAGE},
+    ]
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(write_update_glossary_config(tmp_path)),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--no-cache",
+            "--glossary",
+            str(glossary),
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 1
+    assert "not valid JSON" in stderr.getvalue()
+    assert json.loads(glossary.read_text(encoding="utf-8")) == []
+    assert len(http.requests) == 1
+
+
+def test_update_glossary_pass_reports_a_failed_extraction_call(
+    tmp_path: Path,
+) -> None:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text("[]", encoding="utf-8")
+    requests: list[Any] = []
+
+    def unreachable_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
+        requests.append(request)
+        return fail_http("unreachable", "down")
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(write_update_glossary_config(tmp_path)),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--no-cache",
+            "--glossary",
+            str(glossary),
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+        unreachable_open,
+    ).run()
+    assert code == 1
+    assert "could not reach endpoint: down" in stderr.getvalue()
+    assert json.loads(glossary.read_text(encoding="utf-8")) == []
+    assert len(requests) == 3
+
+
+def test_update_glossary_pass_reports_a_glossary_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(
+        pipeline,
+        "write_text_file",
+        lambda path, content, description: io_result(
+            Err(
+                FileError(
+                    path,
+                    "write " + description,
+                    "[Errno 13] Permission denied",
+                )
+            )
+        ),
+    )
+    http = FakeHttp([glossary_reply([{"original": "大观园", "translated": "G"}])])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(write_update_glossary_config(tmp_path)),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--no-cache",
+            "--glossary",
+            str(glossary),
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 1
+    assert "could not write glossary file" in stderr.getvalue()
+    assert json.loads(glossary.read_text(encoding="utf-8")) == []
+    assert len(http.requests) == 1
