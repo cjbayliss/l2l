@@ -232,6 +232,16 @@ def env_string_settings(environment: Mapping[str, str]) -> PartialApiSettings:
     )
 
 
+def optional_positive_setting(
+    value: float | None, description: str
+) -> Result[float | None, TranslationError]:
+    if value is None:
+        return Ok(None)
+    if value <= 0:
+        return fail_config("%s must be positive" % description)
+    return Ok(value)
+
+
 def env_positive_setting(
     environment: Mapping[str, str],
     variable: str,
@@ -247,10 +257,7 @@ def env_positive_setting(
     except ValueError:
         return fail_config("%s must be %s, got %r" % (variable, kind, raw))
 
-    if parsed <= 0:
-        return fail_config("%s must be positive" % variable)
-
-    return Ok(parsed)
+    return optional_positive_setting(parsed, variable)
 
 
 def env_timeout_setting(
@@ -286,13 +293,32 @@ def api_settings_from_environment(
     )
 
 
-def api_settings_from_arguments(arguments: Arguments) -> PartialApiSettings:
-    return PartialApiSettings(
-        base_url=arguments.base_url,
-        api_key=arguments.api_key,
-        model=arguments.model,
-        timeout=arguments.timeout,
-        maximum_tokens=arguments.maximum_tokens,
+def argument_timeout_setting(
+    arguments: Arguments,
+) -> Result[float | None, TranslationError]:
+    return optional_positive_setting(arguments.timeout, "--timeout")
+
+
+def argument_maximum_tokens_setting(
+    arguments: Arguments,
+) -> Result[float | None, TranslationError]:
+    return optional_positive_setting(arguments.maximum_tokens, "--max-tokens")
+
+
+def api_settings_from_arguments(
+    arguments: Arguments,
+) -> Result[PartialApiSettings, TranslationError]:
+    timeout = argument_timeout_setting(arguments)
+    maximum_tokens = argument_maximum_tokens_setting(arguments)
+    return result_map(
+        result_sequence((timeout, maximum_tokens)),
+        lambda values: PartialApiSettings(
+            base_url=arguments.base_url,
+            api_key=arguments.api_key,
+            model=arguments.model,
+            timeout=values[0],
+            maximum_tokens=(int(values[1]) if values[1] is not None else None),
+        ),
     )
 
 
@@ -388,7 +414,10 @@ def merged_api_settings(
     def arguments_layer(
         partial: PartialApiSettings,
     ) -> Result[PartialApiSettings, TranslationError]:
-        return Ok(merge_api_settings(partial, api_settings_from_arguments(arguments)))
+        return result_map(
+            api_settings_from_arguments(arguments),
+            lambda extra: merge_api_settings(partial, extra),
+        )
 
     def step(
         layer_result: Result[PartialApiSettings, TranslationError],
