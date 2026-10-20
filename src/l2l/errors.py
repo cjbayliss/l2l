@@ -73,6 +73,13 @@ class InvalidOutputError:
     problem: str
 
 
+@dataclass(frozen=True)
+class FileError:
+    path: str
+    operation: str
+    detail: str
+
+
 type SetupError = ConfigError | MissingSettings
 type TranslationError = (
     SetupError
@@ -84,6 +91,7 @@ type TranslationError = (
     | AsciiCollapseError
     | UntranslatedError
     | InvalidOutputError
+    | FileError
 )
 
 
@@ -136,6 +144,10 @@ def fail_untranslated(pass_name: str, index: int, sample: str) -> Err[Translatio
 
 def fail_invalid_output(attempts: int, problem: str) -> Err[TranslationError]:
     return Err(InvalidOutputError(attempts, problem))
+
+
+def fail_file_error(path: str, operation: str, detail: str) -> Err[TranslationError]:
+    return Err(FileError(path, operation, detail))
 
 
 def describe_http(error: HttpError) -> str:
@@ -223,6 +235,13 @@ def describe(error: TranslationError) -> str:
                 "output still failed validation after %d repair attempt(s): %s; "
                 "pass --best-effort to keep the last reply instead"
                 % (error.attempts, error.problem)
+            )
+
+        case FileError():
+            return "l2l: could not %s %s: %s" % (
+                error.operation,
+                error.path,
+                error.detail,
             )
 
         case other:
