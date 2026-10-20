@@ -668,6 +668,60 @@ def test_update_glossary_pass_updates_file_and_flows_into_later_passes(
     assert "TOTAL" in logged
 
 
+def test_update_glossary_pass_writes_only_the_first_glossary_file(
+    tmp_path: Path,
+) -> None:
+    first_glossary = tmp_path / "first.json"
+    first_glossary.write_text(
+        '[{"original": "南京", "translated": "Nanjing"}]', encoding="utf-8"
+    )
+    second_glossary = tmp_path / "second.json"
+    second_glossary.write_text(
+        '[{"original": "长城", "translated": "Great Wall"}]', encoding="utf-8"
+    )
+    extraction = glossary_reply(
+        [{"original": "大观园", "translated": "Grand View Garden"}]
+    )
+    translation_chunks = [
+        *stream_chunks("Hello."),
+        {"choices": [{"delta": {}}], "usage": USAGE},
+    ]
+    http = FakeHttp([extraction, FakeStreamResponse(translation_chunks)])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            str(write_update_glossary_config(tmp_path)),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--no-cache",
+            "--glossary",
+            str(first_glossary),
+            "--glossary",
+            str(second_glossary),
+        ],
+        {},
+        io.StringIO("你好。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue().strip() == "Hello."
+
+    first_document = json.loads(first_glossary.read_text(encoding="utf-8"))
+    assert [item["original"] for item in first_document] == [
+        "南京",
+        "长城",
+        "大观园",
+    ]
+    assert first_document[0]["translated"] == "Nanjing"
+    assert first_document[2]["translated"] == "Grand View Garden"
+    assert json.loads(second_glossary.read_text(encoding="utf-8")) == [
+        {"original": "长城", "translated": "Great Wall"}
+    ]
+
+
 def test_update_glossary_pass_target_language_overrides_cli_flag(
     tmp_path: Path,
 ) -> None:
