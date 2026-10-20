@@ -3,10 +3,15 @@ from __future__ import annotations
 import io
 import json
 import os
-import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from optimize_harness import (
+    marker_version,
+    verdict_body,
+    workspace,
+)
 
 from l2l.effects import ProcessResult
 from l2l.errors import TranslationError, describe, fail_http
@@ -45,44 +50,6 @@ from tools.optimize import (
     usable_verdict,
 )
 
-JUDGE_TEMPLATE = (
-    "SOURCE: <<<SOURCE>>> ||| A: <<<TRANSLATION_A>>> ||| B: <<<TRANSLATION_B>>> judge"
-)
-REWRITE_TEMPLATE = (
-    "CURRENT: <<<CURRENT_PROMPT>>> HISTORY: <<<HISTORY>>> "
-    "CRITIQUES: <<<CRITIQUES>>> propose better"
-)
-BASE_TOML = (
-    "[api]\n"
-    'base_url = "http://endpoint.test/v1"\n'
-    'api_key = "key"\n'
-    'model = "m"\n\n'
-    "[[pass]]\n"
-    'name = "translate"\n'
-    'model = "m"\n'
-    'instruction = "translate this"\n'
-)
-
-
-def workspace(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
-    working_directory = tmp_path / "lab"
-    chapters_directory = working_directory / "chapters"
-    chapters_directory.mkdir(parents=True)
-    for name in ("ch1", "ch2"):
-        (chapters_directory / (name + ".txt")).write_text(
-            "source of " + name, encoding="utf-8"
-        )
-    (chapters_directory / "holdout.txt").write_text("holdout source", encoding="utf-8")
-    base = tmp_path / "base.toml"
-    base.write_text(BASE_TOML, encoding="utf-8")
-    seed = tmp_path / "seed.txt"
-    seed.write_text("seed instruction", encoding="utf-8")
-    judge_template = tmp_path / "judge.txt"
-    judge_template.write_text(JUDGE_TEMPLATE, encoding="utf-8")
-    rewrite_template = tmp_path / "rewrite.txt"
-    rewrite_template.write_text(REWRITE_TEMPLATE, encoding="utf-8")
-    return working_directory, base, seed, judge_template, rewrite_template
-
 
 def evolve_argv(
     tmp_path: Path,
@@ -118,24 +85,14 @@ def environment_for(tmp_path: Path) -> dict[str, str]:
     return {"HOME": str(tmp_path), "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
 
 
-def version_marker(text: str) -> int:
-    found = re.findall(r"T\[v(\d+)\]", text)
-    return int(found[0]) if found else -1
-
-
 def pick_winner(content: str) -> str:
     candidate_a_text = content.split(" A: ", 1)[1].split(" ||| B: ", 1)[0]
     candidate_b_text = content.split(" ||| B: ", 1)[1].split(" judge", 1)[0]
     return (
         "A"
-        if version_marker(candidate_a_text) >= version_marker(candidate_b_text)
+        if marker_version(candidate_a_text) >= marker_version(candidate_b_text)
         else "B"
     )
-
-
-def verdict_body(reply: str) -> EndpointReply:
-    body = {"choices": [{"message": {"content": reply}, "finish_reason": "stop"}]}
-    return EndpointReply(json.dumps(body), body)
 
 
 def make_opener(
