@@ -383,17 +383,27 @@ def drop_non_ascii(
 THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
 
-THINK_REGION = re.compile(
-    r"\s*" + THINK_OPEN + "(.*?)(?:" + THINK_CLOSE + "|\\Z)", re.DOTALL
-)
+
+def split_think_close(text: str) -> tuple[str, str] | None:
+    index = text.find(THINK_CLOSE)
+    if index < 0:
+        return None
+
+    return text[:index], text[index + len(THINK_CLOSE) :]
 
 
 def strip_think_tag(content: str) -> tuple[str, Maybe[str]]:
-    match = THINK_REGION.match(content)
-    if not match:
+    stripped = content.lstrip()
+    if not stripped.startswith(THINK_OPEN):
         return content, NOTHING
 
-    return content[match.end() :], Just(match.group(1).strip())
+    reasoning = stripped[len(THINK_OPEN) :]
+    closed = split_think_close(reasoning)
+    if closed is None:
+        return "", Just(reasoning.strip())
+
+    captured, visible = closed
+    return visible, Just(captured.strip())
 
 
 @dataclass(frozen=True)
@@ -466,8 +476,8 @@ def think_step(state: ThinkState, text: str) -> tuple[ThinkState, bool, str]:
 
     searched = state.held + text
     if state.open:
-        index = searched.find(THINK_CLOSE)
-        if index < 0:
+        closed = split_think_close(searched)
+        if closed is None:
             return (
                 ThinkState(
                     checking=False, open=True, held=searched[-(len(THINK_CLOSE) - 1) :]
@@ -476,17 +486,13 @@ def think_step(state: ThinkState, text: str) -> tuple[ThinkState, bool, str]:
                 "",
             )
 
-        return (
-            ThinkState(False, False, ""),
-            True,
-            searched[index + len(THINK_CLOSE) :],
-        )
+        return ThinkState(False, False, ""), True, closed[1]
 
     stripped = searched.lstrip()
     if stripped.startswith(THINK_OPEN):
         rest = stripped[len(THINK_OPEN) :]
-        index = rest.find(THINK_CLOSE)
-        if index < 0:
+        closed = split_think_close(rest)
+        if closed is None:
             return (
                 ThinkState(
                     checking=True,
@@ -497,7 +503,7 @@ def think_step(state: ThinkState, text: str) -> tuple[ThinkState, bool, str]:
                 "",
             )
 
-        return ThinkState(False, False, ""), True, rest[index + len(THINK_CLOSE) :]
+        return ThinkState(False, False, ""), True, closed[1]
 
     if THINK_OPEN.startswith(stripped):
         return ThinkState(True, False, searched[-len(THINK_CLOSE) :]), False, ""
