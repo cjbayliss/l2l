@@ -11,6 +11,7 @@ import pycurl
 
 from l2l import __version__
 from l2l.console import Console
+from l2l.context import Context
 from l2l.effects import log_entry, log_error, log_request, run_log_write
 from l2l.errors import (
     HttpError,
@@ -57,8 +58,7 @@ from l2l.monads import (
     reference_write_when,
     result_bind,
 )
-from l2l.plans import plan_backoff, retry_delay, transient
-from l2l.settings import Config, Context
+from l2l.settings import Config
 from l2l.text import (
     SseDone,
     SseEvent,
@@ -74,6 +74,36 @@ from l2l.text import (
     strip_think_tag,
     think_step,
 )
+
+
+def transient(error: TranslationError) -> bool:
+    match error:
+        case HttpError(kind="unreachable"):
+            return True
+
+        case HttpError(kind="status", status=int(code)):
+            return code == 429 or code >= 500
+
+        case _:
+            return False
+
+
+def plan_backoff(base_delay: float, cap: float, attempts: int) -> tuple[float, ...]:
+    def delay(index: int) -> float:
+        exponential: float = base_delay * 2.0**index
+        return min(exponential, cap)
+
+    return tuple(delay(index) for index in range(max(attempts, 0)))
+
+
+def retry_delay(error: TranslationError, planned: float) -> float:
+    match error:
+        case HttpError(retry_after=float(seconds)):
+            return max(planned, seconds)
+
+        case _:
+            return planned
+
 
 ProgressCallback = Callable[[str, int], IO[None]]
 RawLineLogger = Callable[[bytes], IO[None]]

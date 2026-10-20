@@ -1,5 +1,5 @@
 from l2l.errors import BudgetError, ConfigError, HttpError, describe, fail_http
-from l2l.plans import plan_backoff, retry_delay, transient
+from l2l.http import plan_backoff, retry_delay, transient
 
 
 def test_transient_kinds() -> None:

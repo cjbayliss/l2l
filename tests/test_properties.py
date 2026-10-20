@@ -7,9 +7,8 @@ from fakes import DONE_LINES
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
-from l2l.http import StreamState, ingest_raw_line
+from l2l.http import StreamState, ingest_raw_line, plan_backoff
 from l2l.monads import Ok, cons_to_tuple
-from l2l.plans import plan_backoff
 from l2l.settings import PartialApiSettings
 from l2l.text import (
     ThinkState,

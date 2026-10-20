@@ -14,6 +14,7 @@ from l2l.cache import (
     store_translation,
 )
 from l2l.console import Console
+from l2l.context import Context
 from l2l.effects import now, write_stdout, write_text_file
 from l2l.errors import (
     TranslationError,
@@ -93,7 +94,6 @@ from l2l.plans import (
     verbose_log,
 )
 from l2l.settings import (
-    Context,
     PassDefinition,
     paragraph_tolerance,
     pass_salt,

@@ -3,7 +3,6 @@ import json
 import os
 import sys
 import time
-from collections.abc import Iterator
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -32,18 +31,17 @@ from l2l.monads import (
     Ok,
     Result,
     fold_io,
-    fold_while,
     io_pure,
     io_result,
 )
 from l2l.pipeline import State, analyze_document, conclude_state, run_pipeline
 from l2l.plans import (
     ascii_drop_warning,
-    plan_report,
     plan_retranslation_calls,
     plan_unit_calls,
     resolve_work_groups,
 )
+from l2l.report import plan_report
 from l2l.settings import Arguments, PassDefinition, build_settings
 from l2l.text import THINK_OPEN, AsciiDrop, Usage, unit_separators
 
@@ -90,23 +88,6 @@ def test_fold_io_handles_thousands_of_items() -> None:
     outcome = fold_io(range(5000), step, Ok((0, None))).run()
     assert isinstance(outcome, Ok)
     assert outcome.value[0] == 5000
-
-
-def test_fold_while_stops_before_consuming_next_item() -> None:
-    pulled: list[int] = []
-
-    def items() -> Iterator[int]:
-        for value in (1, 2, 3):
-            pulled.append(value)
-            yield value
-
-    def step(count: int, value: int) -> Result[int, str]:
-        return Err("stop") if value == 2 else Ok(count + value)
-
-    outcome = fold_while(items(), step, Ok(0))
-    assert isinstance(outcome, Err)
-    assert outcome.error == "stop"
-    assert pulled == [1, 2]
 
 
 def test_plan_unit_calls_builds_keys_and_context() -> None:

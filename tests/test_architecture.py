@@ -15,8 +15,9 @@ LAYERS: tuple[tuple[str, ...], ...] = (
     ("errors", "text"),
     ("console", "effects", "glossary"),
     ("keys", "settings"),
-    ("config", "plans"),
-    ("cache", "http"),
+    ("context",),
+    ("config", "http", "plans"),
+    ("cache", "report"),
     ("ascii",),
     ("pipeline",),
     ("cli",),
@@ -32,7 +33,6 @@ MUTABLE_DATACLASS_EXEMPT = frozenset({("monads", "Reference")})
 
 MUTATION_ASSIGNMENT_ALLOWLIST = frozenset(
     {
-        ("monads", "io_memoize"),
         ("monads", "modify_reference"),
         ("monads", "modify_reference_with"),
         ("monads", "write_reference"),

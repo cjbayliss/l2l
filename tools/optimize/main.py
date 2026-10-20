@@ -30,9 +30,9 @@ from l2l.monads import (
     io_and_then,
     io_bind,
     io_map,
+    io_pair,
     io_pure,
     io_result,
-    io_sequence,
     result_either,
 )
 
@@ -234,19 +234,15 @@ def run_and_finish(optimization_environment: OptimizationEnvironment) -> IO[int]
         )
 
     return io_bind(
-        io_sequence(
-            (
-                read_jsonl(
-                    os.path.join(
-                        optimization_environment.working_directory, "ledger.jsonl"
-                    )
-                ),
-                read_jsonl(
-                    os.path.join(
-                        optimization_environment.working_directory, "history.jsonl"
-                    )
-                ),
-            )
+        io_pair(
+            read_jsonl(
+                os.path.join(optimization_environment.working_directory, "ledger.jsonl")
+            ),
+            read_jsonl(
+                os.path.join(
+                    optimization_environment.working_directory, "history.jsonl"
+                )
+            ),
         ),
         resumed,
     )

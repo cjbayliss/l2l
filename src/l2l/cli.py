@@ -11,6 +11,7 @@ from typing import Any, TextIO
 from l2l import __version__
 from l2l.config import load_setup
 from l2l.console import Console, StatusLine, toggle_verbose
+from l2l.context import Context, OpenHTTP
 from l2l.effects import (
     RunLog,
     Sleep,
@@ -54,8 +55,8 @@ from l2l.monads import (
     maybe_either,
 )
 from l2l.pipeline import run_pipeline
-from l2l.plans import plan_report, setup_report
-from l2l.settings import Arguments, Context, OpenHTTP, Setup, build_settings
+from l2l.report import plan_report, setup_report
+from l2l.settings import Arguments, Setup, build_settings
 from l2l.text import Translated, Usage
 
 
