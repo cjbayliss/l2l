@@ -83,7 +83,7 @@ def test_missing_config_fails_with_error(tmp_path: Path) -> None:
     code, stdout, stderr = run_l2l(tmp_path, [str(tmp_path / "absent.toml")])
     assert code == 2
     assert stdout == ""
-    assert "not found" in stderr
+    assert "could not read" in stderr
 
 
 def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
