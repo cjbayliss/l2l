@@ -35,6 +35,11 @@ from l2l.glossary import (
     parse_model_glossary_reply,
 )
 from l2l.http import RepairOutcome, chat, repaired_call
+from l2l.languages import (
+    expected_target_scripts,
+    script_description,
+    scripts_description,
+)
 from l2l.messages import (
     analysis_information_message,
     done_in_message,
@@ -45,9 +50,9 @@ from l2l.messages import (
     pass_started_message,
     retranslate_information_message,
     retranslate_majority_message,
-    retranslate_pair_message,
     retranslate_skipped_message,
     retranslate_unit_message,
+    retranslation_check_message,
     retranslation_target_script_message,
     stage_done_line,
     unit_cache_hit_message,
@@ -84,17 +89,20 @@ from l2l.plans import (
     UnitCall,
     build_pass_user,
     build_unit_retry_user,
+    instruction_with_target_language,
     pass_chunk_plans,
     plan_information_message,
     plan_retranslation_calls,
     plan_unit_calls,
     resolve_work_groups,
     script_mismatch_problem,
+    target_script_problem,
     unit_output_problem,
     verbose_log,
 )
 from l2l.settings import (
     PassDefinition,
+    effective_target_language,
     paragraph_tolerance,
     pass_salt,
     resolve_call_settings,
@@ -104,12 +112,12 @@ from l2l.text import (
     Usage,
     cache_key,
     count_paragraphs,
-    detect_language_pair,
     ensure_blank_line_separators,
     estimate_tokens,
     excerpt,
     make_chunks,
     paragraph_is_in_target_script,
+    source_script,
     split_paragraphs,
     split_units_to_budget,
     unit_separators,
@@ -162,10 +170,14 @@ def run_analysis(
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
+    instruction = instruction_with_target_language(
+        pass_definition.instruction,
+        effective_target_language(run_context.target_language, pass_definition),
+    )
     return io_result_map(
         chat(
             run_context,
-            instruction_with_glossary(pass_definition.instruction, glossary),
+            instruction_with_glossary(instruction, glossary),
             text,
             model,
             parameters,
@@ -182,11 +194,13 @@ def analyze_document(
     full_text: str,
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
+    instruction = instruction_with_target_language(
+        pass_definition.instruction,
+        effective_target_language(run_context.target_language, pass_definition),
+    )
     budget = max(
         run_context.config.maximum_tokens
-        - estimate_tokens(
-            instruction_with_glossary(pass_definition.instruction, glossary)
-        )
+        - estimate_tokens(instruction_with_glossary(instruction, glossary))
         - run_context.settings.analysis_reserve_tokens,
         1,
     )
@@ -221,7 +235,13 @@ def run_analysis_once(
     key = cache_key(
         full_text,
         model,
-        pass_salt(pass_definition, glossary),
+        pass_salt(
+            pass_definition,
+            glossary,
+            effective_language=effective_target_language(
+                run_context.target_language, pass_definition
+            ),
+        ),
         overrides=parameters,
     )
     return cached_translation(
@@ -381,14 +401,24 @@ def retranslate_untranslated(
             lambda _: io_result(Ok(Translated(text, usage))),
         )
 
-    pair = detect_language_pair(source_paragraphs, paragraphs)
+    target_language = effective_target_language(
+        run_context.target_language, pass_definition
+    )
+    target_scripts = expected_target_scripts(target_language)
+    source_script_name = source_script(source_paragraphs)
+    source_script_display = (
+        script_description(source_script_name) if source_script_name else ""
+    )
+    target_scripts_display = (
+        scripts_description(target_scripts) if target_scripts else ""
+    )
     flagged = tuple(
         index
         for index, (source, output) in enumerate(
             zip(source_paragraphs, paragraphs, strict=True)
         )
         if untranslated_paragraph(
-            source, output, pair, run_context.settings.ascii_character_map
+            source, output, target_scripts, run_context.settings.ascii_character_map
         )
     )
     if not flagged:
@@ -433,7 +463,7 @@ def retranslate_untranslated(
         return untranslated_paragraph(
             source_paragraphs[index],
             body,
-            pair,
+            target_scripts,
             run_context.settings.ascii_character_map,
         )
 
@@ -453,7 +483,7 @@ def retranslate_untranslated(
     def cacheable_retranslation(index: int) -> Callable[[str], bool]:
         def cacheable(text: str) -> bool:
             translated = not paragraph_untranslated(index, text)
-            return translated or paragraph_is_in_target_script(text, pair)
+            return translated or paragraph_is_in_target_script(text, target_scripts)
 
         return cacheable
 
@@ -503,12 +533,12 @@ def retranslate_untranslated(
         verify_kept = tuple(
             (index, body)
             for index, body in untranslated
-            if paragraph_is_in_target_script(body, pair)
+            if paragraph_is_in_target_script(body, target_scripts)
         )
         unresolved = tuple(
             (index, body)
             for index, body in untranslated
-            if not paragraph_is_in_target_script(body, pair)
+            if not paragraph_is_in_target_script(body, target_scripts)
         )
 
         def collected(_: None) -> Result[Translated, TranslationError]:
@@ -599,7 +629,11 @@ def retranslate_untranslated(
             )
         ),
         io_bind(
-            run_context.console.log(retranslate_pair_message(pair)),
+            run_context.console.log(
+                retranslation_check_message(
+                    target_language, source_script_display, target_scripts_display
+                )
+            ),
             lambda _: io_bind(start(None), conclude),
         ),
     )
@@ -645,16 +679,6 @@ def run_analysis_pass(
             ),
             after_analysis,
         ),
-    )
-
-
-def effective_update_target_language(
-    run_context: Context, pass_definition: PassDefinition
-) -> str:
-    return (
-        pass_definition.target_language
-        if pass_definition.target_language is not None
-        else run_context.target_language
     )
 
 
@@ -716,7 +740,9 @@ def run_update_glossary_pass(
             )
         )
 
-    target_language = effective_update_target_language(run_context, pass_definition)
+    target_language = effective_target_language(
+        run_context.target_language, pass_definition
+    )
 
     def after_reply(
         reply_result: Result[Translated, TranslationError],
@@ -789,11 +815,21 @@ def run_unit(
                 return paragraph_tolerance(pass_definition.ensure_paragraphs)
 
     def validate(output: str) -> Maybe[str]:
+        target_language = effective_target_language(
+            run_context.target_language, pass_definition
+        )
         return maybe_or(
             unit_output_problem(
                 call.source_chunk, output, run_context.settings, unit_tolerance()
             ),
-            script_mismatch_problem(call.source_chunk, call.work_chunk, output),
+            maybe_or(
+                target_script_problem(
+                    output,
+                    target_language,
+                    expected_target_scripts(target_language),
+                ),
+                script_mismatch_problem(call.source_chunk, call.work_chunk, output),
+            ),
         )
 
     def build_retry_user(bad_output: str, problem: str) -> str:
@@ -844,7 +880,15 @@ def run_unit(
             run_context,
             call.model,
             call.parameters,
-            instruction_with_glossary(pass_definition.instruction, glossary),
+            instruction_with_glossary(
+                instruction_with_target_language(
+                    pass_definition.instruction,
+                    effective_target_language(
+                        run_context.target_language, pass_definition
+                    ),
+                ),
+                glossary,
+            ),
             build_pass_user(
                 call.source_chunk, call.work_chunk, call.analysis, call.context
             ),

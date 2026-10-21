@@ -9,11 +9,13 @@ from typing import Any
 from l2l.context import Context
 from l2l.errors import TranslationError, fail_budget, fail_pass
 from l2l.glossary import GlossaryEntry, render_glossary_block
+from l2l.languages import scripts_description
 from l2l.monads import IO, NOTHING, Err, Just, Maybe, Ok, Result
 from l2l.settings import (
     PassDefinition,
     PassMode,
     Settings,
+    effective_target_language,
     pass_salt,
     resolve_call_settings,
     retranslation_salt,
@@ -21,6 +23,7 @@ from l2l.settings import (
 from l2l.text import (
     AsciiDrop,
     cache_key,
+    character_scripts,
     count_paragraphs,
     dominant_script,
     estimate_tokens,
@@ -78,7 +81,34 @@ def script_mismatch_problem(
 
     return Just(
         "the reply is in the source language (%s script) instead of the "
-        "draft's language" % source_script
+        "draft's language" % scripts_description((source_script,))
+    )
+
+
+def instruction_with_target_language(instruction: str, target_language: str) -> str:
+    return instruction.replace("{target_language}", target_language)
+
+
+def target_script_problem(
+    output: str,
+    target_language: str,
+    target_scripts: tuple[str, ...],
+) -> Maybe[str]:
+    if not target_scripts:
+        return NOTHING
+
+    scripts = tuple(
+        script for character in output for script in character_scripts(character)
+    )
+    if not scripts:
+        return NOTHING
+
+    if any(script in target_scripts for script in scripts):
+        return NOTHING
+
+    return Just(
+        "the reply is not in the target language (%s: %s script)"
+        % (target_language, scripts_description(target_scripts))
     )
 
 
@@ -479,7 +509,12 @@ def plan_unit_calls(
         return build_unit_call(
             model,
             parameters,
-            pass_salt(pass_definition, glossary, retry_attempt),
+            pass_salt(
+                pass_definition,
+                glossary,
+                retry_attempt,
+                effective_target_language(run_context.target_language, pass_definition),
+            ),
             trailing_separators,
             index,
             index,
@@ -517,7 +552,11 @@ def plan_retranslation_calls(
         return build_unit_call(
             model,
             parameters,
-            retranslation_salt(pass_definition, glossary),
+            retranslation_salt(
+                pass_definition,
+                glossary,
+                effective_target_language(run_context.target_language, pass_definition),
+            ),
             separators,
             position,
             index,

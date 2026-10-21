@@ -26,12 +26,13 @@ from l2l.config import (
     resolve_passes,
     string_api_setting,
     timeout_api_setting,
+    validate_ascii_target_language,
     validate_document,
 )
 from l2l.errors import FileError, TranslationError, describe
 from l2l.glossary import GlossaryEntry
 from l2l.monads import Err, Ok, Result, io_pure
-from l2l.report import mask_api_key, setup_report
+from l2l.report import mask_api_key, setup_report, setup_warnings
 from l2l.settings import (
     DEFAULT_API_SETTINGS,
     Arguments,
@@ -39,6 +40,7 @@ from l2l.settings import (
     PartialApiSettings,
     PassDefinition,
     Setup,
+    effective_target_language,
     pass_salt,
     resolve_call_settings,
     retranslation_salt,
@@ -441,7 +443,7 @@ def test_resolve_call_settings() -> None:
 
 def test_pass_salt() -> None:
     pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
-    assert pass_salt(pass_definition) == (CACHE_SALT_VERSION + "\x00p\x00i\x00[]\n")
+    assert pass_salt(pass_definition) == (CACHE_SALT_VERSION + "\x00p\x00i\x00\x00[]\n")
 
 
 def test_pass_salt_includes_the_glossary() -> None:
@@ -460,27 +462,29 @@ def test_pass_salt_omits_the_glossary_for_update_glossary_passes() -> None:
     assert pass_salt(pass_definition, entries) == pass_salt(pass_definition)
 
 
-def test_pass_salt_includes_target_language_for_update_glossary_passes() -> None:
-    pass_definition = PassDefinition("p", "", "update_glossary", {}, None, False)
-    localized = replace(pass_definition, target_language="Chinese")
-    assert pass_salt(localized) != pass_salt(pass_definition)
+def test_pass_salt_includes_the_effective_language_for_every_mode() -> None:
+    for mode in ("analysis", "chunk", "paragraph", "update_glossary"):
+        pass_definition = PassDefinition("p", "i", mode, {}, None, False)
+        assert pass_salt(pass_definition, effective_language="Chinese") != pass_salt(
+            pass_definition, effective_language="French"
+        )
 
 
-def test_pass_salt_uses_effective_language_for_update_glossary_passes() -> None:
-    pass_definition = PassDefinition("p", "", "update_glossary", {}, None, False)
-    localized = replace(pass_definition, target_language="Chinese")
-    assert pass_salt(pass_definition, effective_language="French") != pass_salt(
-        pass_definition, effective_language="Chinese"
+def test_pass_salt_normalizes_the_effective_language() -> None:
+    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
+    assert pass_salt(pass_definition, effective_language="Chinese") == pass_salt(
+        pass_definition, effective_language="chinese"
     )
     assert pass_salt(pass_definition, effective_language="Chinese") == pass_salt(
-        localized
+        pass_definition, effective_language="  CHINESE  "
     )
 
 
-def test_pass_salt_ignores_effective_language_for_other_modes() -> None:
-    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
-    assert pass_salt(pass_definition, effective_language="French") == pass_salt(
-        pass_definition, effective_language="Chinese"
+def test_pass_salt_uses_the_effective_language_for_update_glossary_passes() -> None:
+    pass_definition = PassDefinition("p", "", "update_glossary", {}, None, False)
+    assert pass_salt(pass_definition, effective_language="Chinese") == pass_salt(
+        replace(pass_definition, target_language="Chinese"),
+        effective_language="Chinese",
     )
 
 
@@ -490,6 +494,26 @@ def test_retranslation_salt_extends_the_pass_salt() -> None:
         pass_salt(pass_definition) + "\x00retranslate"
     )
     assert retranslation_salt(pass_definition) != pass_salt(pass_definition)
+
+
+def test_retranslation_salt_includes_the_effective_language() -> None:
+    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
+    assert retranslation_salt(
+        pass_definition, effective_language="Chinese"
+    ) != retranslation_salt(pass_definition, effective_language="English")
+
+
+def test_effective_target_language_prefers_the_pass_override() -> None:
+    pass_definition = PassDefinition(
+        "p", "i", "chunk", {}, None, False, target_language="Chinese"
+    )
+    assert effective_target_language("English", pass_definition) == "Chinese"
+    assert (
+        effective_target_language(
+            "English", PassDefinition("p", "i", "chunk", {}, None, False)
+        )
+        == "English"
+    )
 
 
 def test_cache_key_variants() -> None:
@@ -600,7 +624,9 @@ def test_setup_report_lists_api_and_passes() -> None:
     assert '"temperature": 1' in report
     assert (
         "pass 1/1 [translate]: mode=chunk ascii=True ensure_paragraphs=False"
-        " retranslate_untranslated=None model=<default> instruction=2 chars" in report
+        " retranslate_untranslated=None model=<default> instruction=2 chars"
+        " target_language=English scripts=Latin"
+        " uses_target_language_placeholder=False" in report
     )
     assert "options.ensure_paragraphs: True" in report
 
@@ -1049,3 +1075,141 @@ def test_setup_report_omits_glossary_when_unconfigured() -> None:
         target_language="English",
     )
     assert "glossary" not in setup_report(setup, False)
+
+
+def make_setup_for_warnings(
+    target_language: str = "English",
+    passes: tuple[PassDefinition, ...] = (),
+    glossary_entries: tuple[GlossaryEntry, ...] = (),
+) -> Setup:
+    return Setup(
+        config=Config("u", "k", "m", 1.0, 1000, {}),
+        passes=passes,
+        ensure_paragraphs=False,
+        target_language=target_language,
+        glossary_entries=glossary_entries,
+    )
+
+
+def test_validate_ascii_target_language_accepts_latin_targets() -> None:
+    for language in ("English", "Spanish", "English (US)"):
+        result = validate_ascii_target_language(
+            make_setup_for_warnings(
+                language,
+                (PassDefinition("p", "i", "chunk", {}, None, True),),
+            )
+        )
+        assert isinstance(result, Ok)
+
+
+def test_validate_ascii_target_language_rejects_known_non_latin_targets() -> None:
+    result = validate_ascii_target_language(
+        make_setup_for_warnings(
+            "Chinese",
+            (PassDefinition("p", "i", "chunk", {}, None, True),),
+        )
+    )
+    assert isinstance(result, Err)
+    message = describe(result.error)
+    assert "pass 1 [p]" in message
+    assert "Chinese" in message
+    assert "Han" in message
+    assert "ascii = false" in message
+
+
+def test_validate_ascii_target_language_honours_the_pass_override() -> None:
+    result = validate_ascii_target_language(
+        make_setup_for_warnings(
+            "English",
+            (
+                PassDefinition(
+                    "p", "i", "chunk", {}, None, True, target_language="Japanese"
+                ),
+            ),
+        )
+    )
+    assert isinstance(result, Err)
+    assert "Japanese" in describe(result.error)
+
+
+def test_validate_ascii_target_language_allows_unknown_targets() -> None:
+    result = validate_ascii_target_language(
+        make_setup_for_warnings(
+            "Zorblaxian",
+            (PassDefinition("p", "i", "chunk", {}, None, True),),
+        )
+    )
+    assert isinstance(result, Ok)
+
+
+def test_setup_warnings_report_unknown_languages() -> None:
+    warnings = setup_warnings(make_setup_for_warnings("Zorblaxian"))
+    assert len(warnings) == 1
+    assert "not recognized" in warnings[0]
+    assert setup_warnings(make_setup_for_warnings("English")) == ()
+
+
+def test_setup_warnings_report_instructions_without_the_language() -> None:
+    without_language = make_setup_for_warnings(
+        "English", (PassDefinition("p", "T.", "chunk", {}, None, False),)
+    )
+    assert any(
+        "does not mention the target language" in warning
+        for warning in setup_warnings(without_language)
+    )
+
+    with_placeholder = make_setup_for_warnings(
+        "English",
+        (
+            PassDefinition(
+                "p", "Translate into {target_language}.", "chunk", {}, None, False
+            ),
+        ),
+    )
+    assert setup_warnings(with_placeholder) == ()
+
+    named = make_setup_for_warnings(
+        "English",
+        (PassDefinition("p", "Translate into English.", "chunk", {}, None, False),),
+    )
+    assert setup_warnings(named) == ()
+
+    glossary_pass = make_setup_for_warnings(
+        "English", (PassDefinition("p", "", "update_glossary", {}, None, False),)
+    )
+    assert setup_warnings(glossary_pass) == ()
+
+
+def test_setup_warnings_report_glossary_script_mismatches() -> None:
+    mismatched = make_setup_for_warnings(
+        "English",
+        glossary_entries=(
+            GlossaryEntry("南京", MappingProxyType({"translated": "南京"})),
+        ),
+    )
+    warnings = setup_warnings(mismatched)
+    assert len(warnings) == 1
+    assert "glossary entry" in warnings[0]
+    assert "another target language" in warnings[0]
+
+    matched = make_setup_for_warnings(
+        "English",
+        glossary_entries=(
+            GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),
+        ),
+    )
+    assert setup_warnings(matched) == ()
+
+    unknown = make_setup_for_warnings(
+        "Zorblaxian",
+        glossary_entries=(
+            GlossaryEntry("南京", MappingProxyType({"translated": "南京"})),
+        ),
+    )
+    assert all("glossary entry" not in warning for warning in setup_warnings(unknown))
+
+    untranslated_entry = make_setup_for_warnings(
+        "English",
+        glossary_entries=(GlossaryEntry("南京", MappingProxyType({})),),
+    )
+    assert setup_warnings(untranslated_entry) == ()

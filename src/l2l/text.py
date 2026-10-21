@@ -9,8 +9,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from itertools import accumulate, chain
-from types import MappingProxyType
 from typing import Any
+
+import unicodedataplus
 
 from l2l.monads import NOTHING, Just, Maybe, maybe_or_else
 
@@ -259,27 +260,17 @@ def has_alphanumeric_characters(text: str) -> bool:
 
 UNKNOWN_SCRIPT = ""
 
-SCRIPT_ALIASES: Mapping[str, str] = MappingProxyType(
-    {
-        "hiragana": "kana",
-        "katakana": "kana",
-        "katakana-hiragana": "kana",
-        "halfwidth": "kana",
-        "fullwidth": "latin",
-    }
-)
+
+def character_scripts(character: str) -> tuple[str, ...]:
+    if not character.isalpha():
+        return ()
+
+    return tuple(str(script) for script in unicodedataplus.script_extensions(character))
 
 
-def letter_script(char: str) -> str:
-    if not char.isalpha():
-        return UNKNOWN_SCRIPT
-
-    name = unicodedata.name(char, "")
-    if not name:
-        return UNKNOWN_SCRIPT
-
-    script = name.split(" ", 1)[0].lower()
-    return SCRIPT_ALIASES.get(script, script)
+def letter_script(character: str) -> str:
+    scripts = character_scripts(character)
+    return scripts[0] if scripts else UNKNOWN_SCRIPT
 
 
 def dominant_script(text: str) -> str:
@@ -288,21 +279,14 @@ def dominant_script(text: str) -> str:
     return max(tally, default=(0, UNKNOWN_SCRIPT))[1]
 
 
-def detect_language_pair(
-    source_paragraphs: tuple[str, ...], output_paragraphs: tuple[str, ...]
-) -> tuple[str, str]:
-    source_script = dominant_script("".join(source_paragraphs))
-    candidates = tuple(dominant_script(paragraph) for paragraph in output_paragraphs)
-    votes = tuple(script for script in candidates if script != source_script)
-    tally = ((votes.count(vote), vote) for vote in frozenset(votes))
-    target_script = max(tally, default=(0, UNKNOWN_SCRIPT))[1]
-    return source_script, target_script
+def source_script(paragraphs: tuple[str, ...]) -> str:
+    return dominant_script("".join(paragraphs))
 
 
 def untranslated_paragraph(
     source: str,
     output: str,
-    pair: tuple[str, str],
+    target_scripts: tuple[str, ...],
     character_map: Mapping[str, str],
 ) -> bool:
     if not has_letters(source):
@@ -315,24 +299,23 @@ def untranslated_paragraph(
     if not has_letters(output):
         return not has_alphanumeric_characters(output)
 
-    target_script = pair[1]
-    if not target_script:
+    if not target_scripts:
         return not any(char.isascii() and char.isalpha() for char in output)
 
-    return not any(letter_script(char) == target_script for char in output)
+    return not any(
+        any(script in target_scripts for script in character_scripts(character))
+        for character in output
+    )
 
 
-def paragraph_is_in_target_script(output: str, pair: tuple[str, str]) -> bool:
+def paragraph_is_in_target_script(output: str, target_scripts: tuple[str, ...]) -> bool:
     if not has_letters(output):
         return False
 
-    target_script = pair[1]
-    if not target_script:
+    if not target_scripts:
         return all(char.isascii() for char in output if char.isalpha())
 
-    return all(
-        letter_script(char) == target_script for char in output if char.isalpha()
-    )
+    return dominant_script(output) in target_scripts
 
 
 def excerpt(text: str, limit: int = 60) -> str:
@@ -515,7 +498,7 @@ def cache_path(cache_directory: str, key: str) -> str:
     return os.path.join(cache_directory, key + ".txt")
 
 
-CACHE_SALT_VERSION = "3"
+CACHE_SALT_VERSION = "4"
 
 
 def cache_key(

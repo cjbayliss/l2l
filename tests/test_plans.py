@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from fakes import (
     FakeHttp,
     chunk_pass,
@@ -10,7 +12,13 @@ from fakes import (
 )
 
 from l2l.monads import Just, Nothing
-from l2l.plans import plan_retranslation_calls, plan_unit_calls, resolve_work_groups
+from l2l.plans import (
+    instruction_with_target_language,
+    plan_retranslation_calls,
+    plan_unit_calls,
+    resolve_work_groups,
+    target_script_problem,
+)
 from l2l.report import plan_report
 from l2l.settings import PassDefinition
 from l2l.text import unit_separators
@@ -87,11 +95,14 @@ def test_plan_report_lists_units_and_keys() -> None:
     lines = report.splitlines()
     assert lines[0] == "source: 8 character(s), 2 paragraph(s), ~7 tokens"
     assert (
-        lines[1]
-        == "pass 1/2 [translate]: mode=chunk, 1 unit(s), source budget ~3500 tokens"
+        lines[1] == "pass 1/2 [translate]: target language English (scripts: Latin), "
+        "mode=chunk, 1 unit(s), source budget ~3500 tokens"
     )
     assert "unit 1/1: ~7 source tokens, cache key " in lines[2]
-    assert lines[3] == "pass 2/2 [translate]: mode=paragraph, 2 unit(s)"
+    assert lines[3] == (
+        "pass 2/2 [translate]: target language English (scripts: Latin), "
+        "mode=paragraph, 2 unit(s)"
+    )
     assert "unit 1/2:" in lines[4]
     assert "unit 2/2:" in lines[5]
 
@@ -101,7 +112,10 @@ def test_plan_report_reports_analysis_pass() -> None:
     run_context = make_context(console, FakeHttp([]).open)
     analysis = PassDefinition("prep", "Brief.", "analysis", {}, None, False)
     report = plan_report(run_context, (analysis,), "你好。")
-    assert "pass 1/1 [prep]: mode=analysis, 1 call with the whole document" in report
+    assert (
+        "pass 1/1 [prep]: target language English (scripts: Latin), "
+        "mode=analysis, 1 call with the whole document" in report
+    )
 
 
 def test_plan_report_exposes_budget_violations() -> None:
@@ -122,11 +136,12 @@ def test_plan_report_reserves_draft_space_in_later_passes() -> None:
     text = paragraph + "\n\n" + paragraph
     report = plan_report(run_context, (chunk_pass(), chunk_pass("polish")), text)
     assert (
-        "pass 1/2 [translate]: mode=chunk, 1 unit(s), source budget ~383 tokens"
-        in report
+        "pass 1/2 [translate]: target language English (scripts: Latin), "
+        "mode=chunk, 1 unit(s), source budget ~383 tokens" in report
     )
     assert (
-        "pass 2/2 [polish]: mode=chunk, 2 unit(s), source budget ~191 tokens" in report
+        "pass 2/2 [polish]: target language English (scripts: Latin), "
+        "mode=chunk, 2 unit(s), source budget ~191 tokens" in report
     )
 
 
@@ -164,10 +179,13 @@ def test_plan_report_shows_update_glossary_pass() -> None:
         "你好。",
     )
     assert (
-        "pass 1/2 [glossary]: mode=update_glossary, 1 call with the whole "
-        "document, target language Chinese" in report
+        "pass 1/2 [glossary]: target language Chinese (scripts: Han), "
+        "mode=update_glossary, 1 call with the whole document" in report
     )
-    assert "pass 2/2 [translate]: mode=chunk, 1 unit(s)" in report
+    assert (
+        "pass 2/2 [translate]: target language English (scripts: Latin), "
+        "mode=chunk, 1 unit(s)" in report
+    )
 
 
 def test_plan_report_update_glossary_falls_back_to_context_language() -> None:
@@ -175,3 +193,79 @@ def test_plan_report_update_glossary_falls_back_to_context_language() -> None:
     run_context = make_context(console, FakeHttp([]).open, target_language="French")
     report = plan_report(run_context, (update_pass(),), "你好。")
     assert "target language French" in report
+
+
+def test_target_script_problem_accepts_expected_scripts() -> None:
+    assert isinstance(target_script_problem("Hello.", "English", ("Latn",)), Nothing)
+    assert isinstance(target_script_problem("Привет.", "Russian", ("Cyrl",)), Nothing)
+    assert isinstance(
+        target_script_problem("こんにちは世界。", "Japanese", ("Hira", "Kana", "Hani")),
+        Nothing,
+    )
+    assert isinstance(target_script_problem("2078", "English", ("Latn",)), Nothing)
+    assert isinstance(target_script_problem("Hello.", "Zorblaxian", ()), Nothing)
+
+
+def test_target_script_problem_rejects_other_scripts() -> None:
+    problem = target_script_problem("你好。", "English", ("Latn",))
+    assert isinstance(problem, Just)
+    assert "not in the target language" in problem.value
+    assert "English" in problem.value
+    assert "Latin" in problem.value
+
+    assert isinstance(target_script_problem("Привет.", "Chinese", ("Hani",)), Just)
+    assert isinstance(
+        target_script_problem("Hello.", "Japanese", ("Hira", "Kana", "Hani")), Just
+    )
+
+
+def test_instruction_with_target_language_substitutes_only_the_placeholder() -> None:
+    assert (
+        instruction_with_target_language(
+            "Translate to {target_language}. Keep JSON braces {like: this}.",
+            "Chinese",
+        )
+        == "Translate to Chinese. Keep JSON braces {like: this}."
+    )
+
+
+def test_plan_keys_differ_by_effective_language() -> None:
+    console, _ = make_console()
+    plan = (("一。",),)
+    separators = unit_separators(plan, ("s1",))
+    english_context = make_context(console, FakeHttp([]).open)
+    chinese_context = make_context(
+        console, FakeHttp([]).open, target_language="Chinese"
+    )
+    english_calls = plan_unit_calls(
+        english_context, paragraph_pass(), plan, plan, separators, None
+    )
+    chinese_calls = plan_unit_calls(
+        chinese_context, paragraph_pass(), plan, plan, separators, None
+    )
+    overridden_calls = plan_unit_calls(
+        english_context,
+        replace(paragraph_pass(), target_language="Chinese"),
+        plan,
+        plan,
+        separators,
+        None,
+    )
+    assert english_calls[0].key != chinese_calls[0].key
+    assert overridden_calls[0].key == chinese_calls[0].key
+
+
+def test_retranslation_keys_differ_by_effective_language() -> None:
+    console, _ = make_console()
+    sources = ("你好。",)
+    english_context = make_context(console, FakeHttp([]).open)
+    chinese_context = make_context(
+        console, FakeHttp([]).open, target_language="Chinese"
+    )
+    english_calls = plan_retranslation_calls(
+        english_context, paragraph_pass(), sources, sources, (0,), ("s1",), None
+    )
+    chinese_calls = plan_retranslation_calls(
+        chinese_context, paragraph_pass(), sources, sources, (0,), ("s1",), None
+    )
+    assert english_calls[0].key != chinese_calls[0].key

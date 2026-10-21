@@ -92,9 +92,9 @@ Translation behaviour:
   renderings; repeatable, later files override earlier entries, and
   generated or updated entries are written to the first file.
 - `-l`, `--target-language LANG` - target language; required unless
-  `target_language` is set in the config file. Used by
-  `--extract-glossary` and by `update_glossary` passes without their own
-  `target_language`.
+  `target_language` is set in the config file. Drives
+  `{target_language}` prompt substitution, cache separation, glossary
+  extraction, and target script validation for every pass.
 - `-P`, `--ensure-paragraphs` - check the paragraph count after each
   pass (see `ensure_paragraphs` under `[options]`).
 - `-b`, `--best-effort` - keep the last reply and continue when a unit
@@ -172,8 +172,15 @@ target_language = "English"
 ```
 
 The top-level `target_language` is required unless `--target-language`
-is passed; it names the language produced by glossary extraction and
-`update_glossary` passes.
+is passed. It names the language every pass produces, controls cache
+identity, and supplies the expected script for output validation. Names
+and BCP 47 tags are resolved through CLDR likely subtags, so `English`,
+`en`, `eng`, `Chinese (Simplified)`, and `zh-Hant` all work. Japanese
+and Korean accept both of their usual scripts (Hiragana, Katakana, and
+Han; Hangul and Han). Names that CLDR does not know are allowed: they
+disable script checks, fall back to the ASCII-letter heuristic, and
+produce a warning. Script reports use Unicode Script names such as
+`Latin`, `Han`, and `Cyrillic`.
 
 A minimal example:
 
@@ -187,7 +194,7 @@ model = "z-ai/glm-5.3-flash"
 
 [[pass]]
 name = "translate"
-instruction = "Translate Chinese fiction to natural English."
+instruction = "Translate Chinese fiction to natural {target_language}."
 mode = "chunk"
 ```
 
@@ -248,9 +255,13 @@ Passes run in order; each pass's output is the next's input.
   calls, merged over `[api] params`.
 - `ascii`, `ensure_paragraphs`, `retranslate_untranslated` - per-pass
   overrides of the `[options]` toggles below.
-- `target_language` - per-pass target language, currently used only by
-  `mode = "update_glossary"`; falls back to the resolved global target
-  language (config file or `--target-language`).
+- `target_language` - per-pass target language for every mode; falls
+  back to the resolved global target language (config file or
+  `--target-language`). It selects prompt substitution, the cache
+  namespace, and script validation for that pass.
+- `instruction` and `instruction_file` may contain `{target_language}`;
+  it is replaced with the pass's effective target language. Other braces
+  are left untouched, and no directive is appended automatically.
 
 Modes:
 
@@ -282,11 +293,34 @@ Modes:
 
 A typical multi-pass setup pairs an `analysis` pass with a `chunk` pass.
 
+### Target language and script checks
+
+The required target language is used throughout the pipeline, not only
+by glossary extraction:
+
+- Every unit reply is checked for at least one letter in an expected
+  target script. A reply that is empty, has the wrong paragraph count,
+  exceeds the size ratio, or carries no expected-script letters is
+  re-asked with corrective feedback. Output without letters is accepted,
+  and Japanese/Korean multi-script output is not flagged.
+- `--check-config` and the per-pass dry-run report show the target
+  language and scripts for each pass. The pass line also shows whether
+  its instruction uses `{target_language}`.
+- Unknown language names, instructions that never mention the target
+  language, and glossary renderings from another target language produce
+  warnings at startup.
+- The language is part of every cache key, so changing
+  `--target-language` cannot reuse a translation made for another
+  language. Older cache entries become unreachable after the salt
+  version changes.
+
 ### `[options]` - global toggles
 
-- `ascii` (default `false`) - enforce pure ASCII output. Assumes a
-  Latin-script target language; leave it off for targets such as
-  Russian, Greek, Japanese, or Chinese.
+- `ascii` (default `false`) - enforce pure ASCII output. Configuration
+  loading fails when a pass enables `ascii` and its resolved target
+  language is known to use a non-Latin script (Russian, Greek, Japanese,
+  Chinese, and so on); set `ascii = false` or choose a Latin-script
+  target. Unknown target names still load.
 - `ensure_paragraphs` (default `false`) - paragraph-count checking.
   `true` asks each pass's output to match the source paragraph count
   exactly, re-running a mismatching chunk-mode pass with one call per
@@ -299,16 +333,16 @@ A typical multi-pass setup pairs an `analysis` pass with a `chunk` pass.
   paragraph.
 - `retranslate_untranslated` (default `false`) - after each pass, l2l
   flags output paragraphs that still read as their source (matching
-  after mechanical ASCII folding, or carrying no letters of the detected
-  target script while also carrying no numbers; a paragraph reduced to
-  digits and punctuation, such as "2078!" for "2078年！", is considered
-  translated) and re-asks each one with the pass's instruction plus
-  neighbouring source paragraphs as context. When more than half the
-  paragraphs are flagged in a chunk-mode pass, the whole pass is re-run
-  once first. Retranslations are cached only when they no longer read as
-  untranslated; a paragraph still untranslated afterwards fails the run
-  with exit code 1 (the last reply is kept with a warning under
-  `--best-effort`), and the failed repair is not cached.
+  after mechanical ASCII folding, or carrying no letters of the
+  configured target script while also carrying no numbers; a paragraph
+  reduced to digits and punctuation, such as "2078!" for "2078年！", is
+  considered translated) and re-asks each one with the pass's
+  instruction plus neighbouring source paragraphs as context. When more
+  than half the paragraphs are flagged in a chunk-mode pass, the whole
+  pass is re-run once first. Retranslations are cached only when they no
+  longer read as untranslated; a paragraph still untranslated afterwards
+  fails the run with exit code 1 (the last reply is kept with a warning
+  under `--best-effort`), and the failed repair is not cached.
 
 ## Testing
 

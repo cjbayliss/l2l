@@ -19,7 +19,6 @@ from l2l.text import (
     add_usage,
     cache_key,
     chars_per_token,
-    detect_language_pair,
     dominant_script,
     drop_non_ascii,
     ensure_blank_line_separators,
@@ -34,6 +33,7 @@ from l2l.text import (
     parse_cost,
     parse_tokens,
     regroup_by_plan,
+    source_script,
     split_paragraphs,
     split_sentences,
     split_to_budget,
@@ -293,7 +293,7 @@ def test_build_unit_retry_user_includes_distinct_draft() -> None:
 def test_script_mismatch_problem_flags_source_language_reply() -> None:
     problem = script_mismatch_problem("你好。", "Hello.", "你好。")
     assert isinstance(problem, Just)
-    assert "source language (cjk script)" in problem.value
+    assert "source language (Han script)" in problem.value
 
 
 def test_script_mismatch_problem_accepts_translated_reply() -> None:
@@ -339,103 +339,126 @@ def test_has_letters() -> None:
     assert not has_letters("--- ……")
 
 
-def test_letter_script_buckets_letters_by_family() -> None:
-    assert letter_script("A") == "latin"
-    assert letter_script("а") == "cyrillic"
-    assert letter_script("α") == "greek"
-    assert letter_script("あ") == "kana"
-    assert letter_script("ア") == "kana"
-    assert letter_script("ｱ") == "kana"
-    assert letter_script("中") == "cjk"
-    assert letter_script("م") == "arabic"
-    assert letter_script("א") == "hebrew"
-    assert letter_script("ก") == "thai"
-    assert letter_script("ह") == "devanagari"
+def test_letter_script_buckets_letters_by_script() -> None:
+    assert letter_script("A") == "Latn"
+    assert letter_script("а") == "Cyrl"
+    assert letter_script("α") == "Grek"
+    assert letter_script("あ") == "Hira"
+    assert letter_script("ア") == "Kana"
+    assert letter_script("ｱ") == "Kana"
+    assert letter_script("中") == "Hani"
+    assert letter_script("م") == "Arab"
+    assert letter_script("א") == "Hebr"
+    assert letter_script("ก") == "Thai"
+    assert letter_script("ह") == "Deva"
     assert letter_script("7") == ""
     assert letter_script("!") == ""
     assert letter_script(chr(0x0378)) == ""
 
 
-def test_dominant_script_picks_the_most_frequent_family() -> None:
-    assert dominant_script("Hello, world!") == "latin"
-    assert dominant_script("你好，世界！") == "cjk"
-    assert dominant_script("café") == "latin"
+def test_dominant_script_picks_the_most_frequent_script() -> None:
+    assert dominant_script("Hello, world!") == "Latn"
+    assert dominant_script("你好，世界！") == "Hani"
+    assert dominant_script("café") == "Latn"
     assert dominant_script("12.3 ---") == ""
 
 
-def test_detect_language_pair_votes_per_paragraph() -> None:
-    assert detect_language_pair(("你好。", "世界。"), ("Hello.", "World.")) == (
-        "cjk",
-        "latin",
-    )
-    assert detect_language_pair(("你好。", "世界。"), ("Привет.", "Мир.")) == (
-        "cjk",
-        "cyrillic",
-    )
-    assert detect_language_pair(("Hello.", "World."), ("Ciao.", "Mondo.")) == (
-        "latin",
-        "",
-    )
+def test_source_script_uses_the_dominant_paragraph_script() -> None:
+    assert source_script(("你好。", "世界。")) == "Hani"
+    assert source_script(("Hello.", "World.")) == "Latn"
+    assert source_script(("12.3", "---")) == ""
 
 
 def test_untranslated_paragraph_flags_echo_with_punctuation_drift() -> None:
     character_map = build_settings().ascii_character_map
-    pair = ("cjk", "latin")
+    target_scripts = ("Latn",)
     source = "你好，世界！"
-    assert untranslated_paragraph(source, "你好，世界！", pair, character_map)
-    assert untranslated_paragraph(source, "你好,世界!  ", pair, character_map)
-    assert not untranslated_paragraph(source, "Hello, world!", pair, character_map)
-    assert not untranslated_paragraph(source, "Hi. World.", pair, character_map)
+    assert untranslated_paragraph(source, "你好，世界！", target_scripts, character_map)
+    assert untranslated_paragraph(source, "你好,世界!  ", target_scripts, character_map)
+    assert not untranslated_paragraph(
+        source, "Hello, world!", target_scripts, character_map
+    )
+    assert not untranslated_paragraph(
+        source, "Hi. World.", target_scripts, character_map
+    )
 
 
 def test_untranslated_paragraph_flags_output_without_target_script() -> None:
     character_map = build_settings().ascii_character_map
-    assert untranslated_paragraph("你好。", "。", ("cjk", "latin"), character_map)
-    assert untranslated_paragraph("你好。", "……", ("cjk", "latin"), character_map)
-    assert untranslated_paragraph("你好。", "", ("cjk", "latin"), character_map)
-    assert untranslated_paragraph("你好。", "。", ("cjk", ""), character_map)
-    assert not untranslated_paragraph("你好。", "世界。", ("cjk", "cjk"), character_map)
+    assert untranslated_paragraph("你好。", "。", ("Latn",), character_map)
+    assert untranslated_paragraph("你好。", "……", ("Latn",), character_map)
+    assert untranslated_paragraph("你好。", "", ("Latn",), character_map)
+    assert untranslated_paragraph("你好。", "。", (), character_map)
+    assert not untranslated_paragraph("你好。", "世界。", ("Hani",), character_map)
 
 
 def test_untranslated_paragraph_accepts_non_latin_targets() -> None:
     character_map = build_settings().ascii_character_map
-    pair = ("cjk", "cyrillic")
-    assert not untranslated_paragraph("你好。", "Привет.", pair, character_map)
-    assert not untranslated_paragraph("你好。", "Привет!", pair, character_map)
-    assert untranslated_paragraph("你好。", "Hello.", pair, character_map)
-    assert untranslated_paragraph("你好。", "……", pair, character_map)
-    assert untranslated_paragraph("你好。", "你好！", pair, character_map)
+    target_scripts = ("Cyrl",)
+    assert not untranslated_paragraph(
+        "你好。", "Привет.", target_scripts, character_map
+    )
+    assert not untranslated_paragraph(
+        "你好。", "Привет!", target_scripts, character_map
+    )
+    assert untranslated_paragraph("你好。", "Hello.", target_scripts, character_map)
+    assert untranslated_paragraph("你好。", "……", target_scripts, character_map)
+    assert untranslated_paragraph("你好。", "你好！", target_scripts, character_map)
+
+
+def test_untranslated_paragraph_accepts_multiscript_targets() -> None:
+    character_map = build_settings().ascii_character_map
+    target_scripts = ("Hira", "Kana", "Hani")
+    assert not untranslated_paragraph(
+        "Hello.", "こんにちは世界。", target_scripts, character_map
+    )
+    assert not untranslated_paragraph(
+        "Hello.", "世界です。", target_scripts, character_map
+    )
+    assert untranslated_paragraph("Hello.", "Hola.", target_scripts, character_map)
 
 
 def test_untranslated_paragraph_accepts_letterless_output_with_numbers() -> None:
     character_map = build_settings().ascii_character_map
-    pair = ("cjk", "latin")
-    assert not untranslated_paragraph("2078年！", "2078!", pair, character_map)
-    assert not untranslated_paragraph("2078年！", "The year 2078!", pair, character_map)
-    assert untranslated_paragraph("2078年！", "！", pair, character_map)
-    assert untranslated_paragraph("2078年！", "……", pair, character_map)
+    target_scripts = ("Latn",)
+    assert not untranslated_paragraph(
+        "2078年！", "2078!", target_scripts, character_map
+    )
+    assert not untranslated_paragraph(
+        "2078年！", "The year 2078!", target_scripts, character_map
+    )
+    assert untranslated_paragraph("2078年！", "！", target_scripts, character_map)
+    assert untranslated_paragraph("2078年！", "……", target_scripts, character_map)
 
 
 def test_untranslated_paragraph_ignores_letterless_sources() -> None:
     character_map = build_settings().ascii_character_map
     for source in ("12", "---", "……", "...!"):
-        assert not untranslated_paragraph(
-            source, source, ("cjk", "latin"), character_map
-        )
+        assert not untranslated_paragraph(source, source, ("Latn",), character_map)
+
+
+def test_untranslated_paragraph_falls_back_to_ascii_for_unknown_targets() -> None:
+    character_map = build_settings().ascii_character_map
+    assert not untranslated_paragraph("你好。", "Hello.", (), character_map)
+    assert untranslated_paragraph("你好。", "你好！", (), character_map)
+    assert untranslated_paragraph("你好。", "……", (), character_map)
 
 
 def test_paragraph_is_in_target_script_accepts_target_script_paragraphs() -> None:
-    assert paragraph_is_in_target_script("BIU!", ("han", "latin"))
-    assert paragraph_is_in_target_script("BIU.", ("han", "latin"))
-    assert paragraph_is_in_target_script("Hello.", ("cjk", ""))
-    assert paragraph_is_in_target_script("Привет.", ("cjk", "cyrillic"))
+    assert paragraph_is_in_target_script("BIU!", ("Latn",))
+    assert paragraph_is_in_target_script("BIU.", ("Latn",))
+    assert paragraph_is_in_target_script("Hello.", ())
+    assert paragraph_is_in_target_script("Привет.", ("Cyrl",))
+    assert paragraph_is_in_target_script("こんにちは世界。", ("Hira", "Kana", "Hani"))
+    assert paragraph_is_in_target_script("世界です。", ("Hira", "Kana", "Hani"))
 
 
 def test_paragraph_is_in_target_script_rejects_other_scripts() -> None:
-    assert not paragraph_is_in_target_script("哔！", ("han", "latin"))
-    assert not paragraph_is_in_target_script("他说, BIU!", ("han", "latin"))
-    assert not paragraph_is_in_target_script("……", ("han", "latin"))
-    assert not paragraph_is_in_target_script("你好。", ("cjk", ""))
+    assert not paragraph_is_in_target_script("哔！", ("Latn",))
+    assert not paragraph_is_in_target_script("他说得对，BIU!", ("Latn",))
+    assert not paragraph_is_in_target_script("……", ("Latn",))
+    assert not paragraph_is_in_target_script("你好。", ())
+    assert not paragraph_is_in_target_script("Hello.", ("Hira", "Kana", "Hani"))
 
 
 def test_excerpt_collapses_and_truncates() -> None:

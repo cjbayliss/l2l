@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Any, Literal
 
 from l2l.glossary import GlossaryEntry, entries_to_json_text
+from l2l.languages import normalized_language_name
 from l2l.text import CACHE_SALT_VERSION
 
 
@@ -256,13 +257,23 @@ def salt(*parts: str) -> str:
     return "\x00".join(parts)
 
 
+def effective_target_language(
+    global_target_language: str, pass_definition: PassDefinition
+) -> str:
+    return (
+        pass_definition.target_language
+        if pass_definition.target_language is not None
+        else global_target_language
+    )
+
+
 def glossary_salt_component(
     pass_definition: PassDefinition,
     glossary: tuple[GlossaryEntry, ...],
-    effective_language: str = "",
 ) -> str:
     if pass_definition.mode == "update_glossary":
-        return effective_language or pass_definition.target_language or ""
+        return ""
+
     return entries_to_json_text(glossary)
 
 
@@ -276,7 +287,8 @@ def pass_salt(
         CACHE_SALT_VERSION,
         pass_definition.name,
         pass_definition.instruction,
-        glossary_salt_component(pass_definition, glossary, effective_language),
+        normalized_language_name(effective_language),
+        glossary_salt_component(pass_definition, glossary),
     )
     return salt(base, "retry%d" % retry_attempt) if retry_attempt else base
 
@@ -284,5 +296,9 @@ def pass_salt(
 def retranslation_salt(
     pass_definition: PassDefinition,
     glossary: tuple[GlossaryEntry, ...] = (),
+    effective_language: str = "",
 ) -> str:
-    return salt(pass_salt(pass_definition, glossary), "retranslate")
+    return salt(
+        pass_salt(pass_definition, glossary, effective_language=effective_language),
+        "retranslate",
+    )

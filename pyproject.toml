@@ -4,7 +4,7 @@ description = "Translate text between any pair of languages on stdin/stdout usin
 readme = "README.md"
 requires-python = ">=3.15"
 version = "0.9.0"
-dependencies = ["pycurl>=7.45.7"]
+dependencies = ["langcodes[data]>=3.5.1", "pycurl>=7.45.7", "unicodedataplus>=16.0.0"]
 
 [dependency-groups]
 dev = [
@@ -60,6 +60,10 @@ explicit_package_bases = true
 python_version = "3.15"
 mypy_path = ["src", "tests"]
 files = ["src", "tests", "tools"]
+
+[[tool.mypy.overrides]]
+module = ["unicodedataplus"]
+ignore_missing_imports = true
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]

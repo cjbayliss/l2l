@@ -21,6 +21,7 @@ from l2l.glossary import (
     merge_glossary_entries,
     parse_glossary_document,
 )
+from l2l.languages import expected_target_scripts, scripts_description
 from l2l.monads import (
     IO,
     Ok,
@@ -48,6 +49,7 @@ from l2l.settings import (
     PartialApiSettings,
     PassDefinition,
     Setup,
+    effective_target_language,
 )
 
 
@@ -1006,24 +1008,63 @@ def require_glossary_for_update_passes(
     )
 
 
+def validate_ascii_target_language(
+    setup: Setup,
+) -> Result[Setup, TranslationError]:
+    conflicting = tuple(
+        (
+            pass_definition,
+            effective_target_language(setup.target_language, pass_definition),
+        )
+        for pass_definition in setup.passes
+        if pass_definition.ascii is True
+    )
+
+    def problem(
+        indexed: tuple[int, tuple[PassDefinition, str]],
+    ) -> str | None:
+        position, (pass_definition, language) = indexed
+        scripts = expected_target_scripts(language)
+        if not scripts or "Latn" in scripts:
+            return None
+
+        return (
+            "pass %d [%s]: ascii = true but target language %s uses the "
+            "%s script; set ascii = false or choose a Latin-script target"
+            % (position, pass_definition.name, language, scripts_description(scripts))
+        )
+
+    problems = tuple(
+        message
+        for message in map(problem, enumerate(conflicting, 1))
+        if message is not None
+    )
+    if problems:
+        return fail_config(problems[0])
+
+    return Ok(setup)
+
+
 def build_setup(
     config: Config,
     pair: Result[ResolvedPasses, TranslationError],
     target_language: str,
     ensure_paragraphs_flag: bool = False,
 ) -> Result[Setup, TranslationError]:
-    def with_options(resolved: ResolvedPasses) -> Setup:
+    def with_options(resolved: ResolvedPasses) -> Result[Setup, TranslationError]:
         effective = (
             resolved[0].get("ensure_paragraphs", False) or ensure_paragraphs_flag
         )
-        return Setup(
-            config=config,
-            passes=apply_default_options(resolved[1], resolved[0], effective),
-            ensure_paragraphs=effective,
-            target_language=target_language,
+        return validate_ascii_target_language(
+            Setup(
+                config=config,
+                passes=apply_default_options(resolved[1], resolved[0], effective),
+                ensure_paragraphs=effective,
+                target_language=target_language,
+            )
         )
 
-    return result_bind(pair, lambda resolved: Ok(with_options(resolved)))
+    return result_bind(pair, with_options)
 
 
 def load_setup(arguments: Arguments, environment: Mapping[str, str]) -> IO[SetupResult]:
