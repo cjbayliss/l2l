@@ -754,7 +754,9 @@ def extract_glossary_program(
                 log_setup_warnings(console, setup), io_bind(extract(), handle_reply)
             )
 
-        return io_bind(load_setup(parsed, environment), use_setup)
+        return io_bind(
+            load_setup(parsed, environment, resolve_pipeline_passes=False), use_setup
+        )
 
     return with_console_io(stderr, with_console, verbose=parsed.verbose)
 

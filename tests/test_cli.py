@@ -665,6 +665,32 @@ def test_extract_glossary_empty_stdin_exits_two(tmp_path: Path) -> None:
     assert not output.exists()
 
 
+def test_extract_glossary_ignores_pipeline_passes(tmp_path: Path) -> None:
+    output = tmp_path / "book-glossary.json"
+    http = FakeHttp([glossary_reply([{"original": "南京", "translated": "Nanjing"}])])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            "-c",
+            str(write_update_glossary_config(tmp_path)),
+            "--cache-directory",
+            str(tmp_path / "cache"),
+            "--extract-glossary",
+            str(output),
+        ],
+        {},
+        io.StringIO("book text"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 0
+    assert json.loads(output.read_text(encoding="utf-8")) == [
+        {"original": "南京", "translated": "Nanjing"}
+    ]
+
+
 UPDATE_GLOSSARY_CONFIG_TEXT = CONFIG_TEXT.replace(
     '\n[[pass]]\nname = "translate"\nmode = "chunk"\n'
     'instruction = "Translate to {target_language}."',
