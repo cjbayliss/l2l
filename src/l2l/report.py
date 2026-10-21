@@ -5,6 +5,11 @@ from collections.abc import Mapping
 from typing import Any
 
 from l2l.context import Context
+from l2l.languages import (
+    expected_target_scripts,
+    instruction_uses_target_language,
+    scripts_description,
+)
 from l2l.messages import chunk_budget_violation_message
 from l2l.monads import Just
 from l2l.plans import (
@@ -14,8 +19,13 @@ from l2l.plans import (
     preceding_modes,
     resolve_work_groups,
 )
-from l2l.settings import PassDefinition, Setup
-from l2l.text import estimate_tokens, split_paragraphs, unit_separators
+from l2l.settings import PassDefinition, Setup, effective_target_language
+from l2l.text import (
+    dominant_script,
+    estimate_tokens,
+    split_paragraphs,
+    unit_separators,
+)
 
 
 def plan_report(
@@ -29,6 +39,14 @@ def plan_report(
 
     def report_pass(indexed: tuple[int, PassDefinition]) -> tuple[str, ...]:
         number, pass_definition = indexed
+        language = effective_target_language(
+            run_context.target_language, pass_definition
+        )
+        scripts = expected_target_scripts(language)
+        language_note = "target language %s (scripts: %s)" % (
+            language,
+            scripts_description(scripts),
+        )
         header = "pass %d/%d [%s]" % (
             number,
             len(pass_definitions),
@@ -36,16 +54,15 @@ def plan_report(
         )
         match pass_definition.mode:
             case "analysis":
-                return ("%s: mode=analysis, 1 call with the whole document" % header,)
+                return (
+                    "%s: %s, mode=analysis, 1 call with the whole document"
+                    % (header, language_note),
+                )
 
             case "update_glossary":
                 return (
-                    "%s: mode=update_glossary, 1 call with the whole document, "
-                    "target language %s"
-                    % (
-                        header,
-                        pass_definition.target_language or run_context.target_language,
-                    ),
+                    "%s: %s, mode=update_glossary, 1 call with the whole document"
+                    % (header, language_note),
                 )
 
             case _:
@@ -89,9 +106,10 @@ def plan_report(
                     else ()
                 )
                 return (
-                    "%s: mode=%s, %d unit(s)%s"
+                    "%s: %s, mode=%s, %d unit(s)%s"
                     % (
                         header,
+                        language_note,
                         pass_definition.mode,
                         len(work_groups),
                         budget_note,
@@ -146,6 +164,50 @@ def parameters_text(parameters: Mapping[str, Any]) -> str:
     return json.dumps(dict(parameters), sort_keys=True, ensure_ascii=False, default=str)
 
 
+def setup_warnings(setup: Setup) -> tuple[str, ...]:
+    unknown_language_warnings: tuple[str, ...] = (
+        (
+            "target language %s is not recognized; script checks fall back to "
+            "the ASCII-letter heuristic" % setup.target_language,
+        )
+        if not expected_target_scripts(setup.target_language)
+        else ()
+    )
+    instruction_warnings = tuple(
+        "pass %d [%s]: instruction does not mention the target language %s; "
+        "add {target_language} to the instruction"
+        % (
+            number,
+            pass_definition.name,
+            effective_target_language(setup.target_language, pass_definition),
+        )
+        for number, pass_definition in enumerate(setup.passes, 1)
+        if pass_definition.mode != "update_glossary"
+        and pass_definition.instruction.strip()
+        and not instruction_uses_target_language(
+            pass_definition.instruction,
+            effective_target_language(setup.target_language, pass_definition),
+        )
+    )
+    glossary_warnings = tuple(
+        "glossary entry %r renders as %r, which is not in the target "
+        "script(s) %s; the glossary may come from another target language"
+        % (
+            entry.original,
+            rendering,
+            scripts_description(expected_target_scripts(setup.target_language)),
+        )
+        for entry in setup.glossary_entries
+        for rendering in (entry.attributes.get("translated", ""),)
+        if rendering.strip()
+        and expected_target_scripts(setup.target_language)
+        and dominant_script(rendering)
+        and dominant_script(rendering)
+        not in expected_target_scripts(setup.target_language)
+    )
+    return unknown_language_warnings + instruction_warnings + glossary_warnings
+
+
 def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
     config = setup.config
     api_lines: tuple[str, ...] = (
@@ -160,13 +222,15 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
             else ()
         ),
     )
+    global_scripts = expected_target_scripts(setup.target_language)
     pass_lines = tuple(
         line
         for number, pass_definition in enumerate(setup.passes, 1)
         for line in (
             (
                 "pass %d/%d [%s]: mode=%s ascii=%s ensure_paragraphs=%s "
-                "retranslate_untranslated=%s model=%s instruction=%d chars"
+                "retranslate_untranslated=%s model=%s instruction=%d chars "
+                "target_language=%s scripts=%s uses_target_language_placeholder=%s"
                 % (
                     number,
                     len(setup.passes),
@@ -177,6 +241,15 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
                     pass_definition.retranslate_untranslated,
                     pass_definition.model or "<default>",
                     len(pass_definition.instruction),
+                    effective_target_language(setup.target_language, pass_definition),
+                    scripts_description(
+                        expected_target_scripts(
+                            effective_target_language(
+                                setup.target_language, pass_definition
+                            )
+                        )
+                    ),
+                    "{target_language}" in pass_definition.instruction,
                 ),
                 *(
                     ("  params: %s" % parameters_text(pass_definition.parameters),)
@@ -197,7 +270,10 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
     )
     return "\n".join(
         api_lines
-        + ("target_language: %s" % setup.target_language,)
+        + (
+            "target_language: %s (scripts: %s)"
+            % (setup.target_language, scripts_description(global_scripts)),
+        )
         + pass_lines
         + glossary_lines
         + ("options.ensure_paragraphs: %s" % effective_ensure_paragraphs,)

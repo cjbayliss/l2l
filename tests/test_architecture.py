@@ -11,7 +11,7 @@ TESTS = Path(__file__).resolve().parent
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
 LAYERS: tuple[tuple[str, ...], ...] = (
-    ("monads", "messages"),
+    ("languages", "monads", "messages"),
     ("errors", "text"),
     ("console", "effects", "glossary"),
     ("keys", "settings"),
@@ -115,7 +115,7 @@ REF_HELPERS = frozenset(
     }
 )
 
-THIRD_PARTY_ROOTS = frozenset({"l2l", "pycurl"})
+THIRD_PARTY_ROOTS = frozenset({"l2l", "langcodes", "pycurl", "unicodedataplus"})
 
 
 TOOL_IO_EDGES = frozenset({"main"})
@@ -576,8 +576,8 @@ def test_package_imports_stay_sanctioned() -> None:
         if root not in sanctioned
     ]
     assert not problems, (
-        "imports outside the standard library and pycurl: %s; keep the "
-        "package standard-library only" % "; ".join(problems)
+        "imports outside the sanctioned third-party roots: %s; keep the "
+        "dependency set deliberate" % "; ".join(problems)
     )
 
 

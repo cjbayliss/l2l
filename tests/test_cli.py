@@ -33,7 +33,7 @@ CONFIG_TEXT = (
     "\n[[pass]]\n"
     'name = "translate"\n'
     'mode = "chunk"\n'
-    'instruction = "Translate."'
+    'instruction = "Translate to {target_language}."'
 )
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
@@ -118,8 +118,10 @@ def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
     assert "api.base_url: http://endpoint.test/v1" in stdout
     assert "api.model: m" in stdout
     assert "api.api_key: secr...ey" in stdout
-    assert "target_language: English" in stdout
+    assert "target_language: English (scripts: Latin)" in stdout
     assert "pass 1/1 [translate]: mode=chunk" in stdout
+    assert "target_language=English scripts=Latin" in stdout
+    assert "uses_target_language_placeholder=True" in stdout
 
 
 def test_check_config_reports_setup_errors(tmp_path: Path) -> None:
@@ -138,7 +140,10 @@ def test_dry_run_prints_plan_without_calling_endpoint(tmp_path: Path) -> None:
     assert code == 0
     assert stderr == ""
     assert "source: 3 character(s), 1 paragraph(s)" in stdout
-    assert "pass 1/1 [translate]: mode=chunk, 1 unit(s)" in stdout
+    assert (
+        "pass 1/1 [translate]: target language English (scripts: Latin), "
+        "mode=chunk, 1 unit(s)" in stdout
+    )
     assert "unit 1/1" in stdout
     assert "cache key" in stdout
 
@@ -661,14 +666,15 @@ def test_extract_glossary_empty_stdin_exits_two(tmp_path: Path) -> None:
 
 
 UPDATE_GLOSSARY_CONFIG_TEXT = CONFIG_TEXT.replace(
-    '\n[[pass]]\nname = "translate"\nmode = "chunk"\ninstruction = "Translate."',
+    '\n[[pass]]\nname = "translate"\nmode = "chunk"\n'
+    'instruction = "Translate to {target_language}."',
     "\n[[pass]]\n"
     'name = "glossary"\n'
     'mode = "update_glossary"\n'
     "\n[[pass]]\n"
     'name = "translate"\n'
     'mode = "chunk"\n'
-    'instruction = "Translate."',
+    'instruction = "Translate to {target_language}."',
 )
 
 
@@ -862,10 +868,13 @@ def test_dry_run_shows_update_glossary_pass(tmp_path: Path) -> None:
     )
     assert code == 0
     assert (
-        "pass 1/2 [glossary]: mode=update_glossary, 1 call with the whole "
-        "document, target language English" in stdout
+        "pass 1/2 [glossary]: target language English (scripts: Latin), "
+        "mode=update_glossary, 1 call with the whole document" in stdout
     )
-    assert "pass 2/2 [translate]: mode=chunk, 1 unit(s)" in stdout
+    assert (
+        "pass 2/2 [translate]: target language English (scripts: Latin), "
+        "mode=chunk, 1 unit(s)" in stdout
+    )
 
 
 def test_update_glossary_cached_run_still_writes_the_file(tmp_path: Path) -> None:
@@ -1256,3 +1265,69 @@ def test_update_glossary_pass_reports_a_glossary_write_failure(
     assert "could not write glossary file" in stderr.getvalue()
     assert json.loads(glossary.read_text(encoding="utf-8")) == []
     assert len(http.requests) == 1
+
+
+def test_unknown_target_language_warns_on_stderr(tmp_path: Path) -> None:
+    code, stdout, stderr = run_l2l(
+        tmp_path,
+        ["-c", str(write_config(tmp_path)), "--dry-run", "-l", "Zorblaxian"],
+    )
+    assert code == 0
+    assert "target language Zorblaxian (scripts: unknown)" in stdout
+    assert "warning: target language Zorblaxian is not recognized" in stderr
+
+
+def test_target_language_separates_the_cache_and_fills_the_prompt(
+    tmp_path: Path,
+) -> None:
+    http = FakeHttp(
+        [
+            FakeStreamResponse(
+                [
+                    *stream_chunks("Hello."),
+                    {
+                        "choices": [{"delta": {}}],
+                        "usage": {
+                            "prompt_tokens": 1,
+                            "completion_tokens": 1,
+                            "cost": 0.0,
+                        },
+                    },
+                ]
+            )
+        ]
+    )
+    base_flags = [
+        "-c",
+        str(write_config(tmp_path)),
+        "--cache-directory",
+        str(tmp_path / "cache"),
+    ]
+
+    def run(language: str) -> int:
+        return cli.main(
+            [*base_flags, "-l", language],
+            {},
+            io.StringIO("你好。"),
+            io.StringIO(),
+            io.StringIO(),
+            time.time,
+            http.open,
+        ).run()
+
+    assert run("English") == 0
+    assert run("French") == 0
+    assert len(http.requests) == 2
+    systems = [
+        json.loads(request.body)["messages"][0]["content"] for request in http.requests
+    ]
+    assert systems == ["Translate to English.", "Translate to French."]
+
+
+def test_check_config_reports_script_checks_in_the_pass_line(tmp_path: Path) -> None:
+    code, stdout, _stderr = run_l2l(
+        tmp_path, ["-c", str(write_config(tmp_path)), "--check-config"]
+    )
+    assert code == 0
+    assert "uses_target_language_placeholder=True" in stdout
+    assert "warning:" not in stdout

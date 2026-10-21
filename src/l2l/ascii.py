@@ -8,6 +8,7 @@ from l2l.context import Context
 from l2l.effects import now
 from l2l.errors import TranslationError, fail_ascii, fail_ascii_collapse
 from l2l.http import repaired_call
+from l2l.languages import normalized_language_name
 from l2l.messages import (
     ascii_cache_hit_message,
     ascii_llm_message,
@@ -36,7 +37,12 @@ from l2l.plans import (
     build_ascii_retry_user,
     verbose_log,
 )
-from l2l.settings import PassDefinition, resolve_call_settings, salt
+from l2l.settings import (
+    PassDefinition,
+    effective_target_language,
+    resolve_call_settings,
+    salt,
+)
 from l2l.text import (
     CACHE_SALT_VERSION,
     Translated,
@@ -65,6 +71,9 @@ def ascii_fix_llm(
             CACHE_SALT_VERSION,
             "ascii-fix",
             pass_definition.name,
+            normalized_language_name(
+                effective_target_language(run_context.target_language, pass_definition)
+            ),
             run_context.settings.ascii_fix_instruction,
         ),
         output_paragraph,

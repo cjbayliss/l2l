@@ -6,6 +6,7 @@ import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import reduce
 from typing import Any, TextIO
 
 from l2l import __version__
@@ -55,7 +56,7 @@ from l2l.monads import (
     maybe_either,
 )
 from l2l.pipeline import run_pipeline
-from l2l.report import plan_report, setup_report
+from l2l.report import plan_report, setup_report, setup_warnings
 from l2l.settings import Arguments, Setup, build_settings
 from l2l.text import Translated, Usage
 
@@ -451,6 +452,14 @@ def dry_run_program(
     )
 
 
+def log_setup_warnings(console: Console, setup: Setup) -> IO[None]:
+    return reduce(
+        io_and_then,
+        (console.log("warning: %s" % warning) for warning in setup_warnings(setup)),
+        io_pure(None),
+    )
+
+
 def check_config_program(
     parsed: Arguments,
     environment: Mapping[str, str],
@@ -465,7 +474,10 @@ def check_config_program(
 
             setup = setup_result.value
             report = setup_report(setup, setup.ensure_paragraphs)
-            return io_map(write_stdout(stdout, report + "\n"), lambda _: 0)
+            warnings = "".join(
+                "\nwarning: %s" % warning for warning in setup_warnings(setup)
+            )
+            return io_map(write_stdout(stdout, report + warnings + "\n"), lambda _: 0)
 
         return io_bind(load_setup(parsed, environment), use_setup)
 
@@ -566,9 +578,13 @@ def run_main_program(
                 return io_map(console.log(describe(setup_result.error)), lambda _: 2)
 
             setup = setup_result.value
+            warnings = log_setup_warnings(console, setup)
             if parsed.dry_run:
-                return dry_run_program(
-                    parsed, setup, console, clock, open_http, sleep, text, stdout
+                return io_and_then(
+                    warnings,
+                    dry_run_program(
+                        parsed, setup, console, clock, open_http, sleep, text, stdout
+                    ),
                 )
 
             def with_started(started: float) -> IO[int]:
@@ -640,7 +656,7 @@ def run_main_program(
                     with_cache_directory,
                 )
 
-            return io_bind(now(clock), with_started)
+            return io_and_then(warnings, io_bind(now(clock), with_started))
 
         return io_bind(load_setup(parsed, environment), use_setup)
 
@@ -734,7 +750,9 @@ def extract_glossary_program(
 
                 return IO(execute)
 
-            return io_bind(extract(), handle_reply)
+            return io_and_then(
+                log_setup_warnings(console, setup), io_bind(extract(), handle_reply)
+            )
 
         return io_bind(load_setup(parsed, environment), use_setup)
 

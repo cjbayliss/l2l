@@ -156,7 +156,9 @@ name = "l2l"
 version = "0.9.0"
 source = { editable = "." }
 dependencies = [
+    { name = "langcodes", extra = ["data"] },
     { name = "pycurl" },
+    { name = "unicodedataplus" },
 ]
 
 [package.dev-dependencies]
@@ -170,7 +172,11 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pycurl", specifier = ">=7.45.7" }]
+requires-dist = [
+    { name = "langcodes", extras = ["data"], specifier = ">=3.5.1" },
+    { name = "pycurl", specifier = ">=7.45.7" },
+    { name = "unicodedataplus", specifier = ">=16.0.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [
@@ -180,6 +186,32 @@ dev = [
     { name = "pytest-cov", specifier = ">=5" },
     { name = "ruff", specifier = ">=0.6" },
     { name = "types-pycurl", specifier = ">=7.45" },
+]
+
+[[package]]
+name = "langcodes"
+version = "3.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a9/75/f9edc5d72945019312f359e69ded9f82392a81d49c5051ed3209b100c0d2/langcodes-3.5.1.tar.gz", hash = "sha256:40bff315e01b01d11c2ae3928dd4f5cbd74dd38f9bd912c12b9a3606c143f731", size = 191084, upload-time = "2025-12-02T16:22:01.627Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/c1/d10b371bcba7abce05e2b33910e39c33cfa496a53f13640b7b8e10bb4d2b/langcodes-3.5.1-py3-none-any.whl", hash = "sha256:b6a9c25c603804e2d169165091d0cdb23934610524a21d226e4f463e8e958a72", size = 183050, upload-time = "2025-12-02T16:21:59.954Z" },
+]
+
+[package.optional-dependencies]
+data = [
+    { name = "language-data" },
+]
+
+[[package]]
+name = "language-data"
+version = "1.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "marisa-trie" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/61/50/2518b4d0805f4d1f10166837829ad0bd71dcee3ec33fa84aa8c0db23c13c/language_data-1.4.0.tar.gz", hash = "sha256:800e6457e7beda781c156e02d7707e38db2ded026472e07e2c055dc8446ee574", size = 5309660, upload-time = "2025-11-28T13:45:25.217Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ad/d1/68e2bcca94c9bbdc122a71e504e0b6a6c3e31541b1bad33fee0205996006/language_data-1.4.0-py3-none-any.whl", hash = "sha256:f741927c24ab14cbed2a57bc2bfe82b00cff266c427179597e8b14123364f084", size = 5572678, upload-time = "2025-11-28T13:45:23.381Z" },
 ]
 
 [[package]]
@@ -220,6 +252,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/85/6d/7c31a506eb847bc58aeb2402d58e17605e821f68ab5df5e66fe274a6df41/librt-0.16.0-cp315-cp315t-win_amd64.whl", hash = "sha256:bd3150023d3dc2bc70f3784e59ffa1140d56ddba3d8125b3d6f9f85221279bfc", size = 126134, upload-time = "2026-09-29T00:55:06.017Z" },
     { url = "https://files.pythonhosted.org/packages/36/69/7a5d10ac409c4da0355e054a14371871da9b5557fcc42772cd00181c6cce/librt-0.16.0-cp315-cp315t-win_arm64.whl", hash = "sha256:8ceafb70f2a4f0826f11031942e59c0728fd98da112dc346d4352bde1e486866", size = 116391, upload-time = "2026-09-29T00:55:07.484Z" },
 ]
+
+[[package]]
+name = "marisa-trie"
+version = "1.4.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/77/5d/e235921b5b74818cb65b557fa05cc6201c2c1612d4866ff75c835bcf808d/marisa_trie-1.4.1.tar.gz", hash = "sha256:44ce3bdbeb7c950d463e460184fc3e18702df9ef0edb826bac672fd789fb1d20", size = 261581, upload-time = "2026-04-08T07:17:52.991Z" }
 
 [[package]]
 name = "mypy"
@@ -396,3 +434,9 @@ sdist = { url = "https://files.pythonhosted.org/packages/f6/cc/6253133b5bb138fc3
 wheels = [
     { url = "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl", hash = "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8", size = 45571, upload-time = "2026-07-02T08:40:04.659Z" },
 ]
+
+[[package]]
+name = "unicodedataplus"
+version = "16.0.0.post1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3b/12/7eb898d3659d81aad5d680d7d8f790fe4708f5d95f76d459e4a417dc8d32/unicodedataplus-16.0.0.post1.tar.gz", hash = "sha256:f8cd342d91c73b512c229976a82aeb7e448517969d611433a9ea825dc62fed84", size = 597852, upload-time = "2025-03-01T01:41:00.84Z" }

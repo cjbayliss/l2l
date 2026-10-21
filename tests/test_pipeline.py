@@ -202,6 +202,84 @@ def test_run_pipeline_drops_non_ascii_after_failed_repairs() -> None:
     assert len(http.requests) == 4
 
 
+def test_unit_reply_in_the_source_script_is_repaired_for_a_known_target() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("你好。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+        ]
+    )
+    run_context = make_context(console, http.open, verbose=True)
+    stdout = io.StringIO()
+    code = run_pipeline(run_context, (chunk_pass(),), "你好。", 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n"
+    assert len(http.requests) == 2
+    logged = stderr.getvalue()
+    assert "not in the target language (English: Latin script)" in logged
+
+
+def test_unit_reply_in_a_third_script_is_repaired_for_a_known_target() -> None:
+    console, _stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("Привет."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+        ]
+    )
+    run_context = make_context(console, http.open)
+    stdout = io.StringIO()
+    code = run_pipeline(run_context, (chunk_pass(),), "你好。", 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello.\n"
+    assert len(http.requests) == 2
+
+
+def test_unit_accepts_multiscript_output_for_japanese() -> None:
+    console, _stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(
+                with_usage(stream_chunks("こんにちは。\n\n世界です。"), USAGE)
+            )
+        ]
+    )
+    run_context = make_context(console, http.open, target_language="Japanese")
+    stdout = io.StringIO()
+    code = run_pipeline(
+        run_context, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "こんにちは。\n\n世界です。\n"
+    assert len(http.requests) == 1
+
+
+def test_retranslation_uses_the_configured_target_scripts() -> None:
+    console, stderr = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("Привет.\n\nHello."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Мир."), USAGE)),
+        ]
+    )
+    run_context = make_context(console, http.open, target_language="Russian")
+    stdout = io.StringIO()
+    code = run_pipeline(
+        run_context,
+        (chunk_pass(retranslate_untranslated=True),),
+        "你好。\n\n世界。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Привет.\n\nМир.\n"
+    assert len(http.requests) == 2
+    logged = stderr.getvalue()
+    assert "target language Russian (scripts: Cyrillic)" in logged
+    assert "1 of 2 paragraph(s) look untranslated" in logged
+
+
 def test_retranslation_retranslates_an_echoed_paragraph() -> None:
     console, stderr = make_console()
     http = FakeHttp(
@@ -265,7 +343,7 @@ def test_retranslation_accepts_non_latin_targets() -> None:
     http = FakeHttp(
         [FakeStreamResponse(with_usage(stream_chunks("Привет.\n\nМир."), USAGE))]
     )
-    run_context = make_context(console, http.open)
+    run_context = make_context(console, http.open, target_language="Russian")
     stdout = io.StringIO()
     code = run_pipeline(
         run_context,
@@ -313,7 +391,7 @@ def test_retranslation_fails_when_paragraph_still_untranslated() -> None:
             FakeStreamResponse(with_usage(stream_chunks("世界。"), USAGE)),
         ]
     )
-    run_context = make_context(console, http.open)
+    run_context = make_context(console, http.open, target_language="Zorblaxian")
     code = run_pipeline(
         run_context,
         (chunk_pass(retranslate_untranslated=True),),
@@ -326,8 +404,8 @@ def test_retranslation_fails_when_paragraph_still_untranslated() -> None:
     logged = stderr.getvalue()
     assert "2 of 2 paragraph(s) look untranslated (more than half)" in logged
     assert (
-        "source script cjk, target script unknown; using the ASCII-letter rule"
-        in logged
+        "target language Zorblaxian (scripts unknown), source script Han; "
+        "using the ASCII-letter rule" in logged
     )
     assert "still untranslated after retranslation" in logged
     assert "keeping the last reply" not in logged
@@ -423,7 +501,9 @@ def test_retranslation_best_effort_keeps_untranslated_paragraph() -> None:
             FakeStreamResponse(with_usage(stream_chunks("世界。"), USAGE)),
         ]
     )
-    run_context = make_context(console, http.open, best_effort=True)
+    run_context = make_context(
+        console, http.open, best_effort=True, target_language="Zorblaxian"
+    )
     stdout = io.StringIO()
     code = run_pipeline(
         run_context,
@@ -443,7 +523,7 @@ def test_retranslation_disabled_by_default() -> None:
     http = FakeHttp(
         [FakeStreamResponse(with_usage(stream_chunks("你好。\n\n世界。"), USAGE))]
     )
-    run_context = make_context(console, http.open)
+    run_context = make_context(console, http.open, target_language="Zorblaxian")
     stdout = io.StringIO()
     code = run_pipeline(
         run_context, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
@@ -483,7 +563,7 @@ def test_retranslation_ignores_letterless_paragraphs() -> None:
             FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
         ]
     )
-    run_context = make_context(console, http.open)
+    run_context = make_context(console, http.open, target_language="Zorblaxian")
     stdout = io.StringIO()
     code = run_pipeline(
         run_context,
@@ -538,6 +618,7 @@ def test_retranslation_results_are_cached(tmp_path: Path) -> None:
             console,
             http.open,
             cache_directory=str(cache_directory),
+            target_language="Zorblaxian",
             use_cache=True,
         )
         stdout = io.StringIO()
@@ -565,7 +646,7 @@ def test_retranslation_majority_retries_pass_then_succeeds() -> None:
             FakeStreamResponse(with_usage(stream_chunks("Hello.\n\nWorld."), USAGE)),
         ]
     )
-    run_context = make_context(console, http.open)
+    run_context = make_context(console, http.open, target_language="Zorblaxian")
     stdout = io.StringIO()
     code = run_pipeline(
         run_context,
@@ -593,7 +674,7 @@ def test_retranslation_majority_retries_then_falls_back_per_paragraph() -> None:
             FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
         ]
     )
-    run_context = make_context(console, http.open)
+    run_context = make_context(console, http.open, target_language="Zorblaxian")
     stdout = io.StringIO()
     code = run_pipeline(
         run_context,
@@ -717,6 +798,7 @@ def test_failed_retranslation_is_not_cached(tmp_path: Path) -> None:
             console,
             http.open,
             cache_directory=str(cache_directory),
+            target_language="Zorblaxian",
             use_cache=True,
         )
         code = run_pipeline(
@@ -802,7 +884,7 @@ def test_retranslation_paragraph_mode_skips_majority_retry() -> None:
             FakeStreamResponse(with_usage(stream_chunks("World."), USAGE)),
         ]
     )
-    run_context = make_context(console, http.open)
+    run_context = make_context(console, http.open, target_language="Zorblaxian")
     stdout = io.StringIO()
     code = run_pipeline(
         run_context,
@@ -1085,7 +1167,9 @@ def test_refine_pass_echoing_source_language_is_repaired_with_draft() -> None:
     assert "Current draft:\nHello.\n\nWorld." in initial_user
     retry_user = json.loads(http.requests[2].body)["messages"][1]["content"]
     assert "does not satisfy the output rules" in retry_user
-    assert "source language (cjk script)" in retry_user
+    assert (
+        "the reply is not in the target language (English: Latin script)" in retry_user
+    )
     assert "Source text:\n你好。\n\n世界。" in retry_user
     assert "Current draft:\nHello.\n\nWorld." in retry_user
     assert "failed validation" not in stderr.getvalue()

@@ -187,17 +187,21 @@ def untranslated_problem(index: int, sample: str) -> str:
     )
 
 
-def retranslate_pair_message(pair: tuple[str, str]) -> str:
-    source, target = pair
-    if not target:
+def retranslation_check_message(
+    target_language: str,
+    source_script_description: str,
+    target_scripts_description: str,
+) -> str:
+    source = source_script_description or "?"
+    if not target_scripts_description:
         return (
-            "l2l: retranslate check: source script %s, target script "
-            "unknown; using the ASCII-letter rule" % (source or "?")
+            "l2l: retranslate check: target language %s (scripts unknown), "
+            "source script %s; using the ASCII-letter rule" % (target_language, source)
         )
 
-    return "l2l: retranslate check: source script %s, target script %s" % (
-        source,
-        target,
+    return (
+        "l2l: retranslate check: target language %s (scripts: %s), "
+        "source script %s" % (target_language, target_scripts_description, source)
     )
 
 

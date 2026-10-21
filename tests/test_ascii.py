@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from typing import Any
 
 from fakes import (
@@ -13,13 +14,13 @@ from fakes import (
     with_usage,
 )
 
-from l2l.ascii import ascii_collapse, stubborn_paragraphs
+from l2l.ascii import ascii_collapse, ascii_fix_llm, stubborn_paragraphs
 from l2l.errors import TranslationError, fail_http
 from l2l.monads import Ok, Result
 from l2l.pipeline import run_pipeline
 from l2l.plans import ascii_drop_warning
 from l2l.settings import build_settings
-from l2l.text import AsciiDrop
+from l2l.text import AsciiDrop, Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -79,7 +80,7 @@ def test_ascii_enforcement_fails_fast_when_most_paragraphs_need_llm_repair() -> 
             )
         ]
     )
-    run_context = make_context(console, http.open)
+    run_context = make_context(console, http.open, target_language="Zorblaxian")
     code = run_pipeline(
         run_context,
         (chunk_pass(ascii_output=True),),
@@ -137,3 +138,30 @@ def test_run_pipeline_enforces_ascii_mechanically() -> None:
     assert code == 0
     assert stdout.getvalue() == "Cafe - deja.\n"
     assert len(http.requests) == 1
+
+
+def test_ascii_repair_cache_keys_differ_by_target_language(tmp_path: Path) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+    http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hi."), USAGE))])
+
+    def repair(language: str) -> None:
+        console, _ = make_console()
+        run_context = make_context(
+            console,
+            http.open,
+            cache_directory=str(cache_directory),
+            use_cache=True,
+            target_language=language,
+        )
+        result = ascii_fix_llm(
+            run_context, chunk_pass(ascii_output=True), "你好。", "Hi 中", Usage()
+        ).run()
+        assert isinstance(result, Ok)
+
+    repair("English")
+    repair("French")
+    assert len(http.requests) == 2
+
+    repair("French")
+    assert len(http.requests) == 2
