@@ -120,7 +120,8 @@ Modes:
   when a paragraph cannot fit in a single request.
 - `--extract-glossary FILE` - extract a starting glossary from the stdin
   text with one model call, write it to FILE, and exit. Existing
-  `--glossary` entries are carried over unchanged.
+  `--glossary` entries are carried over unchanged. Pipeline passes are
+  ignored in this mode.
 - `--prune-cache DAYS` - delete cache entries older than DAYS days and
   exit.
 

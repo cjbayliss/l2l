@@ -1067,7 +1067,11 @@ def build_setup(
     return result_bind(pair, with_options)
 
 
-def load_setup(arguments: Arguments, environment: Mapping[str, str]) -> IO[SetupResult]:
+def load_setup(
+    arguments: Arguments,
+    environment: Mapping[str, str],
+    resolve_pipeline_passes: bool = True,
+) -> IO[SetupResult]:
     def with_paths(user_path: str, selected_path: str | None) -> IO[SetupResult]:
         def read_documents(
             user_exists: bool,
@@ -1127,9 +1131,9 @@ def load_setup(arguments: Arguments, environment: Mapping[str, str]) -> IO[Setup
 
             return io_map(
                 io_pair(
-                    resolve_passes(
-                        user_path, documents[0], selected_path, documents[1]
-                    ),
+                    resolve_passes(user_path, documents[0], selected_path, documents[1])
+                    if resolve_pipeline_passes
+                    else io_result(Ok(({}, ()))),
                     resolve_glossaries(
                         user_path,
                         documents[0],
