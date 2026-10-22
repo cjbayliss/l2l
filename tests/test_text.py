@@ -46,22 +46,10 @@ from l2l.text import (
 )
 
 
-def test_split_paragraphs_blank_lines() -> None:
-    paragraphs, separators = split_paragraphs("a\n\nb\n\nc")
-    assert paragraphs == ("a", "b", "c")
-    assert separators == ("\n\n", "\n\n")
-
-
-def test_split_paragraphs_lone_newlines() -> None:
-    paragraphs, separators = split_paragraphs("a\nb\nc")
-    assert paragraphs == ("a", "b", "c")
-    assert separators == ("\n", "\n")
-
-
-def test_split_paragraphs_blank_majority() -> None:
-    paragraphs, separators = split_paragraphs("a\nb\n\nc")
-    assert paragraphs == ("a\nb", "c")
-    assert separators == ("\n\n",)
+def test_split_paragraphs_detects_separators() -> None:
+    assert split_paragraphs("a\n\nb\n\nc") == (("a", "b", "c"), ("\n\n", "\n\n"))
+    assert split_paragraphs("a\nb\nc") == (("a", "b", "c"), ("\n", "\n"))
+    assert split_paragraphs("a\nb\n\nc") == (("a\nb", "c"), ("\n\n",))
 
 
 def test_ensure_blank_line_separators() -> None:
@@ -69,12 +57,9 @@ def test_ensure_blank_line_separators() -> None:
     assert ensure_blank_line_separators("a\nb\n\nc") == "a\nb\n\nc"
 
 
-def test_make_chunks_respects_budget() -> None:
+def test_make_chunks_respects_budget_and_keeps_oversized_paragraphs() -> None:
     assert make_chunks(("a", "b", "c"), 2) == (("a", "b"), ("c",))
     assert make_chunks(("a", "b"), 10) == (("a", "b"),)
-
-
-def test_make_chunks_keeps_oversized_paragraph_alone() -> None:
     assert make_chunks(("a", "longer"), 1) == (("a",), ("longer",))
 
 
@@ -290,21 +275,12 @@ def test_build_unit_retry_user_includes_distinct_draft() -> None:
     assert "Current draft:\ndraft" in user
 
 
-def test_script_mismatch_problem_flags_source_language_reply() -> None:
+def test_script_mismatch_problem() -> None:
     problem = script_mismatch_problem("你好。", "Hello.", "你好。")
     assert isinstance(problem, Just)
     assert "source language (Han script)" in problem.value
-
-
-def test_script_mismatch_problem_accepts_translated_reply() -> None:
     assert script_mismatch_problem("你好。", "Hello.", "World.") == NOTHING
-
-
-def test_script_mismatch_problem_skips_when_draft_matches_source() -> None:
     assert script_mismatch_problem("你好。", "你好。", "你好。") == NOTHING
-
-
-def test_script_mismatch_problem_skips_letterless_source() -> None:
     assert script_mismatch_problem("123", "Hi", "123") == NOTHING
 
 

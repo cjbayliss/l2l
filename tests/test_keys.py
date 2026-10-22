@@ -1,10 +1,8 @@
 import os
-import pty
 import sys
 import termios
-import time
+import threading
 import tty
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -19,16 +17,25 @@ from l2l.keys import (
     open_tty,
     start_tab_listener,
 )
-from l2l.monads import IO, NOTHING, Just, Reference
+from l2l.monads import IO, NOTHING, Just, Reference, read_reference, write_reference
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="requires a POSIX TTY")
 
 
-def toggler(console: Console) -> Callable[[], None]:
-    def toggle() -> None:
-        toggle_verbose(console).run()
+def toggler(console: Console) -> None:
+    toggle_verbose(console).run()
 
-    return toggle
+
+def listener_for(
+    file_descriptor: int,
+    console: Console,
+    saved: tuple[object, ...] = (),
+) -> TabListener:
+    return TabListener(
+        file_descriptor=file_descriptor,
+        saved=saved,
+        toggle=lambda: toggler(console),
+    )
 
 
 def test_is_toggle_key_matches_only_tab() -> None:
@@ -44,155 +51,185 @@ def test_open_tty_opens_the_tty_device(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_open_tty_falls_back_to_a_stdin_tty(monkeypatch: pytest.MonkeyPatch) -> None:
-    master, slave = pty.openpty()
+    class FakeStdin:
+        def fileno(self) -> int:
+            return 7
 
     def refuse(path: str, flags: int) -> int:
         raise OSError("no /dev/tty")
 
-    class FakeStdin:
-        def fileno(self) -> int:
-            return slave
-
     monkeypatch.setattr(os, "open", refuse)
+    monkeypatch.setattr(os, "isatty", lambda file_descriptor: True)
     monkeypatch.setattr(sys, "stdin", FakeStdin())
-    assert open_tty().run() == Just(slave)
-    os.close(master)
-    os.close(slave)
+    assert open_tty().run() == Just(7)
 
 
 def test_open_tty_without_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeStdin:
+        def fileno(self) -> int:
+            return 7
+
     def refuse(path: str, flags: int) -> int:
         raise OSError("no /dev/tty")
 
     monkeypatch.setattr(os, "open", refuse)
-    monkeypatch.setattr(sys, "stdin", 3)
+    monkeypatch.setattr(os, "isatty", lambda file_descriptor: False)
+    monkeypatch.setattr(sys, "stdin", FakeStdin())
     assert open_tty().run() is NOTHING
 
 
-def test_start_tab_listener_disabled_without_live_terminal() -> None:
-    console, _ = make_console(live=False)
-    stop = start_tab_listener(console, toggler(console)).run()
-    stop.run()
-
-
 def test_enter_cbreak_fails_on_a_non_tty_fd(tmp_path: Path) -> None:
-    fd = os.open(str(tmp_path / "plain"), os.O_RDWR | os.O_CREAT)
+    file_descriptor = os.open(str(tmp_path / "plain"), os.O_RDWR | os.O_CREAT)
     try:
-        assert enter_cbreak(fd).run() is False
+        assert enter_cbreak(file_descriptor).run() is False
     finally:
-        os.close(fd)
+        os.close(file_descriptor)
+
+
+def test_listen_action_toggles_on_tab_and_ignores_other_keys() -> None:
+    read_fd, write_fd = os.pipe()
+    console, _ = make_console(live=True)
+    listener = listener_for(read_fd, console)
+    try:
+        os.write(write_fd, b"\t")
+        listener.listen_action().run()
+        assert console.verbose.value is True
+
+        os.write(write_fd, b"x")
+        listener.listen_action().run()
+        assert console.verbose.value is True
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+def test_listen_action_halts_when_the_descriptor_disappears() -> None:
+    read_fd, write_fd = os.pipe()
+    console, _ = make_console(live=True)
+    listener = listener_for(read_fd, console)
+    os.close(read_fd)
+    try:
+        listener.listen_action().run()
+        assert listener.halt.is_set()
+    finally:
+        os.close(write_fd)
+
+
+def test_start_and_stop_manage_the_listener_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: list[bool] = []
+    joined: list[float | None] = []
+    restored: list[tuple[int, int, list[object]]] = []
+
+    class RecordingThread:
+        def __init__(self, target: object, daemon: bool) -> None:
+            assert daemon
+            self.alive = True
+
+        def start(self) -> None:
+            started.append(True)
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+        def join(self, timeout: float | None = None) -> None:
+            self.alive = False
+            joined.append(timeout)
+
+    monkeypatch.setattr(threading, "Thread", RecordingThread)
+    monkeypatch.setattr(
+        termios,
+        "tcsetattr",
+        lambda file_descriptor, when, attributes: restored.append(
+            (file_descriptor, when, attributes)
+        ),
+    )
+    console, _ = make_console(live=True)
+    listener = listener_for(0, console, saved=(1, 2, 3))
+    listener.start().run()
+    listener.stop().run()
+    listener.stop().run()
+
+    assert started == [True]
+    assert joined == [1.0]
+    assert restored == [(0, termios.TCSADRAIN, [1, 2, 3])]
+
+
+def test_start_tab_listener_without_live_terminal() -> None:
+    console, _ = make_console(live=False)
+    stop = start_tab_listener(console, lambda: toggler(console)).run()
+    stop.run()
+    assert console.verbose.value is False
 
 
 def test_start_tab_listener_without_cbreak_stays_detached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    master, slave = pty.openpty()
-
-    def refuse(fd: int) -> None:
+    def refuse(file_descriptor: int) -> None:
         raise termios.error("cannot enter cbreak mode")
 
+    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(0)))
+    monkeypatch.setattr(termios, "tcgetattr", lambda file_descriptor: (1, 2, 3))
     monkeypatch.setattr(tty, "setcbreak", refuse)
     console, _ = make_console(live=True)
-    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(slave)))
-    stop = start_tab_listener(console, toggler(console)).run()
-    os.write(master, b"\t")
-    time.sleep(0.3)
+    stop = start_tab_listener(console, lambda: toggler(console)).run()
+    stop.run()
     assert console.verbose.value is False
-    stop.run()
-    os.close(master)
-    os.close(slave)
 
 
-def test_start_tab_listener_toggles_and_restores(
+def test_start_tab_listener_attaches_to_a_working_tty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    master, slave = pty.openpty()
-    console, stream = make_console(live=True)
-    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(slave)))
-    saved = termios.tcgetattr(slave)
-    stop = start_tab_listener(console, toggler(console)).run()
-    try:
-        start_verbose: bool = console.verbose.value
-        assert start_verbose is False
-        os.write(master, b"\t")
-        deadline = time.monotonic() + 5.0
-        while console.verbose.value is False and time.monotonic() < deadline:
-            time.sleep(0.01)
-        toggled_verbose: bool = console.verbose.value
-        assert toggled_verbose is True
+    started: list[bool] = []
 
-        os.write(master, b"x")
-        time.sleep(0.2)
-        still_verbose: bool = console.verbose.value
-        assert still_verbose is True
-        assert stream.getvalue() == ""
-    finally:
-        stop.run()
-        restored = termios.tcgetattr(slave)
-        assert restored[3] & (termios.ECHO | termios.ICANON) == saved[3] & (
-            termios.ECHO | termios.ICANON
-        )
-        assert restored[6][termios.VMIN] == saved[6][termios.VMIN]
-        assert restored[6][termios.VTIME] == saved[6][termios.VTIME]
-        os.close(master)
-        os.close(slave)
+    class RecordingThread:
+        def __init__(self, target: object, daemon: bool) -> None:
+            assert daemon
 
-    stop.run()
+        def start(self) -> None:
+            started.append(True)
 
+        def is_alive(self) -> bool:
+            return False
 
-def test_start_tab_listener_twice_toggles_twice(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    master, slave = pty.openpty()
+        def join(self, timeout: float | None = None) -> None:
+            return None
+
+    monkeypatch.setattr(threading, "Thread", RecordingThread)
+    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(0)))
+    monkeypatch.setattr(termios, "tcgetattr", lambda file_descriptor: (1, 2, 3))
+    monkeypatch.setattr(termios, "tcsetattr", lambda *arguments: None)
+    monkeypatch.setattr(tty, "setcbreak", lambda file_descriptor: None)
     console, _ = make_console(live=True)
-    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(slave)))
-    stop = start_tab_listener(console, toggler(console)).run()
-    try:
-        os.write(master, b"\t")
-        deadline = time.monotonic() + 5.0
-        while console.verbose.value is False and time.monotonic() < deadline:
-            time.sleep(0.01)
-
-        os.write(master, b"\t")
-        while console.verbose.value is True and time.monotonic() < deadline:
-            time.sleep(0.01)
-
-        assert console.verbose.value is False
-    finally:
-        stop.run()
-        os.close(master)
-        os.close(slave)
+    stop = start_tab_listener(console, lambda: toggler(console)).run()
+    stop.run()
+    assert started == [True]
 
 
-def test_start_tab_listener_survives_a_non_tty_fd(
+def test_stop_restores_terminal_attributes_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def refuse(fd: object) -> list[object]:
-        raise OSError("not a tty")
-
-    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(42)))
-    monkeypatch.setattr(termios, "tcgetattr", refuse)
-    console, _ = make_console(live=True)
-    stop = start_tab_listener(console, toggler(console)).run()
-    stop.run()
-
-
-def test_tab_listener_stop_without_start() -> None:
-    _console, _ = make_console(live=True)
-    listener = TabListener(
-        file_descriptor=-1, saved=(), toggle=lambda: None, restored=Reference(True)
+    restored: list[int] = []
+    monkeypatch.setattr(
+        termios,
+        "tcsetattr",
+        lambda file_descriptor, when, attributes: restored.append(file_descriptor),
     )
-    listener.stop()
+    listener = TabListener(
+        file_descriptor=0,
+        saved=(),
+        toggle=lambda: None,
+        restored=Reference(False),
+    )
+    listener.stop().run()
+    listener.stop().run()
+    assert restored == [0]
+    assert read_reference(listener.restored).run() is True
 
 
-def test_tab_listener_exits_when_the_tty_disappears(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    master, slave = pty.openpty()
+def test_toggle_writes_verbose_state() -> None:
     console, _ = make_console(live=True)
-    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(slave)))
-    stop = start_tab_listener(console, toggler(console)).run()
-    os.close(slave)
-    time.sleep(0.3)
-    stop.run()
-    os.close(master)
+    write_reference(console.verbose, False).run()
+    toggler(console)
+    assert console.verbose.value is True

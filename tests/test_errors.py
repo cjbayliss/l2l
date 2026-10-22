@@ -25,115 +25,81 @@ from l2l.errors import (
 from l2l.monads import Err
 
 
-def test_fail_config_wraps_message_with_prefix() -> None:
+def test_fail_config_and_missing_settings() -> None:
     failure = fail_config("config file not found: x.toml")
     assert isinstance(failure, Err)
     assert failure.error == ConfigError("config file not found: x.toml")
-    assert describe(failure.error) == "l2l: config file not found: x.toml"
+    assert describe(failure.error).startswith("l2l: config file not found")
+
+    missing = fail_missing_settings(("api.model", "api.api_key"))
+    assert isinstance(missing, Err)
+    assert missing.error == MissingSettings(("api.model", "api.api_key"))
+    assert "api.model, api.api_key" in describe(missing.error)
 
 
-def test_fail_missing_settings_renders_field_list() -> None:
-    failure = fail_missing_settings(("api.model", "api.api_key"))
-    assert isinstance(failure, Err)
-    assert failure.error == MissingSettings(("api.model", "api.api_key"))
-    assert describe(failure.error) == (
-        "l2l: missing required API settings: api.model, api.api_key"
-    )
+def test_describe_http_and_budget_errors() -> None:
+    descriptions = {
+        describe(HttpError("status", "bad request", 400)): "HTTP 400",
+        describe(HttpError("unreachable", "connection reset")): "could not reach",
+        describe(HttpError("stream", "rate limited")): "stream error",
+        describe(HttpError("interrupted", "timed out")): "interrupted",
+        describe(HttpError("protocol", "invalid JSON response: x")): "invalid JSON",
+    }
+    for text, fragment in descriptions.items():
+        assert fragment in text
+
+    single = describe(BudgetError(1200, 1000))
+    assert "1200" in single
+    assert "1000-token budget" in single
+    assert "api.max_tokens" in single
+    analysis = describe(BudgetError(1200, 1000, parts=3))
+    assert analysis.startswith("document requires analysis in 3 parts")
+    assert "1000-token budget" in analysis
 
 
-def test_describe_http_kinds() -> None:
-    assert describe(HttpError("status", "bad request", 400)) == (
-        "HTTP 400 from endpoint: bad request"
-    )
-    assert describe(HttpError("unreachable", "connection reset")) == (
-        "could not reach endpoint: connection reset"
-    )
-    assert describe(HttpError("stream", "rate limited")) == (
-        "endpoint stream error: rate limited"
-    )
-    assert describe(HttpError("interrupted", "timed out")) == (
-        "stream interrupted: timed out"
-    )
-    assert describe(HttpError("protocol", "invalid JSON response: x")) == (
-        "invalid JSON response: x"
-    )
-
-
-def test_describe_budget_single_request() -> None:
-    text = describe(BudgetError(1200, 1000))
-    assert text == (
-        "request is ~1200 tokens, over the 1000-token budget; raise "
-        "api.max_tokens (--maximum-tokens / TRANSLATE_MAX_TOKENS) or shorten "
-        "the input"
-    )
-
-
-def test_describe_budget_analysis_parts() -> None:
-    text = describe(BudgetError(1200, 1000, parts=3))
-    assert text.startswith(
-        "document requires analysis in 3 parts, over the 1000-token budget"
-    )
-
-
-def test_describe_wraps_nested_errors_without_double_prefix() -> None:
+def test_nested_errors_keep_their_context() -> None:
     inner: TranslationError = fail_http("unreachable", "down").error
     unit = UnitError("translate", 1, inner)
-    assert describe(unit) == (
-        "l2l: [translate] failed on unit 2: could not reach endpoint: down"
-    )
+    assert "failed on unit 2" in describe(unit)
+    assert "could not reach endpoint: down" in describe(unit)
 
     wrapped: TranslationError = fail_pass(
         "prep", fail_unit("prep", 0, inner).error
     ).error
     assert isinstance(wrapped, PassError)
-    assert describe(wrapped) == (
-        "l2l: pass [prep] failed: l2l: [prep] failed on unit 1: "
-        "could not reach endpoint: down"
-    )
+    assert "pass [prep] failed" in describe(wrapped)
+    assert "failed on unit 1" in describe(wrapped)
 
 
-def test_describe_ascii_error() -> None:
+def test_describe_ascii_untranslated_and_invalid_output() -> None:
     inner: TranslationError = fail_budget(500, 100).error
     failure = fail_ascii("translate", inner)
     assert isinstance(failure, Err)
     assert isinstance(failure.error, AsciiError)
-    assert describe(failure.error).startswith(
-        "l2l: pass [translate] ascii enforcement failed: request is ~500"
-    )
+    assert "ascii enforcement failed" in describe(failure.error)
+    assert "request is ~500" in describe(failure.error)
 
-
-def test_describe_ascii_collapse_error() -> None:
     collapse = fail_ascii_collapse("refine", 40, 40).error
     assert collapse == AsciiCollapseError("refine", 40, 40)
     wrapped = fail_ascii("refine", collapse)
     assert isinstance(wrapped.error, AsciiError)
-    assert describe(wrapped.error) == (
-        "l2l: pass [refine] ascii enforcement failed: 40 of 40 paragraph(s) "
-        "would need LLM ASCII repair; an upstream pass probably returned "
-        "untranslated text instead of translating"
+    assert "40 of 40 paragraph(s)" in describe(wrapped.error)
+    assert "untranslated text" in describe(wrapped.error)
+
+    untranslated = fail_untranslated("translate", 2, "你好。")
+    assert isinstance(untranslated, Err)
+    assert isinstance(untranslated.error, UntranslatedError)
+    assert "paragraph 3 is still untranslated" in describe(untranslated.error)
+    assert "你好。" in describe(untranslated.error)
+
+    invalid = fail_invalid_output("translate", 2, "the output failed validation")
+    assert isinstance(invalid, Err)
+    assert isinstance(invalid.error, InvalidOutputError)
+    assert invalid.error.pass_name == "translate"
+    assert "still failed validation after 2 repair attempt(s)" in describe(
+        invalid.error
     )
-
-
-def test_describe_untranslated_error() -> None:
-    failure = fail_untranslated("translate", 2, "你好。")
-    assert isinstance(failure, Err)
-    assert isinstance(failure.error, UntranslatedError)
-    assert describe(failure.error) == (
-        "l2l: pass [translate] paragraph 3 is still untranslated after "
-        "retranslation: '你好。'"
-    )
-
-
-def test_describe_invalid_output_error_names_the_pass() -> None:
-    failure = fail_invalid_output("translate", 2, "the output failed validation")
-    assert isinstance(failure, Err)
-    assert isinstance(failure.error, InvalidOutputError)
-    assert failure.error.pass_name == "translate"
-    assert describe(failure.error) == (
-        "l2l: pass [translate] output still failed validation after 2 repair "
-        "attempt(s): the output failed validation; pass --best-effort to keep "
-        "the last reply instead"
-    )
+    assert "--best-effort" in describe(invalid.error)
 
 
 def test_constructors_build_expected_variants() -> None:

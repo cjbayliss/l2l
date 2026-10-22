@@ -1,4 +1,5 @@
 import threading
+from typing import Any, cast
 
 from l2l.monads import (
     IO,
@@ -26,6 +27,9 @@ from l2l.monads import (
     io_traverse,
     io_when_unit,
     line_push,
+    modify_reference,
+    modify_reference_with,
+    new_reference,
     read_reference,
     reference_gate,
     reference_write_when,
@@ -109,19 +113,25 @@ def test_io_when_unit_gates_execution() -> None:
     assert log == ["ran"]
 
 
-def test_io_atomic_holds_lock_while_running() -> None:
-    lock = threading.Lock()
-    log: list[str] = []
+def test_io_atomic_holds_the_lock_around_the_action() -> None:
+    events: list[str] = []
+
+    class RecordingLock:
+        def __enter__(self) -> None:
+            events.append("acquire")
+
+        def __exit__(self, *arguments: object) -> None:
+            events.append("release")
 
     def action() -> IO[str]:
         def thunk() -> str:
-            log.append("inside")
+            events.append("run")
             return "value"
 
         return IO(thunk)
 
-    assert io_atomic(lock, action()).run() == "value"
-    assert log == ["inside"]
+    assert io_atomic(cast(Any, RecordingLock()), action()).run() == "value"
+    assert events == ["acquire", "run", "release"]
 
 
 def test_repeat_until_runs_until_event_set() -> None:
@@ -282,3 +292,32 @@ def test_io_catch_result_catches_exceptions_in_result_channel() -> None:
 
     assert io_catch_result(IO(boom), handler).run() == Err("caught: disaster")
     assert io_catch_result(io_result(Ok(1)), handler).run() == Ok(1)
+
+
+def test_reference_reads_writes_and_modifies() -> None:
+    reference = new_reference(7).run()
+    assert read_reference(reference).run() == 7
+    assert write_reference(reference, 9).run() == 9
+    assert modify_reference(reference, lambda value: value + 1).run() == 10
+
+    def double_and_label(value: int) -> tuple[int, str]:
+        return value * 2, "was %d" % value
+
+    assert modify_reference_with(reference, double_and_label).run() == "was 10"
+    assert read_reference(reference).run() == 20
+
+
+def test_reference_survives_concurrent_modifications() -> None:
+    reference = new_reference(0).run()
+
+    def bump() -> None:
+        for _ in range(100):
+            modify_reference(reference, lambda value: value + 1).run()
+
+    threads = [threading.Thread(target=bump) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert read_reference(reference).run() == 400

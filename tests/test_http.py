@@ -82,37 +82,32 @@ def test_curl_open_reports_an_unreachable_endpoint() -> None:
 
 
 def test_curl_open_parses_status_and_retry_after() -> None:
-    console, _ = make_console()
-    curl = FakeCurl(
-        status=429,
-        headers=(b"HTTP/1.1 429 Too Many Requests\r\n", b"Retry-After: 7\r\n"),
-        chunks=(b"slow down",),
+    cases = (
+        (
+            429,
+            (b"HTTP/1.1 429 Too Many Requests\r\n", b"Retry-After: 7\r\n"),
+            b"slow down",
+            429,
+            "slow down",
+            7.0,
+        ),
+        (500, (b"Retry-After: bogus\r\n",), b"boom", 500, "boom", None),
+        (400, (), b"nope", 400, "nope", None),
     )
-    http = FakeCurlHttp([curl])
-    run_context = make_context(console, http.open)
-    result = http_post_json(run_context, {"model": "m"}).run()
-    assert isinstance(result, Err)
-    failure = result.error
-    assert isinstance(failure, HttpError)
-    assert failure.kind == "status"
-    assert failure.status == 429
-    assert failure.detail == "slow down"
-    assert failure.retry_after == 7.0
-    assert curl.closed
-
-
-def test_curl_open_ignores_a_garbage_retry_after() -> None:
-    console, _ = make_console()
-    curl = FakeCurl(status=500, headers=(b"Retry-After: bogus\r\n",), chunks=(b"boom",))
-    http = FakeCurlHttp([curl])
-    run_context = make_context(console, http.open)
-    result = http_post_json(run_context, {"model": "m"}).run()
-    assert isinstance(result, Err)
-    failure = result.error
-    assert isinstance(failure, HttpError)
-    assert failure.kind == "status"
-    assert failure.detail == "boom"
-    assert failure.retry_after is None
+    for status, headers, chunks, expected_status, detail, retry_after in cases:
+        console, _ = make_console()
+        curl = FakeCurl(status=status, headers=headers, chunks=(chunks,))
+        http = FakeCurlHttp([curl])
+        run_context = make_context(console, http.open)
+        result = http_post_json(run_context, {"model": "m"}).run()
+        assert isinstance(result, Err)
+        failure = result.error
+        assert isinstance(failure, HttpError)
+        assert failure.kind == "status"
+        assert failure.status == expected_status
+        assert failure.detail == detail
+        assert failure.retry_after == retry_after
+        assert curl.closed
 
 
 def test_curl_open_survives_a_single_argument_error() -> None:
@@ -125,21 +120,6 @@ def test_curl_open_survives_a_single_argument_error() -> None:
     failure = result.error
     assert isinstance(failure, HttpError)
     assert failure.kind == "unreachable"
-
-
-def test_curl_open_reports_a_status_error_without_retry_after() -> None:
-    console, _ = make_console()
-    curl = FakeCurl(status=400, headers=(), chunks=(b"nope",))
-    http = FakeCurlHttp([curl])
-    run_context = make_context(console, http.open)
-    result = http_post_json(run_context, {"model": "m"}).run()
-    assert isinstance(result, Err)
-    failure = result.error
-    assert isinstance(failure, HttpError)
-    assert failure.kind == "status"
-    assert failure.status == 400
-    assert failure.detail == "nope"
-    assert failure.retry_after is None
 
 
 def test_curl_error_helpers_tolerate_an_empty_error() -> None:
@@ -297,41 +277,29 @@ def test_chat_gives_up_after_retry_budget() -> None:
     assert sleeps() == (1.0, 2.0)
 
 
-def test_chat_context_stream_false_forces_plain() -> None:
-    console, _ = make_console()
-    body = {
+def test_chat_stream_setting_precedence() -> None:
+    plain_body = {
         "choices": [{"message": {"content": "Plain"}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
-    http = FakeHttp([FakePlainResponse(body)])
-    run_context = make_context(console, http.open, stream=False)
-    result = chat(run_context, "s", "u", "m", {}, Usage()).run()
-    assert isinstance(result, Ok)
-    assert result.value.text == "Plain"
-    assert json.loads(http.requests[0].body)["stream"] is False
-
-
-def test_chat_context_stream_true_overrides_params() -> None:
-    console, _ = make_console()
-    chunks = with_usage(stream_chunks("Hi"), USAGE)
-    http = FakeHttp([FakeStreamResponse(chunks)])
-    run_context = make_context(console, http.open, stream=True)
-    result = chat(run_context, "s", "u", "m", {"stream": False}, Usage()).run()
-    assert isinstance(result, Ok)
-    assert json.loads(http.requests[0].body)["stream"] is True
-
-
-def test_chat_without_override_keeps_params_stream_false() -> None:
-    console, _ = make_console()
-    body = {
-        "choices": [{"message": {"content": "Plain"}}],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
-    }
-    http = FakeHttp([FakePlainResponse(body)])
-    run_context = make_context(console, http.open)
-    result = chat(run_context, "s", "u", "m", {"stream": False}, Usage()).run()
-    assert isinstance(result, Ok)
-    assert json.loads(http.requests[0].body)["stream"] is False
+    cases: tuple[tuple[bool | None, dict[str, bool], bool, str], ...] = (
+        (False, {}, False, "Plain"),
+        (True, {"stream": False}, True, "Hi"),
+        (None, {"stream": False}, False, "Plain"),
+    )
+    for context_stream, parameters, expected_stream, expected_text in cases:
+        console, _ = make_console()
+        response: FakePlainResponse | FakeStreamResponse = (
+            FakeStreamResponse(with_usage(stream_chunks("Hi"), USAGE))
+            if expected_stream
+            else FakePlainResponse(plain_body)
+        )
+        http = FakeHttp([response])
+        run_context = make_context(console, http.open, stream=context_stream)
+        result = chat(run_context, "s", "u", "m", parameters, Usage()).run()
+        assert isinstance(result, Ok)
+        assert result.value.text == expected_text
+        assert json.loads(http.requests[0].body)["stream"] is expected_stream
 
 
 class DyingPlainResponse:
@@ -497,20 +465,6 @@ def test_chat_reports_a_plain_read_failure_as_protocol_error() -> None:
     assert isinstance(failure, HttpError)
     assert failure.kind == "protocol"
     assert "ValueError" in describe(failure)
-
-
-def test_http_post_json_reports_an_unreachable_endpoint() -> None:
-    console, _ = make_console()
-
-    def open_fail(request: Any, timeout: float) -> Result[Any, TranslationError]:
-        return fail_http("unreachable", "down")
-
-    run_context = make_context(console, open_fail)
-    result = http_post_json(run_context, {"model": "m"}).run()
-    assert isinstance(result, Err)
-    failure = result.error
-    assert isinstance(failure, HttpError)
-    assert failure.kind == "unreachable"
 
 
 def test_chat_reopens_a_stream_without_stream_options() -> None:

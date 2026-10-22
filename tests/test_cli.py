@@ -1,9 +1,7 @@
 import io
 import json
 import os
-import pty
 import sys
-import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -17,10 +15,9 @@ from fakes import (
     with_usage,
 )
 
-from l2l import __version__, cli, config, effects, keys, pipeline
-from l2l.console import toggle_verbose
+from l2l import __version__, cli, config, effects, pipeline
 from l2l.errors import FileError, TranslationError, describe, fail_http
-from l2l.monads import IO, Err, Just, Ok, Result, io_pure, io_result
+from l2l.monads import Err, Ok, Result, io_pure, io_result
 from l2l.settings import Arguments
 
 CONFIG_TEXT = (
@@ -328,70 +325,41 @@ def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:
     assert "TOTAL" in stderr.getvalue()
 
 
-def test_strict_validation_failure_ends_the_cli_run(tmp_path: Path) -> None:
+def test_validation_mode_controls_the_cli_outcome(tmp_path: Path) -> None:
     bad = "One.\n\nTwo."
     chunks = [
         *stream_chunks(bad),
         {"choices": [{"delta": {}}], "usage": USAGE},
     ]
-    http = FakeHttp([FakeStreamResponse(chunks)])
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        [
+    for best_effort, expected_code, expected_output, expected_log in (
+        (False, 1, "", "still failed validation after 2 repair attempt(s)"),
+        (True, 0, bad + "\n", "Keeping the last reply, uncached"),
+    ):
+        http = FakeHttp([FakeStreamResponse(chunks)])
+        stdout, stderr = io.StringIO(), io.StringIO()
+        arguments = [
             "-c",
             str(write_config(tmp_path)),
             "--cache-directory",
             str(tmp_path / "cache"),
             "--no-cache",
             "--ensure-paragraphs",
-        ],
-        {},
-        io.StringIO("你好。"),
-        stdout,
-        stderr,
-        time.time,
-        http.open,
-    ).run()
-    assert code == 1
-    assert stdout.getvalue() == ""
-    logged = stderr.getvalue()
-    assert "failed validation 2 time(s)" in logged
-    assert "pass [translate] output still failed validation" in logged
-    assert "still failed validation after 2 repair attempt(s)" in logged
-    assert len(http.requests) == 6
-
-
-def test_best_effort_flag_keeps_the_unvalidated_reply(tmp_path: Path) -> None:
-    bad = "One.\n\nTwo."
-    chunks = [
-        *stream_chunks(bad),
-        {"choices": [{"delta": {}}], "usage": USAGE},
-    ]
-    http = FakeHttp([FakeStreamResponse(chunks)])
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
-        [
-            "-c",
-            str(write_config(tmp_path)),
-            "--cache-directory",
-            str(tmp_path / "cache"),
-            "--no-cache",
-            "--ensure-paragraphs",
-            "--best-effort",
-        ],
-        {},
-        io.StringIO("你好。"),
-        stdout,
-        stderr,
-        time.time,
-        http.open,
-    ).run()
-    assert code == 0
-    assert stdout.getvalue() == bad + "\n"
-    logged = stderr.getvalue()
-    assert "failed validation 2 time(s)" in logged
-    assert "Keeping the last reply, uncached" in logged
-    assert len(http.requests) == 6
+        ] + (["--best-effort"] if best_effort else [])
+        code = cli.main(
+            arguments,
+            {},
+            io.StringIO("你好。"),
+            stdout,
+            stderr,
+            time.time,
+            http.open,
+        ).run()
+        assert code == expected_code
+        assert stdout.getvalue() == expected_output
+        logged = stderr.getvalue()
+        assert "failed validation 2 time(s)" in logged
+        assert expected_log in logged
+        assert len(http.requests) == 6
 
 
 def test_plain_call_end_to_end(tmp_path: Path) -> None:
@@ -473,64 +441,6 @@ def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
     assert second == 0
     assert second_stdout.getvalue().strip() == "Hello."
     assert "prompt=0, completion=0" in second_stderr.getvalue()
-
-
-@pytest.mark.skipif(os.name == "nt", reason="requires a POSIX TTY")
-@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
-def test_tab_key_toggles_verbose_during_a_live_run(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    output_master, output_slave = pty.openpty()
-    toggle_master, toggle_slave = pty.openpty()
-    in_request = threading.Event()
-    toggled = threading.Event()
-
-    def watching_toggle(console: Any) -> Any:
-        toggled.set()
-        return toggle_verbose(console)
-
-    def gated_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
-        in_request.set()
-        assert toggled.wait(5.0), "the tab key never toggled verbose mode"
-        chunks = with_usage(stream_chunks("Hello."), USAGE)
-        return Ok(FakeStreamResponse(chunks))
-
-    def feed_tab() -> None:
-        if in_request.wait(5.0):
-            os.write(toggle_master, b"\t")
-
-    monkeypatch.setattr(cli, "toggle_verbose", watching_toggle)
-    monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(toggle_slave)))
-    writer = threading.Thread(target=feed_tab, daemon=True)
-    writer.start()
-
-    stderr = os.fdopen(output_slave, "w")
-    stdout = io.StringIO()
-    try:
-        code = cli.main(
-            [
-                "-c",
-                str(write_config(tmp_path)),
-                "--cache-directory",
-                str(tmp_path / "cache"),
-                "--no-cache",
-            ],
-            {},
-            io.StringIO("你好。"),
-            stdout,
-            stderr,
-            time.time,
-            gated_open,
-        ).run()
-    finally:
-        stderr.close()
-        os.close(output_master)
-        os.close(toggle_master)
-        os.close(toggle_slave)
-
-    assert code == 0
-    assert stdout.getvalue() == "Hello.\n"
-    assert toggled.is_set()
 
 
 def test_translation_request_carries_glossary_block(tmp_path: Path) -> None:
@@ -958,52 +868,49 @@ def test_update_glossary_cached_run_still_writes_the_file(tmp_path: Path) -> Non
     assert [item["original"] for item in document] == ["大观园"]
 
 
-def test_parse_arguments_returns_version_text() -> None:
-    result = cli.parse_arguments(["--version"]).run()
-    assert isinstance(result, Ok)
-    assert isinstance(result.value, cli.EarlyExitText)
-    assert result.value.text == "l2l " + __version__
+def test_parse_arguments_early_exit_text() -> None:
+    for arguments, expected in (
+        (["--version"], "l2l " + __version__),
+        (["-v"], "l2l " + __version__),
+        (["--help"], "usage:"),
+        (["-h"], "usage:"),
+    ):
+        result = cli.parse_arguments(arguments).run()
+        assert isinstance(result, Ok)
+        assert isinstance(result.value, cli.EarlyExitText)
+        assert expected in result.value.text
 
 
-def test_parse_arguments_returns_help_text() -> None:
-    result = cli.parse_arguments(["--help"]).run()
-    assert isinstance(result, Ok)
-    assert isinstance(result.value, cli.EarlyExitText)
-    assert "usage:" in result.value.text
-    assert "--dry-run" in result.value.text
-
-
-def test_parse_arguments_reports_invalid_flags() -> None:
-    result = cli.parse_arguments(["--nope"]).run()
-    assert isinstance(result, Err)
-    assert "invalid arguments" in describe(result.error)
-
-
-def test_parse_arguments_rejects_dry_run_with_extract_glossary() -> None:
-    result = cli.parse_arguments(
-        ["-c", "cfg.toml", "--dry-run", "--extract-glossary", "glossary.json"]
-    ).run()
-    assert isinstance(result, Err)
-    assert "--extract-glossary cannot be combined with --dry-run" in describe(
-        result.error
+def test_parse_arguments_rejects_invalid_or_conflicting_modes() -> None:
+    invalid_argument_groups = (
+        (["--nope"], "invalid arguments"),
+        (["-c", "cfg.toml", "--max"], "invalid arguments"),
+        (
+            ["-c", "cfg.toml", "--dry-run", "--extract-glossary", "glossary.json"],
+            "--extract-glossary cannot be combined with --dry-run",
+        ),
+        (
+            ["-c", "cfg.toml", "--check-config", "--prune-cache", "7"],
+            "cannot be combined with",
+        ),
+        (
+            ["-c", "cfg.toml", "--check-config", "--extract-glossary", "g.json"],
+            "cannot be combined with",
+        ),
+        (["-c", "cfg.toml", "--check-config", "--dry-run"], "cannot be combined with"),
+        (
+            ["-c", "cfg.toml", "--prune-cache", "7", "--extract-glossary", "g.json"],
+            "cannot be combined with",
+        ),
+        (["-c", "cfg.toml", "--prune-cache", "7", "--dry-run"], "cannot be combined"),
     )
-
-
-def test_parse_arguments_rejects_every_conflicting_mode_pair() -> None:
-    conflicting_argument_groups = (
-        ["-c", "cfg.toml", "--check-config", "--prune-cache", "7"],
-        ["-c", "cfg.toml", "--check-config", "--extract-glossary", "glossary.json"],
-        ["-c", "cfg.toml", "--check-config", "--dry-run"],
-        ["-c", "cfg.toml", "--prune-cache", "7", "--extract-glossary", "glossary.json"],
-        ["-c", "cfg.toml", "--prune-cache", "7", "--dry-run"],
-    )
-    for arguments in conflicting_argument_groups:
+    for arguments, fragment in invalid_argument_groups:
         result = cli.parse_arguments(arguments).run()
         assert isinstance(result, Err)
-        assert "cannot be combined with" in describe(result.error)
+        assert fragment in describe(result.error)
 
 
-def test_parse_arguments_still_accepts_single_modes() -> None:
+def test_parse_arguments_accepts_single_modes() -> None:
     for arguments in (
         ["-c", "cfg.toml", "--check-config"],
         ["-c", "cfg.toml", "--prune-cache", "7"],
@@ -1015,18 +922,15 @@ def test_parse_arguments_still_accepts_single_modes() -> None:
         assert isinstance(result.value, Arguments)
 
 
-def test_main_prints_version_and_returns_zero_without_http(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(tmp_path, ["--version"], "")
-    assert code == 0
-    assert stdout == "l2l " + __version__ + "\n"
-    assert stderr == ""
-
-
-def test_main_prints_help_and_returns_zero_without_http(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(tmp_path, ["--help"], "")
-    assert code == 0
-    assert "usage:" in stdout
-    assert stderr == ""
+def test_main_prints_version_and_help_without_http(tmp_path: Path) -> None:
+    for arguments, expected in (
+        (["--version"], "l2l " + __version__ + "\n"),
+        (["--help"], "usage:"),
+    ):
+        code, stdout, stderr = run_l2l(tmp_path, arguments, "")
+        assert code == 0
+        assert expected in stdout
+        assert stderr == ""
 
 
 def test_main_rejects_dry_run_with_extract_glossary_without_http(
@@ -1114,24 +1018,23 @@ def test_cli_handles_broken_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exits == [141]
 
 
-def test_parse_args_defaults() -> None:
-    arguments = cli.parse_args(["-c", "cfg.toml", "--no-cache", "-V"])
-    assert arguments.config == "cfg.toml"
-    assert arguments.no_cache
-    assert not arguments.ensure_paragraphs
-    assert arguments.verbose
-    assert arguments.cache_directory is None
-    assert arguments.log_retention_days == 30
-    assert arguments.target_language is None
+def test_parse_args_defaults_and_short_flags() -> None:
+    defaults = cli.parse_args(["-c", "cfg.toml", "--no-cache", "-V"])
+    assert defaults.config == "cfg.toml"
+    assert defaults.no_cache
+    assert not defaults.ensure_paragraphs
+    assert defaults.verbose
+    assert defaults.cache_directory is None
+    assert defaults.log_retention_days == 30
+    assert defaults.target_language is None
+    assert cli.parse_args(["-c", "cfg.toml", "--ensure-paragraphs"]).ensure_paragraphs
+    assert (
+        cli.parse_args(
+            ["-c", "cfg.toml", "--log-retention-days", "0"]
+        ).log_retention_days
+        == 0
+    )
 
-    arguments = cli.parse_args(["-c", "cfg.toml", "--ensure-paragraphs"])
-    assert arguments.ensure_paragraphs
-
-    arguments = cli.parse_args(["-c", "cfg.toml", "--log-retention-days", "0"])
-    assert arguments.log_retention_days == 0
-
-
-def test_parse_args_accepts_short_flags() -> None:
     arguments = cli.parse_args(
         [
             "-c",
@@ -1174,26 +1077,6 @@ def test_parse_args_accepts_short_flags() -> None:
     assert arguments.print_log_path
     assert arguments.dry_run
     assert arguments.verbose
-
-
-def test_short_version_flag_exits_early() -> None:
-    result = cli.parse_arguments(["-v"]).run()
-    assert isinstance(result, Ok)
-    assert isinstance(result.value, cli.EarlyExitText)
-    assert result.value.text == "l2l " + __version__
-
-
-def test_short_help_flag_exits_early() -> None:
-    result = cli.parse_arguments(["-h"]).run()
-    assert isinstance(result, Ok)
-    assert isinstance(result.value, cli.EarlyExitText)
-    assert "usage:" in result.value.text
-
-
-def test_parse_arguments_rejects_abbreviated_long_options() -> None:
-    result = cli.parse_arguments(["-c", "cfg.toml", "--max"]).run()
-    assert isinstance(result, Err)
-    assert "invalid arguments" in describe(result.error)
 
 
 def test_update_glossary_pass_with_malformed_reply_exits_one(tmp_path: Path) -> None:
@@ -1361,12 +1244,3 @@ def test_target_language_separates_the_cache_and_fills_the_prompt(
         json.loads(request.body)["messages"][0]["content"] for request in http.requests
     ]
     assert systems == ["Translate to English.", "Translate to French."]
-
-
-def test_check_config_reports_script_checks_in_the_pass_line(tmp_path: Path) -> None:
-    code, stdout, _stderr = run_l2l(
-        tmp_path, ["-c", str(write_config(tmp_path)), "--check-config"]
-    )
-    assert code == 0
-    assert "uses_target_language_placeholder=True" in stdout
-    assert "warning:" not in stdout

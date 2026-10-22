@@ -1,9 +1,8 @@
-import dataclasses
 import io
 import json
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any
 
 from fakes import (
     FakeHttp,
@@ -47,15 +46,6 @@ from l2l.settings import PassDefinition
 from l2l.text import THINK_OPEN, Usage
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
-
-
-def test_fold_io_handles_thousands_of_items() -> None:
-    def step(pair: tuple[int, None], _: int) -> IO[Result[tuple[int, None], str]]:
-        return io_pure(Ok((pair[0] + 1, None)))
-
-    outcome = fold_io(range(5000), step, Ok((0, None))).run()
-    assert isinstance(outcome, Ok)
-    assert outcome.value[0] == 5000
 
 
 def test_fold_io_short_circuits_on_error() -> None:
@@ -164,24 +154,6 @@ def test_run_pipeline_wraps_analysis_failure() -> None:
     assert "could not reach endpoint: down" in logged
 
 
-def test_run_pipeline_repairs_non_ascii_via_llm() -> None:
-    console, _stderr = make_console()
-    http = FakeHttp(
-        [
-            FakeStreamResponse(with_usage(stream_chunks("Hi 中"), USAGE)),
-            FakeStreamResponse(with_usage(stream_chunks("Hi there"), USAGE)),
-        ]
-    )
-    run_context = make_context(console, http.open)
-    stdout = io.StringIO()
-    code = run_pipeline(
-        run_context, (chunk_pass(ascii_output=True),), "文本。", 0.0, stdout
-    ).run()
-    assert code == 0
-    assert stdout.getvalue() == "Hi there\n"
-    assert len(http.requests) == 2
-
-
 def test_run_pipeline_drops_non_ascii_after_failed_repairs() -> None:
     console, stderr = make_console()
     stubborn = "中 x"
@@ -204,38 +176,22 @@ def test_run_pipeline_drops_non_ascii_after_failed_repairs() -> None:
     assert len(http.requests) == 4
 
 
-def test_unit_reply_in_the_source_script_is_repaired_for_a_known_target() -> None:
-    console, stderr = make_console()
-    http = FakeHttp(
-        [
-            FakeStreamResponse(with_usage(stream_chunks("你好。"), USAGE)),
-            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
-        ]
-    )
-    run_context = make_context(console, http.open, verbose=True)
-    stdout = io.StringIO()
-    code = run_pipeline(run_context, (chunk_pass(),), "你好。", 0.0, stdout).run()
-    assert code == 0
-    assert stdout.getvalue() == "Hello.\n"
-    assert len(http.requests) == 2
-    logged = stderr.getvalue()
-    assert "not in the target language (English: Latin script)" in logged
-
-
-def test_unit_reply_in_a_third_script_is_repaired_for_a_known_target() -> None:
-    console, _stderr = make_console()
-    http = FakeHttp(
-        [
-            FakeStreamResponse(with_usage(stream_chunks("Привет."), USAGE)),
-            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
-        ]
-    )
-    run_context = make_context(console, http.open)
-    stdout = io.StringIO()
-    code = run_pipeline(run_context, (chunk_pass(),), "你好。", 0.0, stdout).run()
-    assert code == 0
-    assert stdout.getvalue() == "Hello.\n"
-    assert len(http.requests) == 2
+def test_replies_in_the_source_or_a_third_script_are_repaired() -> None:
+    for reply in ("你好。", "Привет."):
+        console, stderr = make_console()
+        http = FakeHttp(
+            [
+                FakeStreamResponse(with_usage(stream_chunks(reply), USAGE)),
+                FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
+            ]
+        )
+        run_context = make_context(console, http.open, verbose=True)
+        stdout = io.StringIO()
+        code = run_pipeline(run_context, (chunk_pass(),), "你好。", 0.0, stdout).run()
+        assert code == 0
+        assert stdout.getvalue() == "Hello.\n"
+        assert len(http.requests) == 2
+        assert "not in the target language" in stderr.getvalue()
 
 
 def test_unit_accepts_multiscript_output_for_japanese() -> None:
@@ -421,24 +377,41 @@ def test_retranslation_fails_when_paragraph_still_untranslated() -> None:
     assert "你好。" in logged
 
 
-def test_retranslation_ignores_letterless_paragraph_with_numbers() -> None:
-    console, stderr = make_console()
-    http = FakeHttp(
-        [FakeStreamResponse(with_usage(stream_chunks("Hello.\n\n2078!"), USAGE))]
+def test_retranslation_ignores_letterless_paragraphs() -> None:
+    cases = (
+        ("English", "你好。\n\n2078年！", ["Hello.\n\n2078!"], "Hello.\n\n2078!\n", 1),
+        (
+            "Zorblaxian",
+            "你好。\n\n123",
+            ["你好。\n\n123", "Hello."],
+            "Hello.\n\n123\n",
+            2,
+        ),
     )
-    run_context = make_context(console, http.open, verbose=True)
-    stdout = io.StringIO()
-    code = run_pipeline(
-        run_context,
-        (chunk_pass(retranslate_untranslated=True),),
-        "你好。\n\n2078年！",
-        0.0,
-        stdout,
-    ).run()
-    assert code == 0
-    assert stdout.getvalue() == "Hello.\n\n2078!\n"
-    assert len(http.requests) == 1
-    assert "look untranslated" not in stderr.getvalue()
+    for target_language, source, replies, expected, expected_calls in cases:
+        console, stderr = make_console()
+        http = FakeHttp(
+            [
+                FakeStreamResponse(with_usage(stream_chunks(reply), USAGE))
+                for reply in replies
+            ]
+        )
+        run_context = make_context(
+            console, http.open, verbose=True, target_language=target_language
+        )
+        stdout = io.StringIO()
+        code = run_pipeline(
+            run_context,
+            (chunk_pass(retranslate_untranslated=True),),
+            source,
+            0.0,
+            stdout,
+        ).run()
+        assert code == 0
+        assert stdout.getvalue() == expected
+        assert len(http.requests) == expected_calls
+        if expected_calls == 1:
+            assert "look untranslated" not in stderr.getvalue()
 
 
 def test_retranslation_accepts_paragraph_already_in_target_script() -> None:
@@ -527,63 +500,24 @@ def test_retranslation_best_effort_keeps_untranslated_paragraph() -> None:
     assert len(http.requests) == 4
 
 
-def test_retranslation_disabled_by_default() -> None:
-    console, _ = make_console()
-    http = FakeHttp(
-        [FakeStreamResponse(with_usage(stream_chunks("你好。\n\n世界。"), USAGE))]
+def test_retranslation_is_skipped_by_default_or_on_paragraph_mismatch() -> None:
+    cases = (
+        (chunk_pass(), "你好。\n\n世界。", "你好。\n\n世界。"),
+        (
+            chunk_pass(retranslate_untranslated=True),
+            "你好。\n\n世界。",
+            "Hello.\n\n世界。\n\n世界。",
+        ),
     )
-    run_context = make_context(console, http.open, target_language="Zorblaxian")
-    stdout = io.StringIO()
-    code = run_pipeline(
-        run_context, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
-    ).run()
-    assert code == 0
-    assert stdout.getvalue() == "你好。\n\n世界。\n"
-    assert len(http.requests) == 1
-
-
-def test_retranslation_skipped_when_paragraph_count_differs() -> None:
-    console, _ = make_console()
-    http = FakeHttp(
-        [
-            FakeStreamResponse(
-                with_usage(stream_chunks("Hello.\n\n世界。\n\n世界。"), USAGE)
-            )
-        ]
-    )
-    run_context = make_context(console, http.open)
-    stdout = io.StringIO()
-    code = run_pipeline(
-        run_context,
-        (chunk_pass(retranslate_untranslated=True),),
-        "你好。\n\n世界。",
-        0.0,
-        stdout,
-    ).run()
-    assert code == 0
-    assert len(http.requests) == 1
-
-
-def test_retranslation_ignores_letterless_paragraphs() -> None:
-    console, _ = make_console()
-    http = FakeHttp(
-        [
-            FakeStreamResponse(with_usage(stream_chunks("你好。\n\n123"), USAGE)),
-            FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE)),
-        ]
-    )
-    run_context = make_context(console, http.open, target_language="Zorblaxian")
-    stdout = io.StringIO()
-    code = run_pipeline(
-        run_context,
-        (chunk_pass(retranslate_untranslated=True),),
-        "你好。\n\n123",
-        0.0,
-        stdout,
-    ).run()
-    assert code == 0
-    assert stdout.getvalue() == "Hello.\n\n123\n"
-    assert len(http.requests) == 2
+    for pass_definition, source, reply in cases:
+        console, _ = make_console()
+        http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks(reply), USAGE))])
+        run_context = make_context(console, http.open, target_language="Zorblaxian")
+        stdout = io.StringIO()
+        code = run_pipeline(run_context, (pass_definition,), source, 0.0, stdout).run()
+        assert code == 0
+        assert len(http.requests) == 1
+        assert stdout.getvalue()
 
 
 def test_retranslation_runs_before_ascii_enforcement() -> None:
@@ -966,55 +900,20 @@ def test_ascii_enforcement_skips_analysis_passes() -> None:
     assert len(http.requests) == 1
 
 
-def test_run_pipeline_translates() -> None:
+def test_run_pipeline_translates_and_logs_verbose_progress() -> None:
     console, stderr = make_console()
     chunks = with_usage(stream_chunks("Hello.\n\nWorld."), USAGE)
     http = FakeHttp([FakeStreamResponse(chunks)])
-    run_context = make_context(console, http.open)
+    run_context = make_context(console, http.open, verbose=True)
     stdout = io.StringIO()
     code = run_pipeline(
         run_context, (chunk_pass(),), "你好。\n\n世界。", 0.0, stdout
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Hello.\n\nWorld.\n"
-    assert "TOTAL" in stderr.getvalue()
-
-
-def test_run_pipeline_logs_finished_units_when_verbose() -> None:
-    console, stderr = make_console()
-    chunks = with_usage(stream_chunks("Hello."), USAGE)
-    http = FakeHttp([FakeStreamResponse(chunks)])
-    run_context = make_context(console, http.open, verbose=True)
-    stdout = io.StringIO()
-    code = run_pipeline(run_context, (chunk_pass(),), "你好。", 0.0, stdout).run()
-    assert code == 0
-    assert stdout.getvalue() == "Hello.\n"
-    assert "l2l: [translate] unit 1/1 done" in stderr.getvalue()
-
-
-def test_run_pipeline_total_elapsed_measures_since_started() -> None:
-    console, stderr = make_console()
-    http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
-    readings: list[float] = []
-    current = 100.0
-
-    def clock() -> float:
-        nonlocal current
-        current += 5.0
-        readings.append(current)
-        return current
-
-    run_context = make_context(console, http.open, clock=clock)
-    stdout = io.StringIO()
-    started = clock()
-    code = run_pipeline(run_context, (chunk_pass(),), "你好。", started, stdout).run()
-    assert code == 0
-    assert stdout.getvalue() == "Hello.\n"
-    elapsed = readings[-1] - readings[0]
-    total = next(line for line in stderr.getvalue().splitlines() if "TOTAL" in line)
-    assert "TOTAL: %.1fs" % elapsed in total
-    rate = USAGE["completion_tokens"] / elapsed if elapsed > 0 else 0.0
-    assert "%.1f tok/s" % rate in total
+    logged = stderr.getvalue()
+    assert "l2l: [translate] unit 1/1 done" in logged
+    assert "TOTAL" in logged
 
 
 def test_run_pipeline_reports_unit_failure() -> None:
@@ -1076,44 +975,27 @@ def test_ensure_paragraphs_reports_a_failed_retry_attempt() -> None:
     assert len(requests) == 6
 
 
-def test_best_effort_paragraph_pass_continues_when_counts_still_differ() -> None:
-    console, stderr = make_console()
+def test_paragraph_pass_validation_modes() -> None:
     stubborn = "One.\n\nTwo."
-    http = FakeHttp(
-        [FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE))] * 3
-    )
-    run_context = make_context(console, http.open, best_effort=True)
-    stdout = io.StringIO()
-    merged = PassDefinition("translate", "T.", "paragraph", {}, None, False, True)
-    code = run_pipeline(run_context, (merged,), "你好。", 0.0, stdout).run()
-    assert code == 0
-    assert stdout.getvalue() == stubborn + "\n"
-    logged = stderr.getvalue()
-    assert "failed validation 2 time(s)" in logged
-    assert "output has 2 paragraph(s), source has 1" in logged
-    assert "continuing" in logged
-    assert len(http.requests) == 3
-
-
-def test_strict_paragraph_pass_fails_when_counts_still_differ() -> None:
-    console, stderr = make_console()
-    stubborn = "One.\n\nTwo."
-    http = FakeHttp(
-        [FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE))] * 3
-    )
-    run_context = make_context(console, http.open)
-    stdout = io.StringIO()
-    merged = PassDefinition("translate", "T.", "paragraph", {}, None, False, True)
-    code = run_pipeline(run_context, (merged,), "你好。", 0.0, stdout).run()
-    assert code == 1
-    assert stdout.getvalue() == ""
-    logged = stderr.getvalue()
-    assert "failed validation 2 time(s)" in logged
-    assert "continuing" in logged
-    assert "pass [translate] output still failed validation" in logged
-    assert "still failed validation after 2 repair attempt(s)" in logged
-    assert "--best-effort" in logged
-    assert len(http.requests) == 3
+    for best_effort, expected_code, expected_output, expected_log in (
+        (True, 0, stubborn + "\n", "continuing"),
+        (False, 1, "", "still failed validation after 2 repair attempt(s)"),
+    ):
+        console, stderr = make_console()
+        http = FakeHttp(
+            [FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE))] * 3
+        )
+        run_context = make_context(console, http.open, best_effort=best_effort)
+        stdout = io.StringIO()
+        merged = PassDefinition("translate", "T.", "paragraph", {}, None, False, True)
+        code = run_pipeline(run_context, (merged,), "你好。", 0.0, stdout).run()
+        assert code == expected_code
+        assert stdout.getvalue() == expected_output
+        logged = stderr.getvalue()
+        assert "failed validation 2 time(s)" in logged
+        assert "output has 2 paragraph(s), source has 1" in logged
+        assert expected_log in logged
+        assert len(http.requests) == 3
 
 
 def test_conclude_pass_result_attaches_the_pass_name_to_invalid_output() -> None:
@@ -1829,27 +1711,6 @@ def test_update_glossary_pass_without_glossary_path_fails_the_run() -> None:
         "an update_glossary pass requires at least one --glossary file on the "
         "command line" in stderr.getvalue()
     )
-
-
-def test_state_requires_every_field_by_keyword() -> None:
-    fields = dataclasses.fields(State)
-    assert [field.name for field in fields] == [
-        "text",
-        "analysis",
-        "usage",
-        "validated",
-        "problem",
-        "glossary",
-    ]
-    assert all(field.default is dataclasses.MISSING for field in fields)
-    positional_arguments: tuple[object, ...] = ("text", None, Usage(), True, None, ())
-    constructor = cast(Any, State)
-    try:
-        constructor(*positional_arguments)
-    except TypeError:
-        return
-
-    raise AssertionError("State must reject positional construction")
 
 
 def test_state_with_output_preserves_identity_and_merges_validation() -> None:

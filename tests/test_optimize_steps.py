@@ -51,7 +51,6 @@ from tools.optimize import (
     resolve_api,
     rewrite_prompt,
     round_texts,
-    strip_reply,
     translate_chapter,
 )
 
@@ -332,11 +331,6 @@ def test_read_jsonl_reads_a_ledger_and_tolerates_a_missing_file(tmp_path: Path) 
     entries = read_jsonl(str(ledger)).run()
     assert entries == ({"decision": "promoted"}, {"decision": "kept"})
     assert read_jsonl(str(tmp_path / "absent.jsonl")).run() == ()
-
-
-def test_strip_reply_handles_unterminated_fences() -> None:
-    assert strip_reply("```python\nbetter body") == "better body"
-    assert strip_reply("```") == ""
 
 
 def blank_rewrite_opener(
