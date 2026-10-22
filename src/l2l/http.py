@@ -152,25 +152,24 @@ def curl_failure(error: Any, kind: HttpKind) -> Err[TranslationError]:
     return fail_http(resolved, curl_error_detail(error))
 
 
+def environment_value(
+    environment: Mapping[str, str], names: tuple[str, ...]
+) -> Maybe[str]:
+    initial: Maybe[str] = NOTHING
+    return reduce(
+        maybe_or,
+        (maybe_from_optional(environment.get(name) or None) for name in names),
+        initial,
+    )
+
+
 def proxy_for(url: str, environment: Mapping[str, str]) -> Maybe[str]:
     scheme = url.split(":", 1)[0].lower() if ":" in url else ""
-    candidates = (scheme + "_proxy", "all_proxy", "ALL_PROXY")
-
-    def lookup(name: str) -> Maybe[str]:
-        return maybe_from_optional(environment.get(name) or None)
-
-    initial: Maybe[str] = NOTHING
-    return reduce(maybe_or, (lookup(name) for name in candidates), initial)
+    return environment_value(environment, (scheme + "_proxy", "all_proxy", "ALL_PROXY"))
 
 
 def noproxy_for(environment: Mapping[str, str]) -> Maybe[str]:
-    def lookup(name: str) -> Maybe[str]:
-        return maybe_from_optional(environment.get(name) or None)
-
-    initial: Maybe[str] = NOTHING
-    return reduce(
-        maybe_or, (lookup(name) for name in ("no_proxy", "NO_PROXY")), initial
-    )
+    return environment_value(environment, ("no_proxy", "NO_PROXY"))
 
 
 def extract_message(
@@ -346,16 +345,15 @@ def stream_step(
         )
 
     return Ok(
-        StreamState(
+        replace(
+            state,
             reasoning=cons_all(reasoning_texts, state.reasoning),
             contents=cons(visible, state.contents) if visible else state.contents,
             reported_usage=reported_usage,
             chunk_count=state.chunk_count + thinking_progress + text_progress,
             content_started=state.content_started or bool(text),
             think=think_state,
-            sse=state.sse,
             finish_reason=finish_reason or state.finish_reason,
-            completed=state.completed,
             progress_update=progress_update,
         )
     )
@@ -431,7 +429,6 @@ def plain_reply(body: Any) -> Result[ChatReply, TranslationError]:
             content=texts,
             reasoning=message_reasoning_texts(message) + thoughts,
             reported_usage=reported_usage,
-            chunk_count=0,
         )
     )
 
@@ -751,6 +748,17 @@ def read_failure(error: Exception) -> Result[tuple[str, Any], TranslationError]:
     return fail_http("protocol", "%s: %s" % (type(error).__name__, error))
 
 
+def log_failure[T](
+    run_context: Context, outcome: Result[T, TranslationError]
+) -> IO[Result[T, TranslationError]]:
+    if isinstance(outcome, Ok):
+        return io_result(outcome)
+
+    return io_map(
+        log_error(run_context.log, describe(outcome.error)), lambda _: outcome
+    )
+
+
 def http_post_json(
     run_context: Context, payload: Mapping[str, Any]
 ) -> IO[Result[dict[str, Any], TranslationError]]:
@@ -776,10 +784,7 @@ def http_post_json(
         outcome: Result[tuple[str, Any], TranslationError],
     ) -> IO[Result[dict[str, Any], TranslationError]]:
         if isinstance(outcome, Err):
-            return io_map(
-                log_error(run_context.log, describe(outcome.error)),
-                lambda _: Err(outcome.error),
-            )
+            return log_failure(run_context, outcome)
 
         body, loaded = outcome.value
         return io_map(
@@ -813,13 +818,7 @@ def http_stream(
     def logged(
         opened: Result[Any, TranslationError],
     ) -> IO[Result[Any, TranslationError]]:
-        if isinstance(opened, Ok):
-            return io_result(opened)
-
-        return io_map(
-            log_error(run_context.log, describe(opened.error)),
-            lambda _: opened,
-        )
+        return log_failure(run_context, opened)
 
     def respond(
         opened: Result[Any, TranslationError],
@@ -927,10 +926,7 @@ def collect_stream(
     ) -> IO[Result[StreamState, TranslationError]]:
         def recorded(_: None) -> IO[Result[StreamState, TranslationError]]:
             if isinstance(outcome, Err):
-                return io_map(
-                    log_error(run_context.log, describe(outcome.error)),
-                    lambda _: outcome,
-                )
+                return log_failure(run_context, outcome)
 
             return io_map(run_log_write(run_context.log, "\n"), lambda _: outcome)
 
@@ -954,13 +950,11 @@ def collect_stream(
     return http_stream(run_context, payload, drive)
 
 
-def log_all(
-    console: Console, messages: tuple[str, ...]
-) -> IO[Result[tuple[()], TranslationError]]:
+def log_all(console: Console, messages: tuple[str, ...]) -> IO[None]:
     def step(_: tuple[()], message: str) -> IO[Result[tuple[()], TranslationError]]:
         return io_map(console.log_verbose(message), lambda _: Ok(()))
 
-    return fold_io(messages, step, Ok(()))
+    return io_map(fold_io(messages, step, Ok(())), lambda _: None)
 
 
 def apply_stream_override(
@@ -1172,7 +1166,7 @@ def conclude_chat(
         )
 
         def finish(
-            _: Result[tuple[()], TranslationError],
+            _: None,
         ) -> Result[Translated, TranslationError]:
             return Ok(Translated(content, reply_usage(usage, reply, estimated)))
 

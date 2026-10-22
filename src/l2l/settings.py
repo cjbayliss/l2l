@@ -215,14 +215,11 @@ class PartialApiSettings:
     parameters: Mapping[str, Any] | None = None
 
     def merge(self, extra: PartialApiSettings) -> PartialApiSettings:
-        if self.parameters is not None and extra.parameters is not None:
-            parameters: Mapping[str, Any] | None = MappingProxyType(
-                {**self.parameters, **extra.parameters}
-            )
-        elif extra.parameters is None:
-            parameters = self.parameters
-        else:
-            parameters = MappingProxyType(dict(extra.parameters))
+        parameters = (
+            MappingProxyType({**(self.parameters or {}), **(extra.parameters or {})})
+            if self.parameters is not None or extra.parameters is not None
+            else None
+        )
 
         return PartialApiSettings(
             base_url=extra.base_url if extra.base_url is not None else self.base_url,

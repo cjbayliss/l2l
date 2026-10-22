@@ -199,13 +199,15 @@ def plan_report(
             source_report_line(text, source_paragraphs),
             *(
                 line
-                for indexed in enumerate(pass_definitions, 1)
+                for earlier_modes, indexed in zip(
+                    earlier_pass_modes, enumerate(pass_definitions, 1), strict=True
+                )
                 for line in report_pass(
                     run_context,
                     pass_definitions,
                     source_paragraphs,
                     separators,
-                    earlier_pass_modes[indexed[0] - 1],
+                    earlier_modes,
                     paragraph_plan,
                     indexed,
                 )
@@ -226,12 +228,13 @@ def parameters_text(parameters: Mapping[str, Any]) -> str:
 
 
 def setup_warnings(setup: Setup) -> tuple[str, ...]:
+    target_scripts = expected_target_scripts(setup.target_language)
     unknown_language_warnings: tuple[str, ...] = (
         (
             "target language %s is not recognized; script checks fall back to "
             "the ASCII-letter heuristic" % setup.target_language,
         )
-        if not expected_target_scripts(setup.target_language)
+        if not target_scripts
         else ()
     )
     instruction_warnings = tuple(
@@ -240,15 +243,15 @@ def setup_warnings(setup: Setup) -> tuple[str, ...]:
         % (
             number,
             pass_definition.name,
-            effective_target_language(setup.target_language, pass_definition),
+            language,
         )
         for number, pass_definition in enumerate(setup.passes, 1)
-        if pass_definition.mode != "update_glossary"
-        and pass_definition.instruction.strip()
-        and not instruction_uses_target_language(
-            pass_definition.instruction,
+        for language in (
             effective_target_language(setup.target_language, pass_definition),
         )
+        if pass_definition.mode != "update_glossary"
+        and pass_definition.instruction.strip()
+        and not instruction_uses_target_language(pass_definition.instruction, language)
     )
     glossary_warnings = tuple(
         "glossary entry %r renders as %r, which is not in the target "
@@ -256,15 +259,15 @@ def setup_warnings(setup: Setup) -> tuple[str, ...]:
         % (
             entry.original,
             rendering,
-            scripts_description(expected_target_scripts(setup.target_language)),
+            scripts_description(target_scripts),
         )
         for entry in setup.glossary_entries
         for rendering in (entry.attributes.get("translated", ""),)
+        for script in (dominant_script(rendering),)
         if rendering.strip()
-        and expected_target_scripts(setup.target_language)
-        and dominant_script(rendering)
-        and dominant_script(rendering)
-        not in expected_target_scripts(setup.target_language)
+        and target_scripts
+        and script
+        and script not in target_scripts
     )
     return unknown_language_warnings + instruction_warnings + glossary_warnings
 

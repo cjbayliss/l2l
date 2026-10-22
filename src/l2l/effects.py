@@ -323,47 +323,47 @@ def prune_old_logs(cache_directory: str, keep_days: int, clock: Clock) -> IO[int
     horizon = keep_days * LOG_SECONDS_PER_DAY
 
     def with_now(now_value: float) -> IO[int]:
-        def with_removal(
-            count: int, removal: Result[bool, TranslationError]
-        ) -> Result[int, TranslationError]:
-            match removal:
-                case Err(error):
-                    return Err(error)
-                case Ok(was_removed):
-                    return Ok(count + (1 if was_removed else 0))
-
-        def with_age(
-            count: int, path: str, aged: Result[float, TranslationError]
-        ) -> IO[Result[int, TranslationError]]:
-            match aged:
-                case Err(error):
-                    return io_result(Err(error))
-                case Ok(age):
-                    if age <= horizon:
-                        return io_result(Ok(count))
-
-                    return io_map(
-                        remove_file(path),
-                        lambda removal: with_removal(count, removal),
-                    )
-
         def step(count: int, path: str) -> IO[Result[int, TranslationError]]:
-            return io_bind(
-                file_age(path, now_value),
-                lambda aged: with_age(count, path, aged),
+            return io_map(
+                remove_file_if_older(path, now_value, horizon),
+                lambda removal: count_removed_file(count, removal),
             )
-
-        def report(pruned: Result[int, TranslationError]) -> int:
-            return result_or_else(pruned, lambda: 0)
 
         return io_map(
             io_bind(
                 log_paths(cache_directory), lambda paths: fold_io(paths, step, Ok(0))
             ),
-            report,
+            lambda pruned: result_or_else(pruned, lambda: 0),
         )
 
     return io_bind(now(clock), with_now)
+
+
+def count_removed_file(
+    count: int, removal: Result[bool, TranslationError]
+) -> Result[int, TranslationError]:
+    match removal:
+        case Err(error):
+            return Err(error)
+
+        case Ok(was_removed):
+            return Ok(count + (1 if was_removed else 0))
+
+
+def remove_file_if_older(
+    path: str, now_value: float, horizon: float
+) -> IO[Result[bool, TranslationError]]:
+    def decide(
+        aged: Result[float, TranslationError],
+    ) -> IO[Result[bool, TranslationError]]:
+        match aged:
+            case Err(error):
+                return io_result(Err(error))
+
+            case Ok(age):
+                return io_result(Ok(False)) if age <= horizon else remove_file(path)
+
+    return io_bind(file_age(path, now_value), decide)
 
 
 def file_age(path: str, now_value: float) -> IO[Result[float, TranslationError]]:

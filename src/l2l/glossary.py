@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -106,12 +107,8 @@ def parse_glossary_document(
     def check_duplicates(
         entries: tuple[GlossaryEntry, ...],
     ) -> Result[tuple[GlossaryEntry, ...], TranslationError]:
-        originals = tuple(entry.original for entry in entries)
-        duplicates = tuple(
-            dict.fromkeys(
-                original for original in originals if originals.count(original) > 1
-            )
-        )
+        counts = Counter(entry.original for entry in entries)
+        duplicates = tuple(original for original, count in counts.items() if count > 1)
         if duplicates:
             return fail_config(
                 '%s: duplicate glossary "original" value(s): %s'

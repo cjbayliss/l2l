@@ -167,6 +167,10 @@ def io_bind[T, R](io_value: IO[T], transform: Callable[[T], IO[R]]) -> IO[R]:
     return IO(lambda: transform(io_value.run()).run())
 
 
+def io_join[T](io_value: IO[IO[T]]) -> IO[T]:
+    return io_bind(io_value, lambda inner: inner)
+
+
 def io_and_then[T, R](io_value: IO[T], next_value: IO[R]) -> IO[R]:
     def thunk() -> R:
         io_value.run()

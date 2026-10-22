@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import reduce
 from itertools import accumulate, chain
 from typing import Any
 
@@ -224,16 +223,12 @@ class PassPlan:
 def preceding_modes(
     pass_definitions: tuple[PassDefinition, ...],
 ) -> tuple[PassModeSet, ...]:
-    def accumulate_modes_after_pass(
-        accumulated: tuple[PassModeSet, ...], pass_definition: PassDefinition
-    ) -> tuple[PassModeSet, ...]:
-        previous = accumulated[-1] if accumulated else frozenset[PassMode]()
-        return accumulated + (previous | {pass_definition.mode},)
-
-    modes_after_each_pass: tuple[PassModeSet, ...] = reduce(
-        accumulate_modes_after_pass, pass_definitions, ()
+    accumulated_modes = accumulate(
+        (pass_definition.mode for pass_definition in pass_definitions),
+        lambda modes, mode: modes | {mode},
+        initial=frozenset[PassMode](),
     )
-    return (frozenset[PassMode](),) + modes_after_each_pass[:-1]
+    return tuple(accumulated_modes)[:-1]
 
 
 def prompt_allowance(
@@ -486,6 +481,12 @@ def plan_unit_calls(
     glossary: tuple[GlossaryEntry, ...] = (),
 ) -> tuple[UnitCall, ...]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
+    call_salt = pass_salt(
+        pass_definition,
+        glossary,
+        retry_attempt,
+        effective_target_language(run_context.target_language, pass_definition),
+    )
     flat_plan = tuple(chain.from_iterable(plan))
     plan_starts = tuple(accumulate(map(len, plan), initial=0))
 
@@ -508,12 +509,7 @@ def plan_unit_calls(
         return build_unit_call(
             model,
             parameters,
-            pass_salt(
-                pass_definition,
-                glossary,
-                retry_attempt,
-                effective_target_language(run_context.target_language, pass_definition),
-            ),
+            call_salt,
             trailing_separators,
             index,
             index,
@@ -538,6 +534,11 @@ def plan_retranslation_calls(
     glossary: tuple[GlossaryEntry, ...] = (),
 ) -> tuple[UnitCall, ...]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
+    call_salt = retranslation_salt(
+        pass_definition,
+        glossary,
+        effective_target_language(run_context.target_language, pass_definition),
+    )
 
     def neighbour_context(index: int) -> tuple[str, ...]:
         neighbouring_indices = (index - 1, index + 1)
@@ -551,11 +552,7 @@ def plan_retranslation_calls(
         return build_unit_call(
             model,
             parameters,
-            retranslation_salt(
-                pass_definition,
-                glossary,
-                effective_target_language(run_context.target_language, pass_definition),
-            ),
+            call_salt,
             separators,
             position,
             index,

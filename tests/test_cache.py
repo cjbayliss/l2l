@@ -66,7 +66,7 @@ def test_cached_translation_hits_cache_without_computing(tmp_path: Path) -> None
     run_context, stream = make_cached_context(tmp_path)
     compute, calls = counting_compute([Translated("fresh", Usage())])
     key = cache_key("source", "model-x")
-    cache_store(run_context, key, "cached text", True).run()
+    cache_store(run_context, key, "cached text").run()
 
     result = cached_translation(
         run_context,
@@ -85,7 +85,7 @@ def test_cached_translation_hit_log_only_when_verbose(tmp_path: Path) -> None:
     run_context, stream = make_cached_context(tmp_path, verbose=False)
     compute, calls = counting_compute([Translated("fresh", Usage())])
     key = cache_key("source", "model-x")
-    cache_store(run_context, key, "cached text", True).run()
+    cache_store(run_context, key, "cached text").run()
 
     result = cached_translation(run_context, key, Usage(), compute, io_pure(None)).run()
 
@@ -98,7 +98,7 @@ def test_cached_translation_skips_unacceptable_cached_value(tmp_path: Path) -> N
     run_context, _ = make_cached_context(tmp_path)
     compute, calls = counting_compute([Translated("fresh ascii", Usage(1, 1, 0.0))])
     key = cache_key("source", "model-x")
-    cache_store(run_context, key, "non-ascii 中", True).run()
+    cache_store(run_context, key, "non-ascii 中").run()
 
     result = cached_translation(
         run_context, key, Usage(), compute, io_pure(None), acceptable=str.isascii
@@ -158,20 +158,12 @@ def test_cache_lookup_and_store_respect_use_cache(tmp_path: Path) -> None:
     key = cache_key("source", "model-x")
 
     assert cache_lookup(run_context, key).run() == NOTHING
-    cache_store(run_context, key, "value", True).run()
+    cache_store(run_context, key, "value").run()
     assert cache_lookup(run_context, key).run() == NOTHING
 
     storing_run_context, _ = make_cached_context(tmp_path, use_cache=True)
-    cache_store(storing_run_context, key, "value", True).run()
+    cache_store(storing_run_context, key, "value").run()
     assert cache_lookup(storing_run_context, key).run() == Just("value")
-
-
-def test_cache_store_condition_gates_write(tmp_path: Path) -> None:
-    run_context, _ = make_cached_context(tmp_path)
-    key = cache_key("source", "model-x")
-
-    cache_store(run_context, key, "value", False).run()
-    assert cache_lookup(run_context, key).run() == NOTHING
 
 
 def test_cache_store_write_failure_does_not_raise(tmp_path: Path) -> None:
@@ -181,7 +173,7 @@ def test_cache_store_write_failure_does_not_raise(tmp_path: Path) -> None:
     )
     key = cache_key("source", "model-x")
 
-    assert cache_store(absent_directory_context, key, "value", True).run() is None
+    assert cache_store(absent_directory_context, key, "value").run() is None
     assert cache_lookup(absent_directory_context, key).run() == NOTHING
 
 

@@ -114,22 +114,19 @@ class TabListener:
         return IO(thunk)
 
     def start(self) -> IO[None]:
-        def launched(_: threading.Thread | None) -> IO[None]:
-            thread = threading.Thread(
-                target=repeat_until(self.listen_action(), self.halt, POLL_SECONDS),
-                daemon=True,
-            )
+        thread = threading.Thread(
+            target=repeat_until(self.listen_action(), self.halt, POLL_SECONDS),
+            daemon=True,
+        )
 
-            def boot(_: threading.Thread | None) -> IO[None]:
-                def thunk() -> None:
-                    self.halt.clear()
-                    thread.start()
+        def boot(_: threading.Thread | None) -> IO[None]:
+            def thunk() -> None:
+                self.halt.clear()
+                thread.start()
 
-                return IO(thunk)
+            return IO(thunk)
 
-            return io_bind(write_reference(self.thread, thread), boot)
-
-        return io_bind(read_reference(self.thread), launched)
+        return io_bind(write_reference(self.thread, thread), boot)
 
     def restore(self) -> IO[None]:
         def claim(restored: bool) -> tuple[bool, bool]:
