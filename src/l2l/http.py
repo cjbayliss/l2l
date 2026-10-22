@@ -297,9 +297,12 @@ class StreamState:
 
 
 def stream_text(state: StreamState) -> str:
-    return "".join(cons_to_tuple(state.contents)) + (
-        state.think.held if state.think.checking and not state.think.open else ""
+    visible_held_text = (
+        state.think.buffered_text
+        if state.think.scanning_opening_tag and not state.think.inside_reasoning
+        else ""
     )
+    return "".join(cons_to_tuple(state.contents)) + visible_held_text
 
 
 def stream_step(
@@ -395,7 +398,7 @@ def require_completed_stream(
     return Ok(state)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class ChatReply:
     content: str
     reasoning: tuple[str, ...] = ()
@@ -1042,12 +1045,42 @@ def plain_call(
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class RepairOutcome:
     text: str
     usage: Usage
     validated: bool
     problem: str | None = None
+
+
+@dataclass(frozen=True)
+class RepairPolicy:
+    validate: Callable[[str], Maybe[str]]
+    build_retry_user: Callable[[str, str], str]
+    maximum_repairs: int
+    on_repair: Callable[[int, str], IO[None]]
+    on_exhausted: Callable[[str, str], IO[None]] | None = None
+
+
+def exhausted_repair(
+    policy: RepairPolicy, reply: Translated, problem: str
+) -> IO[Result[RepairOutcome, TranslationError]]:
+    announce = (
+        policy.on_exhausted(reply.text, problem)
+        if policy.on_exhausted is not None
+        else io_pure(None)
+    )
+    return io_map(
+        announce,
+        lambda _: Ok(
+            RepairOutcome(
+                text=reply.text,
+                usage=reply.usage,
+                validated=False,
+                problem=problem,
+            )
+        ),
+    )
 
 
 def repaired_call(
@@ -1056,11 +1089,7 @@ def repaired_call(
     parameters: Mapping[str, Any],
     instruction: str,
     initial_user: str,
-    validate: Callable[[str], Maybe[str]],
-    build_retry_user: Callable[[str, str], str],
-    maximum_repairs: int,
-    on_repair: Callable[[int, str], IO[None]],
-    on_exhausted: Callable[[str, str], IO[None]] | None,
+    policy: RepairPolicy,
 ) -> Callable[[Usage], IO[Result[RepairOutcome, TranslationError]]]:
     def request_and_repair_reply(
         user: str, failed: int, usage: Usage
@@ -1072,35 +1101,50 @@ def repaired_call(
                 return io_result(reply_result)
 
             reply = reply_result.value
-            problem = validate(reply.text)
+            problem = policy.validate(reply.text)
             if isinstance(problem, Nothing):
-                return io_result(Ok(RepairOutcome(reply.text, reply.usage, True)))
+                return io_result(
+                    Ok(
+                        RepairOutcome(
+                            text=reply.text,
+                            usage=reply.usage,
+                            validated=True,
+                            problem=None,
+                        )
+                    )
+                )
 
-            if failed > maximum_repairs:
-                announce = (
-                    on_exhausted(reply.text, problem.value)
-                    if on_exhausted is not None
-                    else io_pure(None)
-                )
-                return io_map(
-                    announce,
-                    lambda _: Ok(
-                        RepairOutcome(reply.text, reply.usage, False, problem.value)
-                    ),
-                )
+            if failed > policy.maximum_repairs:
+                return exhausted_repair(policy, reply, problem.value)
 
             def continued(_: None) -> IO[Result[RepairOutcome, TranslationError]]:
                 return request_and_repair_reply(
-                    build_retry_user(reply.text, problem.value), failed + 1, reply.usage
+                    policy.build_retry_user(reply.text, problem.value),
+                    failed + 1,
+                    reply.usage,
                 )
 
-            return io_bind(on_repair(failed, problem.value), continued)
+            return io_bind(policy.on_repair(failed, problem.value), continued)
 
         return io_bind(
             chat(run_context, instruction, user, model, parameters, usage), assessed
         )
 
     return lambda usage: request_and_repair_reply(initial_user, 1, usage)
+
+
+def reply_usage(usage: Usage, reply: ChatReply, estimated: int) -> Usage:
+    reported_usage = reply.reported_usage
+    if reported_usage:
+        return add_usage(usage, reported_usage)
+
+    return add_usage(
+        usage,
+        {
+            "prompt_tokens": estimated,
+            "completion_tokens": reply.chunk_count,
+        },
+    )
 
 
 def conclude_chat(
@@ -1130,23 +1174,7 @@ def conclude_chat(
         def finish(
             _: Result[tuple[()], TranslationError],
         ) -> Result[Translated, TranslationError]:
-            reported_usage = reply.reported_usage
-            return Ok(
-                Translated(
-                    content,
-                    (
-                        add_usage(usage, reported_usage)
-                        if reported_usage
-                        else add_usage(
-                            usage,
-                            {
-                                "prompt_tokens": estimated,
-                                "completion_tokens": reply.chunk_count,
-                            },
-                        )
-                    ),
-                )
-            )
+            return Ok(Translated(content, reply_usage(usage, reply, estimated)))
 
         return io_map(log_all(run_context.console, messages), finish)
 

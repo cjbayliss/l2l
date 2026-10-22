@@ -5,6 +5,7 @@ import json
 import os
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
@@ -79,16 +80,18 @@ def estimate_tokens(text: str) -> int:
     return (sum(map(token_weight, text)) + 3) // 4
 
 
-def split_paragraphs(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    blanks = re.compile(r"\n\s*\n").findall(text)
-    separator_pattern = (
-        r"(\n+)"
-        if text.count("\n") - sum(blank.count("\n") for blank in blanks)
-        >= 3 * len(blanks)
-        else r"(\n\s*\n)"
+def paragraph_separator_pattern(text: str) -> str:
+    blank_lines = re.findall(r"\n\s*\n", text)
+    non_blank_newlines = text.count("\n") - sum(
+        blank.count("\n") for blank in blank_lines
     )
-    parts = re.split(separator_pattern, text)
-    is_separator = re.compile(separator_pattern).fullmatch
+    return r"(\n+)" if non_blank_newlines >= 3 * len(blank_lines) else r"(\n\s*\n)"
+
+
+def split_paragraphs(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    pattern = paragraph_separator_pattern(text)
+    parts = re.split(pattern, text)
+    is_separator = re.compile(pattern).fullmatch
     return (
         tuple(part for part in parts if part and not is_separator(part)),
         tuple(part for part in parts if part and is_separator(part)),
@@ -163,6 +166,10 @@ def split_units_to_budget(
     )
 
 
+def separator_at(separators: tuple[str, ...], index: int) -> str:
+    return separators[index] if index < len(separators) else ""
+
+
 def unit_separators(
     plan: tuple[tuple[str, ...], ...], separators: tuple[str, ...]
 ) -> tuple[str, ...]:
@@ -170,8 +177,7 @@ def unit_separators(
         if index >= len(plan) - 1:
             return ""
 
-        position = end - 1
-        return separators[position] if position < len(separators) else ""
+        return separator_at(separators, end - 1)
 
     return tuple(
         separator_after_unit(index, end)
@@ -275,12 +281,34 @@ def letter_script(character: str) -> str:
 
 def dominant_script(text: str) -> str:
     scripts = tuple(script for script in map(letter_script, text) if script)
-    tally = ((scripts.count(script), script) for script in frozenset(scripts))
-    return max(tally, default=(0, UNKNOWN_SCRIPT))[1]
+    tallies = Counter(scripts)
+    return max(
+        ((count, script) for script, count in tallies.items()),
+        default=(0, UNKNOWN_SCRIPT),
+    )[1]
 
 
 def source_script(paragraphs: tuple[str, ...]) -> str:
     return dominant_script("".join(paragraphs))
+
+
+def echoes_source(source: str, output: str, character_map: Mapping[str, str]) -> bool:
+    return (
+        to_ascii_mechanical(source, character_map).split()
+        == to_ascii_mechanical(output, character_map).split()
+    )
+
+
+def has_ascii_letter(text: str) -> bool:
+    return any(character.isascii() and character.isalpha() for character in text)
+
+
+def contains_target_script(text: str, target_scripts: tuple[str, ...]) -> bool:
+    return any(
+        script in target_scripts
+        for character in text
+        for script in character_scripts(character)
+    )
 
 
 def untranslated_paragraph(
@@ -292,20 +320,16 @@ def untranslated_paragraph(
     if not has_letters(source):
         return False
 
-    folded_source = to_ascii_mechanical(source, character_map).split()
-    if folded_source == to_ascii_mechanical(output, character_map).split():
+    if echoes_source(source, output, character_map):
         return True
 
     if not has_letters(output):
         return not has_alphanumeric_characters(output)
 
     if not target_scripts:
-        return not any(char.isascii() and char.isalpha() for char in output)
+        return not has_ascii_letter(output)
 
-    return not any(
-        any(script in target_scripts for script in character_scripts(character))
-        for character in output
-    )
+    return not contains_target_script(output, target_scripts)
 
 
 def paragraph_is_in_target_script(output: str, target_scripts: tuple[str, ...]) -> bool:
@@ -391,7 +415,7 @@ def strip_think_tag(content: str) -> tuple[str, Maybe[str]]:
 
 @dataclass(frozen=True)
 class SseState:
-    pending: tuple[str, ...] = ()
+    pending_data: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -430,10 +454,10 @@ def decode_sse_data(data: str) -> SseFrame:
 def sse_step(state: SseState, raw_line: bytes) -> tuple[SseState, SseFrame]:
     line = raw_line.decode("utf-8", "replace").strip("\r\n")
     if line == "":
-        if not state.pending:
+        if not state.pending_data:
             return state, None
 
-        return SseState(), decode_sse_data("\n".join(state.pending))
+        return SseState(), decode_sse_data("\n".join(state.pending_data))
 
     if line.startswith(":"):
         return state, None
@@ -441,30 +465,36 @@ def sse_step(state: SseState, raw_line: bytes) -> tuple[SseState, SseFrame]:
     if line.startswith("data:"):
         payload = line[len("data:") :].removeprefix(" ")
 
-        return replace(state, pending=state.pending + (payload,)), None
+        return replace(state, pending_data=state.pending_data + (payload,)), None
 
     return state, None
 
 
 @dataclass(frozen=True)
 class ThinkState:
-    checking: bool = True
-    open: bool = False
-    held: str = ""
+    scanning_opening_tag: bool = True
+    inside_reasoning: bool = False
+    buffered_text: str = ""
+
+
+def buffered_close_length() -> int:
+    return len(THINK_CLOSE) - 1
 
 
 def think_step(state: ThinkState, text: str) -> tuple[ThinkState, bool, str]:
-    if not state.checking and not state.open:
-        return ThinkState(False, False, ""), False, state.held + text
+    if not state.scanning_opening_tag and not state.inside_reasoning:
+        return (
+            ThinkState(False, False, ""),
+            False,
+            state.buffered_text + text,
+        )
 
-    searched = state.held + text
-    if state.open:
+    searched = state.buffered_text + text
+    if state.inside_reasoning:
         closed = split_think_close(searched)
         if closed is None:
             return (
-                ThinkState(
-                    checking=False, open=True, held=searched[-(len(THINK_CLOSE) - 1) :]
-                ),
+                ThinkState(False, True, searched[-buffered_close_length() :]),
                 True,
                 "",
             )
@@ -477,11 +507,7 @@ def think_step(state: ThinkState, text: str) -> tuple[ThinkState, bool, str]:
         closed = split_think_close(rest)
         if closed is None:
             return (
-                ThinkState(
-                    checking=True,
-                    open=True,
-                    held=rest[-(len(THINK_CLOSE) - 1) :],
-                ),
+                ThinkState(True, True, rest[-buffered_close_length() :]),
                 True,
                 "",
             )

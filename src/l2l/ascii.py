@@ -7,7 +7,7 @@ from l2l.cache import cached_translation
 from l2l.context import Context
 from l2l.effects import now
 from l2l.errors import TranslationError, fail_ascii, fail_ascii_collapse
-from l2l.http import repaired_call
+from l2l.http import RepairPolicy, repaired_call
 from l2l.languages import normalized_language_name
 from l2l.messages import (
     ascii_cache_hit_message,
@@ -49,6 +49,7 @@ from l2l.text import (
     Usage,
     cache_key,
     drop_non_ascii,
+    separator_at,
     split_paragraphs,
     to_ascii_mechanical,
     usage_add,
@@ -96,13 +97,14 @@ def ascii_fix_llm(
             parameters,
             run_context.settings.ascii_fix_instruction,
             build_ascii_fix_user(source_paragraph, output_paragraph),
-            validate,
-            lambda bad_output, _problem: build_ascii_retry_user(
-                source_paragraph, output_paragraph, bad_output
+            RepairPolicy(
+                validate=validate,
+                build_retry_user=lambda bad_output, _problem: build_ascii_retry_user(
+                    source_paragraph, output_paragraph, bad_output
+                ),
+                maximum_repairs=run_context.settings.ascii_fix_attempts - 1,
+                on_repair=on_repair,
             ),
-            run_context.settings.ascii_fix_attempts - 1,
-            on_repair,
-            None,
         )
         return io_result_map(
             call(usage),
@@ -213,7 +215,7 @@ def ensure_ascii_output(
         indexed: tuple[int, str],
     ) -> IO[Result[tuple[str, Usage], TranslationError]]:
         index, paragraph = indexed
-        separator = separators[index] if index < len(separators) else ""
+        separator = separator_at(separators, index)
         if paragraph.isascii():
             return io_result(Ok((paragraph + separator, Usage())))
 

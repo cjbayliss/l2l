@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from typing import TextIO
@@ -34,7 +34,7 @@ from l2l.glossary import (
     instruction_with_glossary,
     parse_model_glossary_reply,
 )
-from l2l.http import RepairOutcome, chat, repaired_call
+from l2l.http import RepairOutcome, RepairPolicy, chat, repaired_call
 from l2l.languages import (
     expected_target_scripts,
     script_description,
@@ -117,6 +117,7 @@ from l2l.text import (
     excerpt,
     make_chunks,
     paragraph_is_in_target_script,
+    separator_at,
     source_script,
     split_paragraphs,
     split_units_to_budget,
@@ -127,17 +128,17 @@ from l2l.text import (
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class State:
     text: str
     analysis: str | None
     usage: Usage
-    validated: bool = True
-    problem: str | None = None
-    glossary: tuple[GlossaryEntry, ...] = ()
+    validated: bool
+    problem: str | None
+    glossary: tuple[GlossaryEntry, ...]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class UnitResult:
     text: str
     validated: bool
@@ -145,7 +146,7 @@ class UnitResult:
     problem: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class UnitsSoFar:
     outputs: tuple[str, ...]
     usage: Usage
@@ -153,9 +154,42 @@ class UnitsSoFar:
     problem: str | None
 
 
+@dataclass(frozen=True, kw_only=True)
+class PassExecution:
+    run_context: Context
+    pass_definition: PassDefinition
+    source_paragraphs: tuple[str, ...]
+    separators: tuple[str, ...]
+    chunk_plan: PassPlan
+    paragraph_plan: tuple[tuple[str, ...], ...]
+
+
+@dataclass(frozen=True, kw_only=True)
+class CallEnvironment:
+    run_context: Context
+    pass_definition: PassDefinition
+    glossary: tuple[GlossaryEntry, ...]
+
+
 StateResult = Result[State, TranslationError]
 
 PassRetry = Callable[[Usage, float], IO[StateResult]]
+
+
+def state_with_output(
+    state: State,
+    text: str,
+    usage: Usage,
+    validated: bool,
+    problem: str | None,
+) -> State:
+    return replace(
+        state,
+        text=text,
+        usage=usage,
+        validated=state.validated and validated,
+        problem=problem if problem is not None else state.problem,
+    )
 
 
 def untranslated_majority(flagged: int, total: int) -> bool:
@@ -303,60 +337,59 @@ def finish_pass_stage(
     return io_bind(now(run_context.clock), after_stage)
 
 
-def conclude_state(
+def enforce_ascii_state(
     run_context: Context,
     pass_definition: PassDefinition,
     state: State,
     source_paragraphs: tuple[str, ...],
-    retry_same_mode: PassRetry | None = None,
 ) -> IO[StateResult]:
-    if pass_definition.mode in ("analysis", "update_glossary"):
+    if not pass_definition.ascii:
         return io_result(Ok(state))
 
-    def ascii_stage(current: State) -> IO[StateResult]:
-        if not pass_definition.ascii:
-            return io_result(Ok(current))
+    def enforce(ascii_started: float) -> IO[StateResult]:
+        return io_result_map(
+            enforce_pass_ascii(
+                run_context,
+                pass_definition,
+                state.text,
+                source_paragraphs,
+                state.usage,
+                ascii_started,
+            ),
+            lambda translated: replace(
+                state,
+                text=translated.text,
+                usage=translated.usage,
+            ),
+        )
 
-        def enforce(ascii_started: float) -> IO[StateResult]:
-            return io_result_map(
-                enforce_pass_ascii(
-                    run_context,
-                    pass_definition,
-                    current.text,
-                    source_paragraphs,
-                    current.usage,
-                    ascii_started,
-                ),
-                lambda translated: replace(
-                    current,
-                    text=translated.text,
-                    usage=translated.usage,
-                ),
-            )
+    return io_bind(now(run_context.clock), enforce)
 
-        return io_bind(now(run_context.clock), enforce)
 
-    if not pass_definition.retranslate_untranslated:
-        return ascii_stage(state)
-
+def retranslate_state(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    state: State,
+    source_paragraphs: tuple[str, ...],
+    retry_same_mode: PassRetry | None,
+) -> IO[StateResult]:
     def after_retranslation(
         result: Result[Translated, TranslationError],
     ) -> IO[StateResult]:
         if isinstance(result, Err):
             return io_result(Err(result.error))
 
-        return ascii_stage(
-            replace(
+        return enforce_ascii_state(
+            run_context,
+            pass_definition,
+            state_with_output(
                 state,
-                text=result.value.text,
-                usage=result.value.usage,
-                validated=state.validated and result.value.validated,
-                problem=(
-                    result.value.problem
-                    if result.value.problem is not None
-                    else state.problem
-                ),
-            )
+                result.value.text,
+                result.value.usage,
+                result.value.validated,
+                result.value.problem,
+            ),
+            source_paragraphs,
         )
 
     def retranslation_stage(retranslation_started: float) -> IO[StateResult]:
@@ -378,6 +411,403 @@ def conclude_state(
     return io_bind(now(run_context.clock), retranslation_stage)
 
 
+def conclude_state(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    state: State,
+    source_paragraphs: tuple[str, ...],
+    retry_same_mode: PassRetry | None = None,
+) -> IO[StateResult]:
+    match pass_definition.mode:
+        case "analysis" | "update_glossary":
+            return io_result(Ok(state))
+
+        case _:
+            pass
+
+    if pass_definition.retranslate_untranslated:
+        return retranslate_state(
+            run_context, pass_definition, state, source_paragraphs, retry_same_mode
+        )
+
+    return enforce_ascii_state(run_context, pass_definition, state, source_paragraphs)
+
+
+@dataclass(frozen=True, kw_only=True)
+class RetranslationCheck:
+    has_matching_paragraph_count: bool
+    work_paragraphs: tuple[str, ...]
+    separators: tuple[str, ...]
+    flagged: tuple[int, ...]
+    target_language: str
+    target_scripts: tuple[str, ...]
+    source_script_display: str
+    target_scripts_display: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class RetranslationRun:
+    environment: CallEnvironment
+    check: RetranslationCheck
+    source_paragraphs: tuple[str, ...]
+    calls: tuple[UnitCall, ...]
+    usage: Usage
+    started_at: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class RetranslationEvaluation:
+    outcome: Result[Translated, TranslationError]
+    target_script_kept: tuple[tuple[int, str], ...]
+    best_effort_kept: tuple[int, str] | None
+
+
+def untranslated_paragraph_indices(
+    source_paragraphs: tuple[str, ...],
+    work_paragraphs: tuple[str, ...],
+    target_scripts: tuple[str, ...],
+    character_map: Mapping[str, str],
+) -> tuple[int, ...]:
+    return tuple(
+        index
+        for index, (source, output) in enumerate(
+            zip(source_paragraphs, work_paragraphs, strict=True)
+        )
+        if untranslated_paragraph(source, output, target_scripts, character_map)
+    )
+
+
+def retranslation_check(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    text: str,
+    source_paragraphs: tuple[str, ...],
+) -> RetranslationCheck:
+    work_paragraphs, separators = split_paragraphs(text)
+    target_language = effective_target_language(
+        run_context.target_language, pass_definition
+    )
+    target_scripts = expected_target_scripts(target_language)
+    source_script_name = source_script(source_paragraphs)
+    has_matching_paragraph_count = len(work_paragraphs) == len(source_paragraphs)
+    return RetranslationCheck(
+        has_matching_paragraph_count=has_matching_paragraph_count,
+        work_paragraphs=work_paragraphs,
+        separators=separators,
+        flagged=(
+            untranslated_paragraph_indices(
+                source_paragraphs,
+                work_paragraphs,
+                target_scripts,
+                run_context.settings.ascii_character_map,
+            )
+            if has_matching_paragraph_count
+            else ()
+        ),
+        target_language=target_language,
+        target_scripts=target_scripts,
+        source_script_display=(
+            script_description(source_script_name) if source_script_name else ""
+        ),
+        target_scripts_display=(
+            scripts_description(target_scripts) if target_scripts else ""
+        ),
+    )
+
+
+def retranslation_cacheable(
+    check: RetranslationCheck,
+    source_paragraphs: tuple[str, ...],
+    character_map: Mapping[str, str],
+    index: int,
+) -> Callable[[str], bool]:
+    def cacheable(text: str) -> bool:
+        translated = not untranslated_paragraph(
+            source_paragraphs[index], text, check.target_scripts, character_map
+        )
+        return translated or paragraph_is_in_target_script(text, check.target_scripts)
+
+    return cacheable
+
+
+def remaining_untranslated_paragraphs(
+    run_context: Context,
+    check: RetranslationCheck,
+    source_paragraphs: tuple[str, ...],
+    texts: tuple[str, ...],
+) -> tuple[tuple[int, str], ...]:
+    bodies = tuple(
+        (
+            index,
+            texts[index].removesuffix(separator_at(check.separators, index)),
+        )
+        for index in check.flagged
+    )
+    return tuple(
+        (index, body)
+        for index, body in bodies
+        if untranslated_paragraph(
+            source_paragraphs[index],
+            body,
+            check.target_scripts,
+            run_context.settings.ascii_character_map,
+        )
+    )
+
+
+def evaluate_retranslation(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    check: RetranslationCheck,
+    source_paragraphs: tuple[str, ...],
+    units: tuple[UnitResult, ...],
+    usage: Usage,
+) -> RetranslationEvaluation:
+    texts = tuple(unit.text for unit in units)
+    untranslated = remaining_untranslated_paragraphs(
+        run_context, check, source_paragraphs, texts
+    )
+    target_script_kept = tuple(
+        (index, body)
+        for index, body in untranslated
+        if paragraph_is_in_target_script(body, check.target_scripts)
+    )
+    unresolved = tuple(
+        (index, body)
+        for index, body in untranslated
+        if not paragraph_is_in_target_script(body, check.target_scripts)
+    )
+    total_usage = reduce(usage_add, (unit.usage for unit in units), usage)
+    joined_text = "".join(texts)
+
+    if unresolved and not run_context.best_effort:
+        index, body = unresolved[0]
+        return RetranslationEvaluation(
+            outcome=fail_untranslated(pass_definition.name, index, excerpt(body)),
+            target_script_kept=target_script_kept,
+            best_effort_kept=None,
+        )
+
+    if not unresolved:
+        return RetranslationEvaluation(
+            outcome=Ok(Translated(joined_text, total_usage)),
+            target_script_kept=target_script_kept,
+            best_effort_kept=None,
+        )
+
+    index, body = unresolved[0]
+    return RetranslationEvaluation(
+        outcome=Ok(
+            Translated(
+                joined_text,
+                total_usage,
+                False,
+                untranslated_problem(index, excerpt(body)),
+            )
+        ),
+        target_script_kept=target_script_kept,
+        best_effort_kept=(index, body),
+    )
+
+
+def announce_retranslation_evaluation(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    total_paragraphs: int,
+    evaluation: RetranslationEvaluation,
+) -> IO[None]:
+    verify_kept = reduce(
+        io_and_then,
+        (
+            verbose_log(
+                run_context,
+                retranslation_target_script_message(
+                    pass_definition.name,
+                    index,
+                    total_paragraphs,
+                    excerpt(body),
+                ),
+            )
+            for index, body in evaluation.target_script_kept
+        ),
+        io_pure(None),
+    )
+
+    def announce_kept(_: None) -> IO[None]:
+        match evaluation.best_effort_kept:
+            case None:
+                return io_pure(None)
+
+            case (index, body):
+                return run_context.console.log(
+                    untranslated_kept_message(
+                        pass_definition.name,
+                        index,
+                        total_paragraphs,
+                        excerpt(body),
+                    )
+                )
+
+    return io_bind(verify_kept, announce_kept)
+
+
+def combine_retranslated_units(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    check: RetranslationCheck,
+    source_paragraphs: tuple[str, ...],
+    units: tuple[UnitResult, ...],
+    usage: Usage,
+) -> IO[Result[Translated, TranslationError]]:
+    evaluation = evaluate_retranslation(
+        run_context, pass_definition, check, source_paragraphs, units, usage
+    )
+    return io_map(
+        announce_retranslation_evaluation(
+            run_context,
+            pass_definition,
+            len(check.work_paragraphs),
+            evaluation,
+        ),
+        lambda _: evaluation.outcome,
+    )
+
+
+def retranslate_indexed_paragraph(
+    run: RetranslationRun,
+    calls_by_index: Mapping[int, UnitCall],
+    indexed: tuple[int, str],
+) -> IO[Result[UnitResult, TranslationError]]:
+    index, paragraph = indexed
+    check = run.check
+    call = calls_by_index.get(index)
+    if call is None:
+        return io_result(
+            Ok(
+                UnitResult(
+                    text=paragraph + separator_at(check.separators, index),
+                    validated=True,
+                    usage=Usage(),
+                    problem=None,
+                )
+            )
+        )
+
+    return io_and_then(
+        verbose_log(
+            run.environment.run_context,
+            retranslate_unit_message(
+                run.environment.pass_definition.name,
+                call.index + 1,
+                call.total,
+            ),
+        ),
+        run_single_call(
+            run.environment,
+            call,
+            run.usage,
+            retranslation_cacheable(
+                check,
+                run.source_paragraphs,
+                run.environment.run_context.settings.ascii_character_map,
+                index,
+            ),
+        ),
+    )
+
+
+def conclude_retranslation(
+    run_context: Context,
+    result: Result[Translated, TranslationError],
+    usage: Usage,
+    started_at: float,
+) -> IO[Result[Translated, TranslationError]]:
+    if isinstance(result, Err):
+        return io_map(run_context.console.interrupt(), lambda _: result)
+
+    prompt, completion, cost = usage_delta(usage, result.value.usage)
+
+    def report(ended_at: float) -> IO[Result[Translated, TranslationError]]:
+        return io_map(
+            run_context.console.finish(
+                stage_done_line(ended_at - started_at, prompt, completion, cost)
+            ),
+            lambda _: result,
+        )
+
+    return io_bind(now(run_context.clock), report)
+
+
+def run_retranslation(
+    run: RetranslationRun,
+) -> IO[Result[Translated, TranslationError]]:
+    run_context = run.environment.run_context
+    pass_definition = run.environment.pass_definition
+
+    def units_result(
+        units: tuple[UnitResult, ...],
+    ) -> IO[Result[Translated, TranslationError]]:
+        return combine_retranslated_units(
+            run_context,
+            pass_definition,
+            run.check,
+            run.source_paragraphs,
+            units,
+            run.usage,
+        )
+
+    calls_by_index = dict(zip(run.check.flagged, run.calls, strict=True))
+    return io_bind(
+        io_result_bind(
+            io_traverse(
+                enumerate(run.check.work_paragraphs),
+                lambda item: retranslate_indexed_paragraph(run, calls_by_index, item),
+            ),
+            units_result,
+        ),
+        lambda result: conclude_retranslation(
+            run_context, result, run.usage, run.started_at
+        ),
+    )
+
+
+def retranslation_majority_retry(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    check: RetranslationCheck,
+    usage: Usage,
+    retry_same_mode: PassRetry,
+) -> IO[Result[Translated, TranslationError]]:
+    def escalate(
+        retry_started: float,
+    ) -> IO[Result[Translated, TranslationError]]:
+        def lifted(outcome: StateResult) -> Result[Translated, TranslationError]:
+            if isinstance(outcome, Err):
+                return Err(outcome.error)
+
+            return Ok(
+                Translated(
+                    outcome.value.text,
+                    outcome.value.usage,
+                    outcome.value.validated,
+                    outcome.value.problem,
+                )
+            )
+
+        return io_map(retry_same_mode(usage, retry_started), lifted)
+
+    return io_and_then(
+        run_context.console.log(
+            retranslate_majority_message(
+                pass_definition.name,
+                len(check.flagged),
+                len(check.work_paragraphs),
+            )
+        ),
+        io_bind(now(run_context.clock), escalate),
+    )
+
+
 def retranslate_untranslated(
     run_context: Context,
     pass_definition: PassDefinition,
@@ -389,263 +819,81 @@ def retranslate_untranslated(
     retry_same_mode: PassRetry | None = None,
     glossary: tuple[GlossaryEntry, ...] = (),
 ) -> IO[Result[Translated, TranslationError]]:
-    paragraphs, separators = split_paragraphs(text)
-    if len(paragraphs) != len(source_paragraphs):
+    check = retranslation_check(run_context, pass_definition, text, source_paragraphs)
+
+    if not check.has_matching_paragraph_count:
         return io_bind(
             verbose_log(
                 run_context,
                 retranslate_skipped_message(
-                    pass_definition.name, len(paragraphs), len(source_paragraphs)
+                    pass_definition.name,
+                    len(check.work_paragraphs),
+                    len(source_paragraphs),
                 ),
             ),
             lambda _: io_result(Ok(Translated(text, usage))),
         )
 
-    target_language = effective_target_language(
-        run_context.target_language, pass_definition
-    )
-    target_scripts = expected_target_scripts(target_language)
-    source_script_name = source_script(source_paragraphs)
-    source_script_display = (
-        script_description(source_script_name) if source_script_name else ""
-    )
-    target_scripts_display = (
-        scripts_description(target_scripts) if target_scripts else ""
-    )
-    flagged = tuple(
-        index
-        for index, (source, output) in enumerate(
-            zip(source_paragraphs, paragraphs, strict=True)
-        )
-        if untranslated_paragraph(
-            source, output, target_scripts, run_context.settings.ascii_character_map
-        )
-    )
-    if not flagged:
+    if not check.flagged:
         return io_result(Ok(Translated(text, usage)))
 
     if retry_same_mode is not None and untranslated_majority(
-        len(flagged), len(paragraphs)
+        len(check.flagged), len(check.work_paragraphs)
     ):
-        retry = retry_same_mode
-
-        def escalate(
-            retry_started: float,
-        ) -> IO[Result[Translated, TranslationError]]:
-            def lifted(outcome: StateResult) -> Result[Translated, TranslationError]:
-                if isinstance(outcome, Err):
-                    return Err(outcome.error)
-
-                return Ok(
-                    Translated(
-                        outcome.value.text,
-                        outcome.value.usage,
-                        outcome.value.validated,
-                        outcome.value.problem,
-                    )
-                )
-
-            return io_map(retry(usage, retry_started), lifted)
-
-        return io_and_then(
-            run_context.console.log(
-                retranslate_majority_message(
-                    pass_definition.name, len(flagged), len(paragraphs)
-                )
-            ),
-            io_bind(now(run_context.clock), escalate),
+        return retranslation_majority_retry(
+            run_context, pass_definition, check, usage, retry_same_mode
         )
 
-    def paragraph_separator(index: int) -> str:
-        return separators[index] if index < len(separators) else ""
-
-    def paragraph_untranslated(index: int, body: str) -> bool:
-        return untranslated_paragraph(
-            source_paragraphs[index],
-            body,
-            target_scripts,
-            run_context.settings.ascii_character_map,
-        )
-
-    def untranslated_bodies(
-        texts: tuple[str, ...],
-    ) -> tuple[tuple[int, str], ...]:
-        bodies = tuple(
-            (index, texts[index].removesuffix(paragraph_separator(index)))
-            for index in flagged
-        )
-        return tuple(
-            (index, body)
-            for index, body in bodies
-            if paragraph_untranslated(index, body)
-        )
-
-    def cacheable_retranslation(index: int) -> Callable[[str], bool]:
-        def cacheable(text: str) -> bool:
-            translated = not paragraph_untranslated(index, text)
-            return translated or paragraph_is_in_target_script(text, target_scripts)
-
-        return cacheable
-
-    calls = plan_retranslation_calls(
-        run_context,
-        pass_definition,
-        source_paragraphs,
-        paragraphs,
-        flagged,
-        separators,
-        analysis,
-        glossary,
+    run = RetranslationRun(
+        environment=CallEnvironment(
+            run_context=run_context,
+            pass_definition=pass_definition,
+            glossary=glossary,
+        ),
+        check=check,
+        source_paragraphs=source_paragraphs,
+        calls=plan_retranslation_calls(
+            run_context,
+            pass_definition,
+            source_paragraphs,
+            check.work_paragraphs,
+            check.flagged,
+            check.separators,
+            analysis,
+            glossary,
+        ),
+        usage=usage,
+        started_at=started_at,
     )
-    call_for = dict(zip(flagged, calls, strict=True))
-
-    def retranslate_indexed_paragraph(
-        indexed: tuple[int, str],
-    ) -> IO[Result[UnitResult, TranslationError]]:
-        index, paragraph = indexed
-        call = call_for.get(index)
-        if call is None:
-            separator = separators[index] if index < len(separators) else ""
-            return io_result(Ok(UnitResult(paragraph + separator, True, Usage())))
-
-        return io_and_then(
-            verbose_log(
-                run_context,
-                retranslate_unit_message(
-                    pass_definition.name, call.index + 1, call.total
-                ),
-            ),
-            run_single_call(
-                run_context,
-                pass_definition,
-                call,
-                usage,
-                cacheable_retranslation(index),
-                glossary,
-            ),
-        )
-
-    def combine_unit_results(
-        units: tuple[UnitResult, ...],
-    ) -> IO[Result[Translated, TranslationError]]:
-        texts = tuple(unit.text for unit in units)
-        untranslated = untranslated_bodies(texts)
-        verify_kept = tuple(
-            (index, body)
-            for index, body in untranslated
-            if paragraph_is_in_target_script(body, target_scripts)
-        )
-        unresolved = tuple(
-            (index, body)
-            for index, body in untranslated
-            if not paragraph_is_in_target_script(body, target_scripts)
-        )
-
-        def collected(_: None) -> Result[Translated, TranslationError]:
-            if unresolved and not run_context.best_effort:
-                index, body = unresolved[0]
-                return fail_untranslated(pass_definition.name, index, excerpt(body))
-
-            if not unresolved:
-                return Ok(
-                    Translated(
-                        "".join(texts),
-                        reduce(usage_add, (unit.usage for unit in units), usage),
-                    )
-                )
-
-            index, body = unresolved[0]
-            return Ok(
-                Translated(
-                    "".join(texts),
-                    reduce(usage_add, (unit.usage for unit in units), usage),
-                    False,
-                    untranslated_problem(index, excerpt(body)),
-                )
-            )
-
-        def announce_kept() -> IO[None]:
-            if not unresolved or not run_context.best_effort:
-                return io_pure(None)
-
-            index, body = unresolved[0]
-            return run_context.console.log(
-                untranslated_kept_message(
-                    pass_definition.name, index, len(paragraphs), excerpt(body)
-                )
-            )
-
-        def announce_verify_kept() -> IO[None]:
-            return reduce(
-                io_and_then,
-                (
-                    verbose_log(
-                        run_context,
-                        retranslation_target_script_message(
-                            pass_definition.name,
-                            index,
-                            len(paragraphs),
-                            excerpt(body),
-                        ),
-                    )
-                    for index, body in verify_kept
-                ),
-                io_pure(None),
-            )
-
-        return io_map(
-            io_and_then(announce_verify_kept(), announce_kept()),
-            collected,
-        )
-
-    def conclude(
-        result: Result[Translated, TranslationError],
-    ) -> IO[Result[Translated, TranslationError]]:
-        if isinstance(result, Err):
-            return io_map(run_context.console.interrupt(), lambda _: result)
-
-        prompt, completion, cost = usage_delta(usage, result.value.usage)
-
-        def report(ended_at: float) -> IO[Result[Translated, TranslationError]]:
-            return io_map(
-                run_context.console.finish(
-                    stage_done_line(ended_at - started_at, prompt, completion, cost)
-                ),
-                lambda _: result,
-            )
-
-        return io_bind(now(run_context.clock), report)
-
-    def start(_: None) -> IO[Result[Translated, TranslationError]]:
-        return io_result_bind(
-            io_traverse(enumerate(paragraphs), retranslate_indexed_paragraph),
-            combine_unit_results,
-        )
-
     return io_and_then(
         run_context.console.log(
             retranslate_information_message(
-                pass_definition.name, len(flagged), len(paragraphs)
+                pass_definition.name,
+                len(check.flagged),
+                len(check.work_paragraphs),
             )
         ),
         io_bind(
             run_context.console.log(
                 retranslation_check_message(
-                    target_language, source_script_display, target_scripts_display
+                    check.target_language,
+                    check.source_script_display,
+                    check.target_scripts_display,
                 )
             ),
-            lambda _: io_bind(start(None), conclude),
+            lambda _: run_retranslation(run),
         ),
     )
 
 
 def run_analysis_pass(
-    run_context: Context,
-    pass_definition: PassDefinition,
+    execution: PassExecution,
     state: State,
     started_at: float,
-    source_paragraphs: tuple[str, ...],
 ) -> IO[StateResult]:
+    run_context = execution.run_context
+    pass_definition = execution.pass_definition
+
     def after_analysis(
         analysis_result: Result[Translated, TranslationError],
     ) -> IO[StateResult]:
@@ -663,7 +911,7 @@ def run_analysis_pass(
                 usage=outcome.usage,
             ),
             started_at,
-            source_paragraphs,
+            execution.source_paragraphs,
         )
 
     return io_bind(
@@ -721,13 +969,55 @@ def run_update_glossary_once(
     )
 
 
-def run_update_glossary_pass(
-    run_context: Context,
-    pass_definition: PassDefinition,
+def apply_glossary_update(
+    execution: PassExecution,
     state: State,
     started_at: float,
-    source_paragraphs: tuple[str, ...],
+    update_path: str,
+    reply_result: Result[Translated, TranslationError],
 ) -> IO[StateResult]:
+    run_context = execution.run_context
+    pass_definition = execution.pass_definition
+    if isinstance(reply_result, Err):
+        return io_result(fail_pass(pass_definition.name, reply_result.error))
+
+    reply = reply_result.value
+    reply_entries = parse_model_glossary_reply(reply.text, update_path)
+    if isinstance(reply_entries, Err):
+        return io_result(fail_pass(pass_definition.name, reply_entries.error))
+
+    merged = append_glossary_entries(state.glossary, reply_entries.value)
+
+    def after_write(written: Result[None, TranslationError]) -> IO[StateResult]:
+        if isinstance(written, Err):
+            return io_result(fail_pass(pass_definition.name, written.error))
+
+        return finish_pass_stage(
+            run_context,
+            pass_definition,
+            state.usage,
+            replace(
+                state,
+                usage=reply.usage,
+                glossary=merged,
+            ),
+            started_at,
+            execution.source_paragraphs,
+        )
+
+    return io_bind(
+        write_text_file(update_path, entries_to_json_text(merged), "glossary file"),
+        after_write,
+    )
+
+
+def run_update_glossary_pass(
+    execution: PassExecution,
+    state: State,
+    started_at: float,
+) -> IO[StateResult]:
+    run_context = execution.run_context
+    pass_definition = execution.pass_definition
     update_path = run_context.glossary_update_path
     if update_path is None:
         return io_result(
@@ -743,43 +1033,6 @@ def run_update_glossary_pass(
     target_language = effective_target_language(
         run_context.target_language, pass_definition
     )
-
-    def after_reply(
-        reply_result: Result[Translated, TranslationError],
-    ) -> IO[StateResult]:
-        if isinstance(reply_result, Err):
-            return io_result(fail_pass(pass_definition.name, reply_result.error))
-
-        reply_entries = parse_model_glossary_reply(reply_result.value.text, update_path)
-        if isinstance(reply_entries, Err):
-            return io_result(fail_pass(pass_definition.name, reply_entries.error))
-
-        merged = append_glossary_entries(state.glossary, reply_entries.value)
-
-        def after_write(
-            written: Result[None, TranslationError],
-        ) -> IO[StateResult]:
-            if isinstance(written, Err):
-                return io_result(fail_pass(pass_definition.name, written.error))
-
-            return finish_pass_stage(
-                run_context,
-                pass_definition,
-                state.usage,
-                replace(
-                    state,
-                    usage=reply_result.value.usage,
-                    glossary=merged,
-                ),
-                started_at,
-                source_paragraphs,
-            )
-
-        return io_bind(
-            write_text_file(update_path, entries_to_json_text(merged), "glossary file"),
-            after_write,
-        )
-
     return io_bind(
         verbose_log(
             run_context,
@@ -794,40 +1047,58 @@ def run_update_glossary_pass(
             run_update_glossary_once(
                 run_context, pass_definition, target_language, state
             ),
-            after_reply,
+            lambda reply: apply_glossary_update(
+                execution, state, started_at, update_path, reply
+            ),
+        ),
+    )
+
+
+def unit_paragraph_tolerance(pass_definition: PassDefinition) -> int | None:
+    match pass_definition.mode:
+        case "paragraph":
+            return 0
+
+        case _:
+            return paragraph_tolerance(pass_definition.ensure_paragraphs)
+
+
+def unit_result_from_repair(
+    outcome: Result[RepairOutcome, TranslationError],
+) -> Result[UnitResult, TranslationError]:
+    return result_map(
+        outcome,
+        lambda repaired: UnitResult(
+            text=repaired.text,
+            validated=repaired.validated,
+            usage=repaired.usage,
+            problem=repaired.problem,
         ),
     )
 
 
 def run_unit(
-    run_context: Context,
-    pass_definition: PassDefinition,
+    environment: CallEnvironment,
     call: UnitCall,
     usage: Usage,
-    glossary: tuple[GlossaryEntry, ...] = (),
 ) -> IO[Result[UnitResult, TranslationError]]:
-    def unit_tolerance() -> int | None:
-        match pass_definition.mode:
-            case "paragraph":
-                return 0
-
-            case _:
-                return paragraph_tolerance(pass_definition.ensure_paragraphs)
+    run_context = environment.run_context
+    pass_definition = environment.pass_definition
+    target_language = effective_target_language(
+        run_context.target_language, pass_definition
+    )
+    target_scripts = expected_target_scripts(target_language)
 
     def validate(output: str) -> Maybe[str]:
-        target_language = effective_target_language(
-            run_context.target_language, pass_definition
-        )
         return maybe_or(
             unit_output_problem(
-                call.source_chunk, output, run_context.settings, unit_tolerance()
+                call.source_chunk,
+                output,
+                run_context.settings,
+                unit_paragraph_tolerance(pass_definition),
             ),
             maybe_or(
-                target_script_problem(
-                    output,
-                    target_language,
-                    expected_target_scripts(target_language),
-                ),
+                target_script_problem(output, target_language, target_scripts),
                 script_mismatch_problem(call.source_chunk, call.work_chunk, output),
             ),
         )
@@ -862,19 +1133,6 @@ def run_unit(
             )
         )
 
-    def assessed(
-        outcome: Result[RepairOutcome, TranslationError],
-    ) -> Result[UnitResult, TranslationError]:
-        return result_map(
-            outcome,
-            lambda repaired: UnitResult(
-                repaired.text,
-                repaired.validated,
-                repaired.usage,
-                repaired.problem,
-            ),
-        )
-
     return io_map(
         repaired_call(
             run_context,
@@ -883,33 +1141,34 @@ def run_unit(
             instruction_with_glossary(
                 instruction_with_target_language(
                     pass_definition.instruction,
-                    effective_target_language(
-                        run_context.target_language, pass_definition
-                    ),
+                    target_language,
                 ),
-                glossary,
+                environment.glossary,
             ),
             build_pass_user(
                 call.source_chunk, call.work_chunk, call.analysis, call.context
             ),
-            validate,
-            build_retry_user,
-            run_context.settings.unit_fix_attempts,
-            on_repair,
-            on_exhausted,
+            RepairPolicy(
+                validate=validate,
+                build_retry_user=build_retry_user,
+                maximum_repairs=run_context.settings.unit_fix_attempts,
+                on_repair=on_repair,
+                on_exhausted=on_exhausted,
+            ),
         )(usage),
-        assessed,
+        unit_result_from_repair,
     )
 
 
 def run_single_call(
-    run_context: Context,
-    pass_definition: PassDefinition,
+    environment: CallEnvironment,
     call: UnitCall,
     usage: Usage,
     cacheable: Callable[[str], bool] = always_acceptable,
-    glossary: tuple[GlossaryEntry, ...] = (),
 ) -> IO[Result[UnitResult, TranslationError]]:
+    run_context = environment.run_context
+    pass_definition = environment.pass_definition
+
     def store_unit_result(
         result: Result[UnitResult, TranslationError],
     ) -> IO[Result[UnitResult, TranslationError]]:
@@ -938,10 +1197,10 @@ def run_single_call(
             stored,
             lambda _: Ok(
                 UnitResult(
-                    outcome.text + call.trailing_separator,
-                    outcome.validated,
-                    Usage(*usage_delta(usage, outcome.usage)),
-                    outcome.problem,
+                    text=outcome.text + call.trailing_separator,
+                    validated=outcome.validated,
+                    usage=Usage(*usage_delta(usage, outcome.usage)),
+                    problem=outcome.problem,
                 )
             ),
         )
@@ -958,14 +1217,16 @@ def run_single_call(
                     ),
                 ),
                 lambda _: Ok(
-                    UnitResult(cached.value + call.trailing_separator, True, Usage())
+                    UnitResult(
+                        text=cached.value + call.trailing_separator,
+                        validated=True,
+                        usage=Usage(),
+                        problem=None,
+                    )
                 ),
             )
 
-        return io_bind(
-            run_unit(run_context, pass_definition, call, usage, glossary),
-            store_unit_result,
-        )
+        return io_bind(run_unit(environment, call, usage), store_unit_result)
 
     return io_bind(
         cache_lookup(run_context, call.key, acceptable=non_empty),
@@ -973,17 +1234,34 @@ def run_single_call(
     )
 
 
+def units_so_far(units: tuple[UnitResult, ...], usage: Usage) -> UnitsSoFar:
+    first_problem = next(
+        (
+            unit.problem
+            for unit in units
+            if not unit.validated and unit.problem is not None
+        ),
+        None,
+    )
+    return UnitsSoFar(
+        outputs=tuple(unit.text for unit in units),
+        usage=reduce(usage_add, (unit.usage for unit in units), usage),
+        validated=all(unit.validated for unit in units),
+        problem=first_problem,
+    )
+
+
 def run_units(
-    run_context: Context,
-    pass_definition: PassDefinition,
+    environment: CallEnvironment,
     work_groups: tuple[tuple[str, ...], ...],
     plan: tuple[tuple[str, ...], ...],
     trailing_separators: tuple[str, ...],
     analysis: str | None,
     usage: Usage,
     retry_attempt: int = 0,
-    glossary: tuple[GlossaryEntry, ...] = (),
 ) -> IO[Result[UnitsSoFar, TranslationError]]:
+    run_context = environment.run_context
+    pass_definition = environment.pass_definition
     calls = plan_unit_calls(
         run_context,
         pass_definition,
@@ -992,70 +1270,73 @@ def run_units(
         trailing_separators,
         analysis,
         retry_attempt,
-        glossary,
+        environment.glossary,
     )
 
     def unit_part(
         call: UnitCall,
     ) -> IO[Result[UnitResult, TranslationError]]:
-        if not call.source_chunk:
-            return io_map(
-                verbose_log(
-                    run_context,
-                    unit_no_source_message(
-                        pass_definition.name, call.index + 1, call.total
-                    ),
-                ),
-                lambda _: Ok(
-                    UnitResult(call.work_chunk + call.trailing_separator, True, Usage())
-                ),
-            )
+        if call.source_chunk:
+            return run_single_call(environment, call, usage)
 
-        return run_single_call(
-            run_context, pass_definition, call, usage, glossary=glossary
-        )
-
-    def first_unvalidated_problem(
-        units: tuple[UnitResult, ...],
-    ) -> str | None:
-        return next(
-            (
-                unit.problem
-                for unit in units
-                if not unit.validated and unit.problem is not None
+        return io_map(
+            verbose_log(
+                run_context,
+                unit_no_source_message(
+                    pass_definition.name, call.index + 1, call.total
+                ),
             ),
-            None,
+            lambda _: Ok(
+                UnitResult(
+                    text=call.work_chunk + call.trailing_separator,
+                    validated=True,
+                    usage=Usage(),
+                    problem=None,
+                )
+            ),
         )
 
-    def collect(units: tuple[UnitResult, ...]) -> UnitsSoFar:
-        return UnitsSoFar(
-            tuple(unit.text for unit in units),
-            reduce(usage_add, (unit.usage for unit in units), usage),
-            all(unit.validated for unit in units),
-            first_unvalidated_problem(units),
-        )
+    return io_result_map(
+        io_traverse(calls, unit_part),
+        lambda units: units_so_far(units, usage),
+    )
 
-    return io_result_map(io_traverse(calls, unit_part), collect)
+
+def text_pass_unit_plan(
+    pass_definition: PassDefinition,
+    chunk_plan: PassPlan,
+    paragraph_plan: tuple[tuple[str, ...], ...],
+) -> tuple[tuple[str, ...], ...]:
+    match pass_definition.mode:
+        case "paragraph":
+            return paragraph_plan
+
+        case _:
+            return chunk_plan.chunks
+
+
+def state_after_units(state: State, units: UnitsSoFar) -> State:
+    return state_with_output(
+        state,
+        ensure_blank_line_separators("".join(units.outputs)),
+        units.usage,
+        units.validated,
+        units.problem,
+    )
 
 
 def run_text_pass_once(
-    run_context: Context,
-    pass_definition: PassDefinition,
+    execution: PassExecution,
     state: State,
     started_at: float,
-    source_paragraphs: tuple[str, ...],
-    separators: tuple[str, ...],
-    chunk_plan: PassPlan,
-    paragraph_plan: tuple[tuple[str, ...], ...],
     retry_attempt: int = 0,
     retry_same_mode: PassRetry | None = None,
 ) -> IO[StateResult]:
-    match pass_definition.mode:
-        case "paragraph":
-            plan = paragraph_plan
-
-        case _:
-            plan = chunk_plan.chunks
+    run_context = execution.run_context
+    pass_definition = execution.pass_definition
+    plan = text_pass_unit_plan(
+        pass_definition, execution.chunk_plan, execution.paragraph_plan
+    )
 
     work_paragraphs, _ = split_paragraphs(state.text)
     work_groups, warning = resolve_work_groups(
@@ -1063,7 +1344,7 @@ def run_text_pass_once(
         work_paragraphs,
         plan,
         pass_definition.name,
-        chunk_plan.chunk_budget,
+        execution.chunk_plan.chunk_budget,
     )
 
     def run_units_after_warning(_: None) -> IO[StateResult]:
@@ -1073,27 +1354,21 @@ def run_text_pass_once(
             if isinstance(units_result, Err):
                 return io_result(units_result)
 
-            next_state = replace(
-                state,
-                text=ensure_blank_line_separators("".join(units_result.value.outputs)),
-                usage=units_result.value.usage,
-                validated=state.validated and units_result.value.validated,
-                problem=(
-                    units_result.value.problem
-                    if units_result.value.problem is not None
-                    else state.problem
-                ),
-            )
             return finish_pass_stage(
                 run_context,
                 pass_definition,
                 state.usage,
-                next_state,
+                state_after_units(state, units_result.value),
                 started_at,
-                source_paragraphs,
+                execution.source_paragraphs,
                 retry_same_mode,
             )
 
+        environment = CallEnvironment(
+            run_context=run_context,
+            pass_definition=pass_definition,
+            glossary=state.glossary,
+        )
         return io_and_then(
             verbose_log(
                 run_context,
@@ -1101,15 +1376,13 @@ def run_text_pass_once(
             ),
             io_bind(
                 run_units(
-                    run_context,
-                    pass_definition,
+                    environment,
                     work_groups,
                     plan,
-                    unit_separators(plan, separators),
+                    unit_separators(plan, execution.separators),
                     state.analysis,
                     state.usage,
                     retry_attempt,
-                    state.glossary,
                 ),
                 after_units,
             ),
@@ -1121,155 +1394,148 @@ def run_text_pass_once(
     return io_bind(reported_warning, run_units_after_warning)
 
 
-def run_text_pass(
-    run_context: Context,
-    pass_definition: PassDefinition,
+def run_pass_attempt(
+    execution: PassExecution,
     state: State,
     started_at: float,
-    source_paragraphs: tuple[str, ...],
-    separators: tuple[str, ...],
-    chunk_plan: PassPlan,
-    paragraph_plan: tuple[tuple[str, ...], ...],
+    escalate: bool,
+    retry_attempt: int = 0,
 ) -> IO[StateResult]:
-    def run_pass_attempt(
-        pass_to_run: PassDefinition,
-        current_state: State,
-        attempt_started: float,
-        escalate: bool,
-        retry_attempt: int = 0,
-    ) -> IO[StateResult]:
-        retry: PassRetry | None = None
-        if escalate and pass_to_run.mode == "chunk":
-            retry_state = current_state
+    pass_definition = execution.pass_definition
+    retry: PassRetry | None = None
+    if escalate and pass_definition.mode == "chunk":
+        retry_state = state
 
-            def retry(accumulated: Usage, retry_started: float) -> IO[StateResult]:
-                return run_pass_attempt(
-                    pass_to_run,
-                    replace(retry_state, usage=accumulated),
-                    retry_started,
-                    escalate=False,
-                    retry_attempt=1,
-                )
+        def retry(accumulated: Usage, retry_started: float) -> IO[StateResult]:
+            return run_pass_attempt(
+                execution,
+                replace(retry_state, usage=accumulated),
+                retry_started,
+                escalate=False,
+                retry_attempt=1,
+            )
 
-        return run_text_pass_once(
-            run_context,
-            pass_to_run,
-            current_state,
-            attempt_started,
-            source_paragraphs,
-            separators,
-            chunk_plan,
-            paragraph_plan,
-            retry_attempt,
-            retry,
-        )
+    return run_text_pass_once(
+        execution,
+        state,
+        started_at,
+        retry_attempt,
+        retry,
+    )
 
-    tolerance = paragraph_tolerance(pass_definition.ensure_paragraphs)
 
-    if tolerance is None:
-        return run_pass_attempt(pass_definition, state, started_at, escalate=True)
+def paragraph_count_is_accepted(count: int, source_count: int, tolerance: int) -> bool:
+    return abs(count - source_count) <= tolerance
+
+
+def after_paragraph_retry(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    source_count: int,
+    tolerance: int,
+    result: StateResult,
+) -> IO[StateResult]:
+    if isinstance(result, Err):
+        return io_result(result)
+
+    count = count_paragraphs(result.value.text)
+    if paragraph_count_is_accepted(count, source_count, tolerance):
+        return io_result(result)
+
+    return io_map(
+        run_context.console.log(
+            paragraph_still_differs_message(pass_definition.name, count, source_count)
+        ),
+        lambda _: result,
+    )
+
+
+def verify_paragraph_count(
+    execution: PassExecution,
+    state: State,
+    tolerance: int,
+    result: StateResult,
+) -> IO[StateResult]:
+    run_context = execution.run_context
+    pass_definition = execution.pass_definition
+    source_count = len(execution.source_paragraphs)
 
     def mismatch_message(count: int, action: str) -> str:
         return paragraph_mismatch_message(
-            pass_definition.name, count, len(source_paragraphs), tolerance, action
+            pass_definition.name, count, source_count, tolerance, action
         )
 
-    def accepted(count: int) -> bool:
-        return abs(count - len(source_paragraphs)) <= tolerance
+    if isinstance(result, Err):
+        return io_result(result)
 
-    def after_retry(result: StateResult) -> IO[StateResult]:
-        if isinstance(result, Err):
-            return io_result(result)
+    count = count_paragraphs(result.value.text)
+    if paragraph_count_is_accepted(count, source_count, tolerance):
+        return io_result(result)
 
-        count = count_paragraphs(result.value.text)
-        if accepted(count):
-            return io_result(result)
+    match pass_definition.mode:
+        case "chunk":
+            pass
 
-        return io_map(
-            run_context.console.log(
-                paragraph_still_differs_message(
-                    pass_definition.name, count, len(source_paragraphs)
-                )
-            ),
-            lambda _: result,
-        )
-
-    def verify_paragraph_count(result: StateResult) -> IO[StateResult]:
-        if isinstance(result, Err):
-            return io_result(result)
-
-        count = count_paragraphs(result.value.text)
-        if accepted(count):
-            return io_result(result)
-
-        match pass_definition.mode:
-            case "chunk":
-                pass
-
-            case _:
-                return io_map(
-                    run_context.console.log(mismatch_message(count, "continuing")),
-                    lambda _: result,
-                )
-
-        def retry_at(retry_started: float) -> IO[StateResult]:
-            return io_bind(
-                run_pass_attempt(
-                    replace(pass_definition, mode="paragraph"),
-                    replace(state, usage=result.value.usage),
-                    retry_started,
-                    escalate=True,
-                ),
-                after_retry,
+        case _:
+            return io_map(
+                run_context.console.log(mismatch_message(count, "continuing")),
+                lambda _: result,
             )
 
-        return io_and_then(
-            run_context.console.log(
-                mismatch_message(
-                    count, "re-running the pass with one call per paragraph"
-                )
+    def retry_at(retry_started: float) -> IO[StateResult]:
+        paragraph_execution = replace(
+            execution,
+            pass_definition=replace(pass_definition, mode="paragraph"),
+        )
+        return io_bind(
+            run_pass_attempt(
+                paragraph_execution,
+                replace(state, usage=result.value.usage),
+                retry_started,
+                escalate=True,
             ),
-            io_bind(now(run_context.clock), retry_at),
+            lambda retried: after_paragraph_retry(
+                run_context, pass_definition, source_count, tolerance, retried
+            ),
         )
 
+    return io_and_then(
+        run_context.console.log(
+            mismatch_message(count, "re-running the pass with one call per paragraph")
+        ),
+        io_bind(now(run_context.clock), retry_at),
+    )
+
+
+def run_text_pass(
+    execution: PassExecution,
+    state: State,
+    started_at: float,
+) -> IO[StateResult]:
+    tolerance = paragraph_tolerance(execution.pass_definition.ensure_paragraphs)
+    if tolerance is None:
+        return run_pass_attempt(execution, state, started_at, escalate=True)
+
     return io_bind(
-        run_pass_attempt(pass_definition, state, started_at, escalate=True),
-        verify_paragraph_count,
+        run_pass_attempt(execution, state, started_at, escalate=True),
+        lambda result: verify_paragraph_count(execution, state, tolerance, result),
     )
 
 
 def run_pass(
-    run_context: Context,
-    pass_definition: PassDefinition,
+    execution: PassExecution,
     state: State,
     started_at: float,
-    source_paragraphs: tuple[str, ...],
-    separators: tuple[str, ...],
-    chunk_plan: PassPlan,
-    paragraph_plan: tuple[tuple[str, ...], ...],
 ) -> IO[StateResult]:
-    match pass_definition.mode:
+    match execution.pass_definition.mode:
         case "analysis":
-            return run_analysis_pass(
-                run_context, pass_definition, state, started_at, source_paragraphs
-            )
+            return run_analysis_pass(execution, state, started_at)
 
         case "update_glossary":
-            return run_update_glossary_pass(
-                run_context, pass_definition, state, started_at, source_paragraphs
-            )
+            return run_update_glossary_pass(execution, state, started_at)
 
         case _:
-            return run_text_pass(
-                run_context,
-                pass_definition,
-                state,
-                started_at,
-                source_paragraphs,
-                separators,
-                chunk_plan,
-                paragraph_plan,
-            )
+            return run_text_pass(execution, state, started_at)
 
 
 def conclude_pass_result(
@@ -1291,46 +1557,57 @@ def conclude_pass_result(
 
 
 def run_passes(
-    run_context: Context,
-    pass_definitions: tuple[PassDefinition, ...],
+    executions: tuple[PassExecution, ...],
     state: State,
-    source_paragraphs: tuple[str, ...],
-    separators: tuple[str, ...],
-    chunk_plans: tuple[PassPlan, ...],
-    paragraph_plan: tuple[tuple[str, ...], ...],
 ) -> IO[StateResult]:
     def step(
-        current_state: State, indexed: tuple[int, PassDefinition]
+        current_state: State, indexed: tuple[int, PassExecution]
     ) -> IO[StateResult]:
-        number, pass_definition = indexed
+        number, execution = indexed
 
         def begin_pass_at(stage_started: float) -> IO[StateResult]:
             return io_and_then(
-                run_context.console.log(
+                execution.run_context.console.log(
                     pass_started_message(
-                        number, len(pass_definitions), pass_definition.name
+                        number,
+                        len(executions),
+                        execution.pass_definition.name,
                     )
                 ),
                 io_map(
-                    run_pass(
-                        run_context,
-                        pass_definition,
-                        current_state,
-                        stage_started,
-                        source_paragraphs,
-                        separators,
-                        chunk_plans[number - 1],
-                        paragraph_plan,
-                    ),
+                    run_pass(execution, current_state, stage_started),
                     lambda result: conclude_pass_result(
-                        run_context, pass_definition, result
+                        execution.run_context, execution.pass_definition, result
                     ),
                 ),
             )
 
-        return io_bind(now(run_context.clock), begin_pass_at)
+        return io_bind(now(execution.run_context.clock), begin_pass_at)
 
-    return fold_io(enumerate(pass_definitions, 1), step, Ok(state))
+    return fold_io(enumerate(executions, 1), step, Ok(state))
+
+
+def build_pass_executions(
+    run_context: Context,
+    pass_definitions: tuple[PassDefinition, ...],
+    source_paragraphs: tuple[str, ...],
+    separators: tuple[str, ...],
+    chunk_plans: tuple[PassPlan, ...],
+) -> tuple[PassExecution, ...]:
+    paragraph_plan = tuple((paragraph,) for paragraph in source_paragraphs)
+    return tuple(
+        PassExecution(
+            run_context=run_context,
+            pass_definition=pass_definition,
+            source_paragraphs=source_paragraphs,
+            separators=separators,
+            chunk_plan=chunk_plan,
+            paragraph_plan=paragraph_plan,
+        )
+        for pass_definition, chunk_plan in zip(
+            pass_definitions, chunk_plans, strict=True
+        )
+    )
 
 
 def run_pipeline(
@@ -1350,18 +1627,21 @@ def run_pipeline(
 
     def run_all_passes(chunk_plans: tuple[PassPlan, ...]) -> IO[StateResult]:
         return run_passes(
-            run_context,
-            pass_definitions,
+            build_pass_executions(
+                run_context,
+                pass_definitions,
+                source_paragraphs,
+                separators,
+                chunk_plans,
+            ),
             State(
                 text=text,
                 analysis=None,
                 usage=Usage(),
+                validated=True,
+                problem=None,
                 glossary=run_context.glossary_entries,
             ),
-            source_paragraphs,
-            separators,
-            chunk_plans,
-            tuple((paragraph,) for paragraph in source_paragraphs),
         )
 
     return io_bind(
