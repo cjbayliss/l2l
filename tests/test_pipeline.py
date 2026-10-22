@@ -1,8 +1,9 @@
+import dataclasses
 import io
 import json
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from fakes import (
     FakeHttp,
@@ -40,6 +41,7 @@ from l2l.pipeline import (
     conclude_pass_result,
     conclude_state,
     run_pipeline,
+    state_with_output,
 )
 from l2l.settings import PassDefinition
 from l2l.text import THINK_OPEN, Usage
@@ -326,7 +328,14 @@ def test_ascii_stage_preserves_retranslation_validated_and_problem() -> None:
     )
     run_context = make_context(console, http.open, best_effort=True)
     pass_definition = chunk_pass(ascii_output=True, retranslate_untranslated=True)
-    state = State("Hello.\n\n世界。", None, Usage())
+    state = State(
+        text="Hello.\n\n世界。",
+        analysis=None,
+        usage=Usage(),
+        validated=True,
+        problem=None,
+        glossary=(),
+    )
     result = conclude_state(
         run_context, pass_definition, state, ("你好。", "世界。")
     ).run()
@@ -1110,7 +1119,14 @@ def test_strict_paragraph_pass_fails_when_counts_still_differ() -> None:
 def test_conclude_pass_result_attaches_the_pass_name_to_invalid_output() -> None:
     console, _ = make_console()
     run_context = make_context(console, FakeHttp([]).open)
-    state = State("One.\n\nTwo.", None, Usage(), validated=False, problem="bad shape")
+    state = State(
+        text="One.\n\nTwo.",
+        analysis=None,
+        usage=Usage(),
+        validated=False,
+        problem="bad shape",
+        glossary=(),
+    )
     result = conclude_pass_result(run_context, chunk_pass(), Ok(state))
     assert isinstance(result, Err)
     assert isinstance(result.error, InvalidOutputError)
@@ -1813,3 +1829,45 @@ def test_update_glossary_pass_without_glossary_path_fails_the_run() -> None:
         "an update_glossary pass requires at least one --glossary file on the "
         "command line" in stderr.getvalue()
     )
+
+
+def test_state_requires_every_field_by_keyword() -> None:
+    fields = dataclasses.fields(State)
+    assert [field.name for field in fields] == [
+        "text",
+        "analysis",
+        "usage",
+        "validated",
+        "problem",
+        "glossary",
+    ]
+    assert all(field.default is dataclasses.MISSING for field in fields)
+    positional_arguments: tuple[object, ...] = ("text", None, Usage(), True, None, ())
+    constructor = cast(Any, State)
+    try:
+        constructor(*positional_arguments)
+    except TypeError:
+        return
+
+    raise AssertionError("State must reject positional construction")
+
+
+def test_state_with_output_preserves_identity_and_merges_validation() -> None:
+    entry = GlossaryEntry("name", MappingProxyType({"translated": "name"}))
+    state = State(
+        text="old",
+        analysis="brief",
+        usage=Usage(),
+        validated=False,
+        problem="prior",
+        glossary=(entry,),
+    )
+    updated = state_with_output(state, "new", Usage(prompt_tokens=1), True, None)
+    assert updated.text == "new"
+    assert updated.analysis == "brief"
+    assert updated.glossary == (entry,)
+    assert updated.validated is False
+    assert updated.problem == "prior"
+    newer = state_with_output(updated, "newer", Usage(), True, "fresh")
+    assert newer.validated is False
+    assert newer.problem == "fresh"

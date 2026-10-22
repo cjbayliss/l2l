@@ -693,3 +693,17 @@ def test_no_docstrings_anywhere() -> None:
         for node in docstring_nodes(ast.parse(source))
     ]
     assert not problems, "docstrings are banned: %s" % "; ".join(problems)
+
+
+def test_runtime_carriers_are_constructed_with_keywords() -> None:
+    carrier_names = frozenset({"State", "Context", "PassExecution", "CallEnvironment"})
+    problems = [
+        "%s:%d %s" % (name, node.lineno, node.func.id)
+        for name, source in python_sources()
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in carrier_names
+        and node.args
+    ]
+    assert not problems, "positional runtime carriers: %s" % "; ".join(problems)

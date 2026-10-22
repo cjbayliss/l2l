@@ -21,6 +21,12 @@ class Config:
 
 
 PassMode = Literal["analysis", "chunk", "paragraph", "update_glossary"]
+PASS_MODES: tuple[PassMode, ...] = (
+    "analysis",
+    "chunk",
+    "paragraph",
+    "update_glossary",
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,13 @@ class Settings:
     retry_base_delay: float
     retry_cap: float
     glossary_extraction_instruction: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class OptionDefaults:
+    ascii: bool = False
+    ensure_paragraphs: bool | int = False
+    retranslate_untranslated: bool = False
 
 
 @dataclass(frozen=True)

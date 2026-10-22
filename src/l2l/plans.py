@@ -30,6 +30,7 @@ from l2l.text import (
     make_chunks,
     non_ascii_sample,
     regroup_by_plan,
+    separator_at,
 )
 
 
@@ -195,7 +196,7 @@ PROMPT_SCAFFOLDING_TOKENS = 16
 type PassModeSet = frozenset[PassMode]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class PromptAllowance:
     instruction_tokens: int
     analysis_tokens: int
@@ -213,7 +214,7 @@ class PromptAllowance:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class PassPlan:
     chunks: ChunkPlan
     chunk_budget: int
@@ -425,7 +426,7 @@ def ascii_drop_warning(drop: AsciiDrop) -> str:
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class UnitCall:
     index: int
     total: int
@@ -468,9 +469,7 @@ def build_unit_call(
             context="\n\n".join(context),
             analysis=analysis or "",
         ),
-        trailing_separator=(
-            separators[separator_index] if separator_index < len(separators) else ""
-        ),
+        trailing_separator=separator_at(separators, separator_index),
         model=model,
         parameters=parameters,
     )

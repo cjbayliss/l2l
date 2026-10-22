@@ -64,22 +64,26 @@ def feed(state: StreamState, *texts: str) -> StreamState:
 def test_think_step_holds_partial_prefix() -> None:
     state, _thinking, visible = think_step(ThinkState(), "<th")
     assert visible == ""
-    assert (state.checking, state.open) == (True, False)
+    assert (state.scanning_opening_tag, state.inside_reasoning) == (True, False)
 
     state, _thinking, visible = think_step(state, "ink>hidden")
     assert visible == ""
-    assert (state.checking, state.open) == (True, True)
+    assert (state.scanning_opening_tag, state.inside_reasoning) == (True, True)
 
 
 def test_think_step_close_across_chunks() -> None:
     state, _, _ = think_step(ThinkState(), "<think>abc")
     state, thinking, visible = think_step(state, "def</thi")
     assert visible == ""
-    assert state.open
+    assert state.inside_reasoning
 
     state, thinking, visible = think_step(state, "nk>out")
     assert (thinking, visible) == (True, "out")
-    assert (state.checking, state.open, state.held) == (False, False, "")
+    assert (
+        state.scanning_opening_tag,
+        state.inside_reasoning,
+        state.buffered_text,
+    ) == (False, False, "")
 
 
 def test_think_step_plain_text() -> None:
@@ -108,7 +112,7 @@ def test_think_step_bounds_whitespace_hold() -> None:
         state, _, visible = think_step(state, "        ")
         assert visible == ""
 
-    assert len(state.held) <= len(THINK_CLOSE)
+    assert len(state.buffered_text) <= len(THINK_CLOSE)
     state, _, visible = think_step(state, "hi")
     assert visible.endswith("hi")
 
@@ -265,7 +269,7 @@ def test_sse_step_marks_the_done_sentinel() -> None:
 def test_ingest_raw_line_dispatches_completed_frames() -> None:
     result = ingest_raw_line(StreamState(), b'data: {"choices": []}\n')
     assert isinstance(result, Ok)
-    assert result.value.sse == SseState(pending=('{"choices": []}',))
+    assert result.value.sse == SseState(pending_data=('{"choices": []}',))
 
     result = ingest_raw_line(result.value, b"\n")
     assert isinstance(result, Ok)

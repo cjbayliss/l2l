@@ -25,7 +25,7 @@ class HttpResponse(Protocol):
 OpenHTTP = Callable[[Any, float], Result[HttpResponse, TranslationError]]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Context:
     config: Config
     settings: Settings

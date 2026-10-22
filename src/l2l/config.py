@@ -44,8 +44,10 @@ from l2l.settings import (
     DEFAULT_MAXIMUM_TOKENS,
     DEFAULT_TIMEOUT,
     PASS_KEYS,
+    PASS_MODES,
     Arguments,
     Config,
+    OptionDefaults,
     PartialApiSettings,
     PassDefinition,
     Setup,
@@ -445,7 +447,7 @@ def merged_api_settings(
 
 def parse_options_table(
     path: str, table: Any
-) -> Result[dict[str, bool | int], TranslationError]:
+) -> Result[OptionDefaults, TranslationError]:
     if not isinstance(table, dict):
         return fail_config("%s: [options] must be a table" % path)
 
@@ -475,11 +477,11 @@ def parse_options_table(
         )
 
     return Ok(
-        {
-            "ascii": ascii_value,
-            "ensure_paragraphs": ensure_paragraphs,
-            "retranslate_untranslated": retranslate_untranslated,
-        }
+        OptionDefaults(
+            ascii=ascii_value,
+            ensure_paragraphs=ensure_paragraphs,
+            retranslate_untranslated=retranslate_untranslated,
+        )
     )
 
 
@@ -487,7 +489,7 @@ def pass_definition_from(
     path: str, name: str, table: dict[str, Any], instruction: str
 ) -> Result[PassDefinition, TranslationError]:
     mode = table.get("mode", "chunk")
-    if mode not in ("analysis", "chunk", "paragraph", "update_glossary"):
+    if mode not in PASS_MODES:
         return fail_config(
             "%s: [[pass]] %s: mode must be analysis, chunk, paragraph, or "
             "update_glossary" % (path, name)
@@ -557,21 +559,15 @@ def pass_definition_from(
 
 def apply_default_options(
     pass_definitions: tuple[PassDefinition, ...],
-    options: Mapping[str, bool | int],
+    options: OptionDefaults,
     ensure_paragraphs_flag: bool | int,
 ) -> tuple[PassDefinition, ...]:
-    ascii_option = options.get("ascii", False)
-    ascii_default = ascii_option if isinstance(ascii_option, bool) else False
-    retranslate_option = options.get("retranslate_untranslated", False)
-    retranslate_default = (
-        retranslate_option if isinstance(retranslate_option, bool) else False
-    )
-    ensure_default = options.get("ensure_paragraphs", False) or ensure_paragraphs_flag
+    ensure_default = options.ensure_paragraphs or ensure_paragraphs_flag
     return tuple(
         replace(
             pass_definition,
             ascii=(
-                ascii_default
+                options.ascii
                 if pass_definition.ascii is None
                 else pass_definition.ascii
             ),
@@ -581,7 +577,7 @@ def apply_default_options(
                 else pass_definition.ensure_paragraphs
             ),
             retranslate_untranslated=(
-                retranslate_default
+                options.retranslate_untranslated
                 if pass_definition.retranslate_untranslated is None
                 else pass_definition.retranslate_untranslated
             ),
@@ -719,10 +715,8 @@ def resolve_passes(
     user_document_result: Result[dict[str, Any], TranslationError],
     selected_path: str | None,
     selected_document_result: Result[dict[str, Any], TranslationError],
-) -> IO[
-    Result[tuple[dict[str, bool | int], tuple[PassDefinition, ...]], TranslationError]
-]:
-    pair_type = tuple[dict[str, bool | int], tuple[PassDefinition, ...]]
+) -> IO[Result[tuple[OptionDefaults, tuple[PassDefinition, ...]], TranslationError]]:
+    pair_type = tuple[OptionDefaults, tuple[PassDefinition, ...]]
 
     def resolve(
         documents: tuple[dict[str, Any], dict[str, Any]],
@@ -738,12 +732,12 @@ def resolve_passes(
             )
 
         option_sources = tuple(layer for layer in layers if "options" in layer[1])
-        options: Result[dict[str, bool | int], TranslationError]
+        options: Result[OptionDefaults, TranslationError]
         if option_sources:
             option_path, option_document = option_sources[0]
             options = parse_options_table(option_path or "", option_document["options"])
         else:
-            options = Ok({})
+            options = Ok(OptionDefaults())
 
         pass_path, pass_document = pass_sources[0]
 
@@ -819,7 +813,7 @@ def resolve_config_path(
 
 
 DocumentResult = Result[dict[str, Any], TranslationError]
-ResolvedPasses = tuple[dict[str, bool | int], tuple[PassDefinition, ...]]
+ResolvedPasses = tuple[OptionDefaults, tuple[PassDefinition, ...]]
 Glossaries = tuple[tuple[str, ...], tuple[GlossaryEntry, ...]]
 SetupResult = Result[Setup, TranslationError]
 
@@ -840,6 +834,52 @@ def document_glossary_paths(
     return Ok(tuple(os.path.join(base_directory, item) for item in value))
 
 
+def glossary_paths(
+    user_path: str,
+    user_document: dict[str, Any],
+    selected_path: str | None,
+    selected_document: dict[str, Any],
+    command_line_paths: tuple[str, ...],
+) -> Result[tuple[str, ...], TranslationError]:
+    return result_map(
+        result_sequence(
+            document_glossary_paths(path, document)
+            for path, document in (
+                (user_path, user_document),
+                (selected_path, selected_document),
+            )
+            if document
+        ),
+        lambda groups: (
+            tuple(path for group in groups for path in group)
+            + tuple(command_line_paths)
+        ),
+    )
+
+
+def load_glossaries(
+    paths: tuple[str, ...],
+) -> IO[Result[Glossaries, TranslationError]]:
+    def parsed(
+        loaded_result: Result[tuple[Any, ...], TranslationError],
+    ) -> Result[Glossaries, TranslationError]:
+        return result_bind(
+            loaded_result,
+            lambda loaded: result_map(
+                result_sequence(
+                    parse_glossary_document(item_path, document)
+                    for item_path, document in zip(paths, loaded, strict=True)
+                ),
+                lambda groups: (paths, merge_glossary_entries(groups)),
+            ),
+        )
+
+    return io_map(
+        io_traverse(paths, lambda item_path: load_json(item_path, "glossary file")),
+        parsed,
+    )
+
+
 def resolve_glossaries(
     user_path: str,
     user_document_result: Result[dict[str, Any], TranslationError],
@@ -847,48 +887,19 @@ def resolve_glossaries(
     selected_document_result: Result[dict[str, Any], TranslationError],
     command_line_paths: tuple[str, ...],
 ) -> IO[Result[Glossaries, TranslationError]]:
-    def load_glossaries(
+    def with_documents(
         documents: tuple[dict[str, Any], dict[str, Any]],
     ) -> IO[Result[Glossaries, TranslationError]]:
-        paths_result = result_map(
-            result_sequence(
-                document_glossary_paths(path, document)
-                for path, document in (
-                    (user_path, documents[0]),
-                    (selected_path, documents[1]),
-                )
-                if document
+        return result_bind_io(
+            glossary_paths(
+                user_path,
+                documents[0],
+                selected_path,
+                documents[1],
+                command_line_paths,
             ),
-            lambda groups: (
-                tuple(path for group in groups for path in group)
-                + tuple(command_line_paths)
-            ),
+            load_glossaries,
         )
-
-        def load(paths: tuple[str, ...]) -> IO[Result[Glossaries, TranslationError]]:
-            def parsed(
-                loaded_result: Result[tuple[Any, ...], TranslationError],
-            ) -> Result[Glossaries, TranslationError]:
-                return result_bind(
-                    loaded_result,
-                    lambda loaded: result_map(
-                        result_sequence(
-                            parse_glossary_document(item_path, document)
-                            for item_path, document in zip(paths, loaded, strict=True)
-                        ),
-                        lambda groups: (paths, merge_glossary_entries(groups)),
-                    ),
-                )
-
-            return io_map(
-                io_traverse(
-                    paths,
-                    lambda item_path: load_json(item_path, "glossary file"),
-                ),
-                parsed,
-            )
-
-        return result_bind_io(paths_result, load)
 
     return result_bind_io(
         result_bind(
@@ -898,7 +909,7 @@ def resolve_glossaries(
                 lambda selected_document: (user_document, selected_document),
             ),
         ),
-        load_glossaries,
+        with_documents,
     )
 
 
@@ -1052,13 +1063,14 @@ def build_setup(
     ensure_paragraphs_flag: bool = False,
 ) -> Result[Setup, TranslationError]:
     def with_options(resolved: ResolvedPasses) -> Result[Setup, TranslationError]:
-        effective = (
-            resolved[0].get("ensure_paragraphs", False) or ensure_paragraphs_flag
-        )
+        option_defaults, pass_definitions = resolved
+        effective = option_defaults.ensure_paragraphs or ensure_paragraphs_flag
         return validate_ascii_target_language(
             Setup(
                 config=config,
-                passes=apply_default_options(resolved[1], resolved[0], effective),
+                passes=apply_default_options(
+                    pass_definitions, option_defaults, effective
+                ),
                 ensure_paragraphs=effective,
                 target_language=target_language,
             )
@@ -1067,93 +1079,113 @@ def build_setup(
     return result_bind(pair, with_options)
 
 
+def read_setup_documents(
+    user_path: str, selected_path: str | None
+) -> IO[tuple[DocumentResult, DocumentResult]]:
+    def with_user_exists(
+        user_exists: bool,
+    ) -> IO[tuple[DocumentResult, DocumentResult]]:
+        return io_pair(
+            read_document(user_path, "user config", user_exists),
+            read_document(selected_path, "config file", bool(selected_path)),
+        )
+
+    return io_bind(path_exists(user_path), with_user_exists)
+
+
+def assemble_setup(
+    arguments: Arguments,
+    environment: Mapping[str, str],
+    user_path: str,
+    selected_path: str | None,
+    documents: tuple[DocumentResult, DocumentResult],
+    resolve_pipeline_passes: bool,
+) -> IO[SetupResult]:
+    user_document, selected_document = documents
+
+    def setup_with(
+        pair: tuple[
+            Result[ResolvedPasses, TranslationError],
+            Result[Glossaries, TranslationError],
+        ],
+    ) -> SetupResult:
+        resolved, glossaries = pair
+        return result_bind(
+            merged_api_settings(
+                arguments,
+                environment,
+                user_path,
+                user_document,
+                selected_path,
+                selected_document,
+            ),
+            lambda config: result_bind(
+                resolve_target_language(
+                    arguments.target_language,
+                    user_path,
+                    user_document,
+                    selected_path,
+                    selected_document,
+                ),
+                lambda target_language: result_bind(
+                    build_setup(
+                        config,
+                        resolved,
+                        target_language,
+                        arguments.ensure_paragraphs,
+                    ),
+                    lambda setup: result_bind(
+                        glossaries,
+                        lambda resolved_glossaries: require_glossary_for_update_passes(
+                            arguments.glossary,
+                            setup_with_glossary(setup, resolved_glossaries),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+    return io_map(
+        io_pair(
+            resolve_passes(user_path, user_document, selected_path, selected_document)
+            if resolve_pipeline_passes
+            else io_result(Ok((OptionDefaults(), ()))),
+            resolve_glossaries(
+                user_path,
+                user_document,
+                selected_path,
+                selected_document,
+                arguments.glossary,
+            ),
+        ),
+        setup_with,
+    )
+
+
 def load_setup(
     arguments: Arguments,
     environment: Mapping[str, str],
     resolve_pipeline_passes: bool = True,
 ) -> IO[SetupResult]:
-    def with_paths(user_path: str, selected_path: str | None) -> IO[SetupResult]:
-        def read_documents(
-            user_exists: bool,
-        ) -> IO[tuple[DocumentResult, DocumentResult]]:
-            return io_pair(
-                read_document(user_path, "user config", user_exists),
-                read_document(selected_path, "config file", bool(selected_path)),
-            )
-
-        def assemble(
-            documents: tuple[DocumentResult, DocumentResult],
-        ) -> IO[SetupResult]:
-            def setup_with(
-                pair: tuple[
-                    Result[ResolvedPasses, TranslationError],
-                    Result[Glossaries, TranslationError],
-                ],
-            ) -> SetupResult:
-                resolved, glossaries = pair
-                target_language = resolve_target_language(
-                    arguments.target_language,
-                    user_path,
-                    documents[0],
-                    selected_path,
-                    documents[1],
-                )
-                return result_bind(
-                    merged_api_settings(
-                        arguments,
-                        environment,
-                        user_path,
-                        documents[0],
-                        selected_path,
-                        documents[1],
-                    ),
-                    lambda config: result_bind(
-                        target_language,
-                        lambda resolved_target_language: result_bind(
-                            build_setup(
-                                config,
-                                resolved,
-                                resolved_target_language,
-                                arguments.ensure_paragraphs,
-                            ),
-                            lambda setup: result_bind(
-                                glossaries,
-                                lambda resolved_glossaries: (
-                                    require_glossary_for_update_passes(
-                                        arguments.glossary,
-                                        setup_with_glossary(setup, resolved_glossaries),
-                                    )
-                                ),
-                            ),
-                        ),
-                    ),
-                )
-
-            return io_map(
-                io_pair(
-                    resolve_passes(user_path, documents[0], selected_path, documents[1])
-                    if resolve_pipeline_passes
-                    else io_result(Ok(({}, ()))),
-                    resolve_glossaries(
-                        user_path,
-                        documents[0],
-                        selected_path,
-                        documents[1],
-                        arguments.glossary,
-                    ),
-                ),
-                setup_with,
-            )
-
+    def with_selected_path(
+        user_path: str, selected_path: str | None
+    ) -> IO[SetupResult]:
         return io_bind(
-            io_bind(path_exists(user_path), read_documents),
-            assemble,
+            read_setup_documents(user_path, selected_path),
+            lambda documents: assemble_setup(
+                arguments,
+                environment,
+                user_path,
+                selected_path,
+                documents,
+                resolve_pipeline_passes,
+            ),
         )
 
     return io_bind(
         user_config_path(environment),
         lambda user_path: io_bind(
             resolve_config_path(arguments.config, environment),
-            lambda selected_path: with_paths(user_path, selected_path),
+            lambda selected_path: with_selected_path(user_path, selected_path),
         ),
     )

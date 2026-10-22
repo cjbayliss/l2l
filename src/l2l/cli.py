@@ -88,35 +88,23 @@ class VersionExitAction(argparse.Action):
         raise EarlyExitText("l2l " + __version__)
 
 
-def parse_args(arguments: Sequence[str]) -> Arguments:
-    parser = argparse.ArgumentParser(
-        prog="l2l",
-        description="Translate text between any pair of languages on "
-        "stdin/stdout using any OpenAI-compatible chat completions endpoint.",
-        add_help=False,
-        allow_abbrev=False,
-    )
-    meta_group = parser.add_argument_group("meta")
-    configuration_group = parser.add_argument_group("configuration and API")
-    translation_group = parser.add_argument_group("translation behaviour")
-    cache_group = parser.add_argument_group("cache and logs")
-    modes_group = parser.add_argument_group("modes")
-
-    meta_group.add_argument(
+def add_meta_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group("meta")
+    group.add_argument(
         "-h",
         "--help",
         action=HelpExitAction,
         nargs=0,
         help="show this help message and exit",
     )
-    meta_group.add_argument(
+    group.add_argument(
         "-v",
         "--version",
         action=VersionExitAction,
         nargs=0,
         help="show the version and exit",
     )
-    meta_group.add_argument(
+    group.add_argument(
         "-V",
         "--verbose",
         action="store_true",
@@ -125,7 +113,10 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         "interactively",
     )
 
-    configuration_group.add_argument(
+
+def add_configuration_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group("configuration and API")
+    group.add_argument(
         "-c",
         "--config",
         metavar="FILE",
@@ -133,25 +124,25 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         "(default: $TRANSLATE_CONFIG, then ./l2l.toml, then "
         "~/.config/l2l/config.toml)",
     )
-    configuration_group.add_argument(
+    group.add_argument(
         "-u",
         "--base-url",
         metavar="URL",
         help="API endpoint; overrides [api] base_url and TRANSLATE_BASE_URL",
     )
-    configuration_group.add_argument(
+    group.add_argument(
         "-k",
         "--api-key",
         metavar="KEY",
         help="API key; overrides [api] api_key and TRANSLATE_API_KEY",
     )
-    configuration_group.add_argument(
+    group.add_argument(
         "-m",
         "--model",
         metavar="MODEL",
         help="default model; overrides [api] model and TRANSLATE_MODEL",
     )
-    configuration_group.add_argument(
+    group.add_argument(
         "-t",
         "--timeout",
         metavar="SECONDS",
@@ -159,7 +150,7 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         help="request timeout in seconds; overrides [api] timeout and "
         "TRANSLATE_TIMEOUT",
     )
-    configuration_group.add_argument(
+    group.add_argument(
         "-T",
         "--maximum-tokens",
         metavar="N",
@@ -168,7 +159,7 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         help="request token budget; overrides [api] max_tokens and "
         "TRANSLATE_MAX_TOKENS",
     )
-    configuration_group.add_argument(
+    group.add_argument(
         "-s",
         "--stream",
         action=argparse.BooleanOptionalAction,
@@ -177,7 +168,10 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         "default follows api.params.stream",
     )
 
-    translation_group.add_argument(
+
+def add_translation_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group("translation behaviour")
+    group.add_argument(
         "-g",
         "--glossary",
         action="append",
@@ -187,21 +181,21 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         "later files override earlier entries; generated and updated "
         "entries are written to the first file",
     )
-    translation_group.add_argument(
+    group.add_argument(
         "-l",
         "--target-language",
         metavar="LANG",
         default=None,
         help="target language; required unless target_language is set in a config file",
     )
-    translation_group.add_argument(
+    group.add_argument(
         "-P",
         "--ensure-paragraphs",
         action="store_true",
         help="after each pass, check the output paragraph count against the "
         "source; re-run a mismatching pass with one call per paragraph",
     )
-    translation_group.add_argument(
+    group.add_argument(
         "-b",
         "--best-effort",
         action="store_true",
@@ -210,16 +204,19 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         "with exit code 1)",
     )
 
-    cache_group.add_argument(
+
+def add_cache_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group("cache and logs")
+    group.add_argument(
         "--cache-directory",
         metavar="DIR",
         dest="cache_directory",
         help="translation cache directory (default: $XDG_CACHE_HOME/l2l)",
     )
-    cache_group.add_argument(
+    group.add_argument(
         "--no-cache", action="store_true", help="bypass the translation cache"
     )
-    cache_group.add_argument(
+    group.add_argument(
         "--log-retention-days",
         metavar="DAYS",
         type=int,
@@ -228,7 +225,7 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         help="delete run logs older than DAYS days at startup (0 keeps "
         "every log; default: %(default)s)",
     )
-    cache_group.add_argument(
+    group.add_argument(
         "-p",
         "--print-log-path",
         action="store_true",
@@ -236,25 +233,28 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         help="print the run log's path to stderr at startup",
     )
 
-    modes_group.add_argument(
+
+def add_mode_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group("modes")
+    group.add_argument(
         "--check-config",
         action="store_true",
         help="print the resolved configuration and exit without translating",
     )
-    modes_group.add_argument(
+    group.add_argument(
         "-n",
         "--dry-run",
         action="store_true",
         help="print the per-pass call plan and exit without calling the endpoint",
     )
-    modes_group.add_argument(
+    group.add_argument(
         "--extract-glossary",
         metavar="FILE",
         dest="extract_glossary",
         help="extract a starting glossary from the stdin text with one "
         "model call, write it to FILE, and exit",
     )
-    modes_group.add_argument(
+    group.add_argument(
         "--prune-cache",
         metavar="DAYS",
         type=int,
@@ -262,7 +262,24 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         help="delete cache entries older than DAYS days and exit",
     )
 
-    parsed = parser.parse_args(arguments)
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="l2l",
+        description="Translate text between any pair of languages on "
+        "stdin/stdout using any OpenAI-compatible chat completions endpoint.",
+        add_help=False,
+        allow_abbrev=False,
+    )
+    add_meta_arguments(parser)
+    add_configuration_arguments(parser)
+    add_translation_arguments(parser)
+    add_cache_arguments(parser)
+    add_mode_arguments(parser)
+    return parser
+
+
+def arguments_from_namespace(parsed: argparse.Namespace) -> Arguments:
     return Arguments(
         config=parsed.config,
         base_url=parsed.base_url,
@@ -285,6 +302,10 @@ def parse_args(arguments: Sequence[str]) -> Arguments:
         extract_glossary=parsed.extract_glossary,
         target_language=parsed.target_language,
     )
+
+
+def parse_args(arguments: Sequence[str]) -> Arguments:
+    return arguments_from_namespace(build_parser().parse_args(arguments))
 
 
 type ParsedArguments = Result[Arguments | EarlyExitText, TranslationError]
@@ -330,6 +351,96 @@ def curl_open_http(environment: Mapping[str, str]) -> OpenHTTP:
     return lambda request, timeout: curl_open(request, timeout, environment)
 
 
+def report_message_and_exit(console: Console, message: str, exit_code: int) -> IO[int]:
+    return io_map(console.log(message), lambda _: exit_code)
+
+
+def report_error_and_exit(
+    console: Console, error: TranslationError, exit_code: int
+) -> IO[int]:
+    return report_message_and_exit(console, describe(error), exit_code)
+
+
+def with_loaded_setup(
+    parsed: Arguments,
+    environment: Mapping[str, str],
+    console: Console,
+    program: Callable[[Setup], IO[int]],
+    resolve_pipeline_passes: bool = True,
+) -> IO[int]:
+    def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
+        match setup_result:
+            case Err(error):
+                return report_error_and_exit(console, error, 2)
+
+            case Ok(setup):
+                return program(setup)
+
+    return io_bind(load_setup(parsed, environment, resolve_pipeline_passes), use_setup)
+
+
+def with_cache_directory(
+    environment: Mapping[str, str],
+    requested: str | None,
+    program: Callable[[str], IO[int]],
+) -> IO[int]:
+    return io_bind(resolve_cache_directory(environment, requested), program)
+
+
+def with_tab_listener[T](console: Console, action: IO[T]) -> IO[T]:
+    def execute() -> T:
+        def toggle() -> None:
+            toggle_verbose(console).run()
+
+        stop_listener = start_tab_listener(console, toggle).run()
+        try:
+            return action.run()
+        finally:
+            stop_listener.run()
+
+    return IO(execute)
+
+
+def with_tab_listener_and_run_log(
+    console: Console, log: RunLog, action: IO[int]
+) -> IO[int]:
+    def execute() -> int:
+        def toggle() -> None:
+            toggle_verbose(console).run()
+
+        stop_listener = start_tab_listener(console, toggle).run()
+        try:
+            return action.run()
+        finally:
+            stop_listener.run()
+            close_run_log(log).run()
+
+    return IO(execute)
+
+
+def announce_run_log(parsed: Arguments, console: Console, log: RunLog) -> IO[None]:
+    return maybe_either(
+        log.path,
+        lambda path: io_when_unit(
+            parsed.print_log_path,
+            console.log("l2l: log: %s" % path),
+        ),
+        lambda: io_pure(None),
+    )
+
+
+def prune_old_run_logs(
+    parsed: Arguments, cache_directory: str, clock: Callable[[], float]
+) -> IO[None]:
+    return io_when_unit(
+        parsed.log_retention_days > 0,
+        io_map(
+            prune_old_logs(cache_directory, parsed.log_retention_days, clock),
+            lambda _: None,
+        ),
+    )
+
+
 def main(
     arguments: Sequence[str],
     environment: Mapping[str, str],
@@ -346,12 +457,10 @@ def main(
         parsed_result: ParsedArguments,
     ) -> IO[int]:
         if isinstance(parsed_result, Err):
-
-            def report_parse_failure(live: bool) -> IO[int]:
-                console = Console(stderr, StatusLine(stderr, live))
-                return io_map(console.log(describe(parsed_result.error)), lambda _: 2)
-
-            return io_bind(stream_isatty(stderr), report_parse_failure)
+            return with_console_io(
+                stderr,
+                lambda console: report_error_and_exit(console, parsed_result.error, 2),
+            )
 
         parsed = parsed_result.value
         if isinstance(parsed, EarlyExitText):
@@ -467,21 +576,69 @@ def check_config_program(
     stderr: TextIO,
     clock: Callable[[], float],
 ) -> IO[int]:
+    def print_setup(setup: Setup) -> IO[int]:
+        report = setup_report(setup, setup.ensure_paragraphs)
+        warnings = "".join(
+            "\nwarning: %s" % warning for warning in setup_warnings(setup)
+        )
+        return io_map(write_stdout(stdout, report + warnings + "\n"), lambda _: 0)
+
     def with_console(console: Console) -> IO[int]:
-        def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
-            if isinstance(setup_result, Err):
-                return io_map(console.log(describe(setup_result.error)), lambda _: 2)
-
-            setup = setup_result.value
-            report = setup_report(setup, setup.ensure_paragraphs)
-            warnings = "".join(
-                "\nwarning: %s" % warning for warning in setup_warnings(setup)
-            )
-            return io_map(write_stdout(stdout, report + warnings + "\n"), lambda _: 0)
-
-        return io_bind(load_setup(parsed, environment), use_setup)
+        return with_loaded_setup(parsed, environment, console, print_setup)
 
     return with_console_io(stderr, with_console)
+
+
+def add_removed_entry(
+    count: int, removal: Result[bool, TranslationError]
+) -> Result[int, TranslationError]:
+    match removal:
+        case Err(error):
+            return Err(error)
+
+        case Ok(was_removed):
+            return Ok(count + (1 if was_removed else 0))
+
+
+def prune_cache_entry(
+    clock: Callable[[], float],
+    days: int,
+    count: int,
+    path: str,
+) -> IO[Result[int, TranslationError]]:
+    def maybe_remove(
+        aged: Result[float, TranslationError],
+    ) -> IO[Result[int, TranslationError]]:
+        match aged:
+            case Err(error):
+                return io_result(Err(error))
+
+            case Ok(age):
+                if age <= days * 86400.0:
+                    return io_result(Ok(count))
+
+                return io_map(
+                    remove_file(path), lambda removal: add_removed_entry(count, removal)
+                )
+
+    return io_bind(
+        now(clock),
+        lambda now_value: io_bind(file_age(path, now_value), maybe_remove),
+    )
+
+
+def report_cache_prune(
+    console: Console, pruned: Result[int, TranslationError]
+) -> IO[int]:
+    match pruned:
+        case Err(error):
+            return report_error_and_exit(console, error, 2)
+
+        case Ok(count):
+            noun = "entry" if count == 1 else "entries"
+            return report_message_and_exit(
+                console, "l2l: pruned %d cache %s" % (count, noun), 0
+            )
 
 
 def prune_cache_program(
@@ -490,71 +647,39 @@ def prune_cache_program(
     stderr: TextIO,
     clock: Callable[[], float],
 ) -> IO[int]:
+    days = parsed.prune_cache
+
     def with_console(console: Console) -> IO[int]:
-        days = parsed.prune_cache
         if days is None or days <= 0:
-            return io_map(
-                console.log("l2l: --prune-cache requires a positive number of days"),
-                lambda _: 2,
+            return report_message_and_exit(
+                console,
+                "l2l: --prune-cache requires a positive number of days",
+                2,
             )
 
-        def with_cache_directory(cache_directory: str) -> IO[int]:
-            def removed(count: int, path: str) -> IO[Result[int, TranslationError]]:
-                def maybe_remove(
-                    aged: Result[float, TranslationError],
-                ) -> IO[Result[int, TranslationError]]:
-                    match aged:
-                        case Err(error):
-                            return io_result(Err(error))
-                        case Ok(age):
-                            if age <= days * 86400.0:
-                                return io_result(Ok(count))
-
-                            return io_map(remove_file(path), removal_outcome)
-
-                def removal_outcome(
-                    removal: Result[bool, TranslationError],
-                ) -> Result[int, TranslationError]:
-                    match removal:
-                        case Err(error):
-                            return Err(error)
-                        case Ok(was_removed):
-                            return Ok(count + (1 if was_removed else 0))
-
-                return io_bind(
-                    now(clock),
-                    lambda now_value: io_bind(file_age(path, now_value), maybe_remove),
-                )
-
-            def report(pruned: Result[int, TranslationError]) -> IO[int]:
-                match pruned:
-                    case Err(error):
-                        return io_map(console.log(describe(error)), lambda _: 2)
-                    case Ok(count):
-                        noun = "entry" if count == 1 else "entries"
-                        return io_map(
-                            console.log("l2l: pruned %d cache %s" % (count, noun)),
-                            lambda _: 0,
-                        )
-
+        def prune(directory: str) -> IO[int]:
             def with_entry_paths(
                 scanned: Result[tuple[str, ...], TranslationError],
             ) -> IO[Result[int, TranslationError]]:
                 match scanned:
                     case Err(error):
                         return io_result(Err(error))
+
                     case Ok(paths):
-                        return fold_io(paths, removed, Ok(0))
+                        return fold_io(
+                            paths,
+                            lambda count, path: prune_cache_entry(
+                                clock, days, count, path
+                            ),
+                            Ok(0),
+                        )
 
             return io_bind(
-                io_bind(cache_entry_paths(cache_directory), with_entry_paths),
-                report,
+                io_bind(cache_entry_paths(directory), with_entry_paths),
+                lambda pruned: report_cache_prune(console, pruned),
             )
 
-        return io_bind(
-            resolve_cache_directory(environment, parsed.cache_directory),
-            with_cache_directory,
-        )
+        return with_cache_directory(environment, parsed.cache_directory, prune)
 
     return with_console_io(stderr, with_console)
 
@@ -572,95 +697,105 @@ def run_main_program(
     if not text.strip():
         return io_pure(0)
 
-    def with_console(console: Console) -> IO[int]:
-        def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
-            if isinstance(setup_result, Err):
-                return io_map(console.log(describe(setup_result.error)), lambda _: 2)
+    def run_with_setup(setup: Setup, console: Console) -> IO[int]:
+        warnings = log_setup_warnings(console, setup)
+        if parsed.dry_run:
+            return io_and_then(
+                warnings,
+                dry_run_program(
+                    parsed, setup, console, clock, open_http, sleep, text, stdout
+                ),
+            )
 
-            setup = setup_result.value
-            warnings = log_setup_warnings(console, setup)
-            if parsed.dry_run:
-                return io_and_then(
-                    warnings,
-                    dry_run_program(
-                        parsed, setup, console, clock, open_http, sleep, text, stdout
-                    ),
-                )
-
-            def with_started(started: float) -> IO[int]:
-                def with_cache_directory(cache_directory: str) -> IO[int]:
-                    def with_log(log: RunLog) -> IO[int]:
-                        announced: IO[None] = maybe_either(
-                            log.path,
-                            lambda path: io_when_unit(
-                                parsed.print_log_path,
-                                console.log("l2l: log: %s" % path),
-                            ),
-                            lambda: io_pure(None),
-                        )
-
-                        def with_retention(_: None) -> IO[int]:
-                            retention = io_when_unit(
-                                parsed.log_retention_days > 0,
-                                io_map(
-                                    prune_old_logs(
-                                        cache_directory,
-                                        parsed.log_retention_days,
+        def with_started(started: float) -> IO[int]:
+            def run_in_cache_directory(cache_directory: str) -> IO[int]:
+                def run_logged_pipeline(log: RunLog) -> IO[int]:
+                    return io_and_then(
+                        announce_run_log(parsed, console, log),
+                        io_and_then(
+                            prune_old_run_logs(parsed, cache_directory, clock),
+                            with_tab_listener_and_run_log(
+                                console,
+                                log,
+                                run_pipeline(
+                                    build_context(
+                                        parsed,
+                                        setup,
+                                        console,
                                         clock,
+                                        open_http,
+                                        sleep,
+                                        cache_directory=cache_directory,
+                                        use_cache=not parsed.no_cache,
+                                        log=log,
                                     ),
-                                    lambda _: None,
+                                    setup.passes,
+                                    text,
+                                    started,
+                                    stdout,
                                 ),
-                            )
-                            return io_and_then(retention, run_with_log())
-
-                        def run_with_log() -> IO[int]:
-                            pipeline = run_pipeline(
-                                build_context(
-                                    parsed,
-                                    setup,
-                                    console,
-                                    clock,
-                                    open_http,
-                                    sleep,
-                                    cache_directory=cache_directory,
-                                    use_cache=not parsed.no_cache,
-                                    log=log,
-                                ),
-                                setup.passes,
-                                text,
-                                started,
-                                stdout,
-                            )
-
-                            def execute() -> int:
-                                def toggle() -> None:
-                                    toggle_verbose(console).run()
-
-                                stop_listener = start_tab_listener(
-                                    console, toggle
-                                ).run()
-                                try:
-                                    return pipeline.run()
-                                finally:
-                                    stop_listener.run()
-                                    close_run_log(log).run()
-
-                            return IO(execute)
-
-                        return io_bind(announced, with_retention)
-
-                    return io_bind(open_run_log(cache_directory, clock), with_log)
+                            ),
+                        ),
+                    )
 
                 return io_bind(
-                    resolve_cache_directory(environment, parsed.cache_directory),
-                    with_cache_directory,
+                    open_run_log(cache_directory, clock), run_logged_pipeline
                 )
 
-            return io_and_then(warnings, io_bind(now(clock), with_started))
+            return with_cache_directory(
+                environment, parsed.cache_directory, run_in_cache_directory
+            )
 
-        return io_bind(load_setup(parsed, environment), use_setup)
+        return io_and_then(warnings, io_bind(now(clock), with_started))
+
+    def with_console(console: Console) -> IO[int]:
+        return with_loaded_setup(
+            parsed, environment, console, lambda setup: run_with_setup(setup, console)
+        )
 
     return with_console_io(stderr, with_console, verbose=parsed.verbose)
+
+
+def write_extracted_glossary(
+    console: Console,
+    output_path: str,
+    setup: Setup,
+    reply_result: Result[Translated, TranslationError],
+) -> IO[int]:
+    match reply_result:
+        case Err(error):
+            return report_error_and_exit(console, error, 1)
+
+        case Ok(reply):
+            reply_entries = parse_model_glossary_reply(reply.text, output_path)
+            match reply_entries:
+                case Err(error):
+                    return report_error_and_exit(console, error, 1)
+
+                case Ok(entries):
+                    merged = merge_glossary_entries((setup.glossary_entries, entries))
+
+                    def report(written: Result[None, TranslationError]) -> IO[int]:
+                        match written:
+                            case Err(error):
+                                return report_error_and_exit(console, error, 1)
+
+                            case Ok(_):
+                                return report_message_and_exit(
+                                    console,
+                                    "l2l: wrote %d glossary entries to %s"
+                                    % (len(merged), output_path),
+                                    0,
+                                )
+
+                    return io_bind(
+                        write_text_file(
+                            output_path,
+                            entries_to_json_text(merged),
+                            "glossary file",
+                        ),
+                        report,
+                    )
 
 
 def extract_glossary_program(
@@ -673,92 +808,54 @@ def extract_glossary_program(
     open_http: OpenHTTP,
     sleep: Sleep,
 ) -> IO[int]:
-    def with_console(console: Console) -> IO[int]:
-        def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
-            if isinstance(setup_result, Err):
-                return io_map(console.log(describe(setup_result.error)), lambda _: 2)
-
-            if not text.strip():
-                return io_map(
-                    console.log("l2l: --extract-glossary requires text on stdin"),
-                    lambda _: 2,
-                )
-
-            setup = setup_result.value
-            run_context = build_context(parsed, setup, console, clock, open_http, sleep)
-
-            def handle_reply(
-                reply_result: Result[Translated, TranslationError],
-            ) -> IO[int]:
-                if isinstance(reply_result, Err):
-                    return io_map(
-                        console.log(describe(reply_result.error)), lambda _: 1
-                    )
-
-                reply_entries = parse_model_glossary_reply(
-                    reply_result.value.text, output_path
-                )
-                if isinstance(reply_entries, Err):
-                    return io_map(
-                        console.log(describe(reply_entries.error)), lambda _: 1
-                    )
-
-                merged = merge_glossary_entries(
-                    (setup.glossary_entries, reply_entries.value)
-                )
-
-                def report(written: Result[None, TranslationError]) -> IO[int]:
-                    if isinstance(written, Err):
-                        return io_map(console.log(describe(written.error)), lambda _: 1)
-
-                    return io_map(
-                        console.log(
-                            "l2l: wrote %d glossary entries to %s"
-                            % (len(merged), output_path)
-                        ),
-                        lambda _: 0,
-                    )
-
-                return io_bind(
-                    write_text_file(
-                        output_path, entries_to_json_text(merged), "glossary file"
-                    ),
-                    report,
-                )
-
-            def extract() -> IO[Result[Translated, TranslationError]]:
-                def toggle() -> None:
-                    toggle_verbose(console).run()
-
-                def execute() -> Result[Translated, TranslationError]:
-                    stop_listener = start_tab_listener(console, toggle).run()
-                    try:
-                        return chat(
-                            run_context,
-                            run_context.settings.glossary_extraction_instruction,
-                            extraction_user_message(
-                                setup.target_language,
-                                setup.glossary_entries,
-                                text,
-                            ),
-                            run_context.config.model,
-                            {},
-                            Usage(),
-                        ).run()
-                    finally:
-                        stop_listener.run()
-
-                return IO(execute)
-
-            return io_and_then(
-                log_setup_warnings(console, setup), io_bind(extract(), handle_reply)
-            )
-
-        return io_bind(
-            load_setup(parsed, environment, resolve_pipeline_passes=False), use_setup
+    def extract_reply(
+        run_context: Context, setup: Setup
+    ) -> IO[Result[Translated, TranslationError]]:
+        return with_tab_listener(
+            run_context.console,
+            chat(
+                run_context,
+                run_context.settings.glossary_extraction_instruction,
+                extraction_user_message(
+                    setup.target_language,
+                    setup.glossary_entries,
+                    text,
+                ),
+                run_context.config.model,
+                {},
+                Usage(),
+            ),
         )
 
-    return with_console_io(stderr, with_console, verbose=parsed.verbose)
+    def run_with_setup(console: Console, setup: Setup) -> IO[int]:
+        if not text.strip():
+            return report_message_and_exit(
+                console,
+                "l2l: --extract-glossary requires text on stdin",
+                2,
+            )
+
+        run_context = build_context(parsed, setup, console, clock, open_http, sleep)
+        return io_and_then(
+            log_setup_warnings(console, setup),
+            io_bind(
+                extract_reply(run_context, setup),
+                lambda reply: write_extracted_glossary(
+                    console, output_path, setup, reply
+                ),
+            ),
+        )
+
+    def with_console(console: Console) -> IO[int]:
+        return with_loaded_setup(
+            parsed,
+            environment,
+            console,
+            lambda setup: run_with_setup(console, setup),
+            resolve_pipeline_passes=False,
+        )
+
+    return with_console_io(stderr, with_console)
 
 
 def cli() -> None:

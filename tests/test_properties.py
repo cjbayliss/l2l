@@ -36,7 +36,11 @@ def feed_think(body: str, chunk_size: int) -> str:
         state, _thinking, visible = think_step(state, body[start : start + chunk_size])
         parts.append(visible)
 
-    tail = state.held if state.checking and not state.open else ""
+    tail = (
+        state.buffered_text
+        if state.scanning_opening_tag and not state.inside_reasoning
+        else ""
+    )
     return "".join(parts) + tail
 
 

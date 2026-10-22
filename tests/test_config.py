@@ -37,6 +37,7 @@ from l2l.settings import (
     DEFAULT_API_SETTINGS,
     Arguments,
     Config,
+    OptionDefaults,
     PartialApiSettings,
     PassDefinition,
     Setup,
@@ -215,17 +216,15 @@ def test_validate_document() -> None:
 
 
 def test_parse_options_table() -> None:
-    assert parse_options_table("f", {"ascii": True}) == Ok(
-        {"ascii": True, "ensure_paragraphs": False, "retranslate_untranslated": False}
-    )
+    assert parse_options_table("f", {"ascii": True}) == Ok(OptionDefaults(ascii=True))
     assert parse_options_table("f", {"ensure_paragraphs": True}) == Ok(
-        {"ascii": False, "ensure_paragraphs": True, "retranslate_untranslated": False}
+        OptionDefaults(ensure_paragraphs=True)
     )
     assert parse_options_table("f", {"ensure_paragraphs": 2}) == Ok(
-        {"ascii": False, "ensure_paragraphs": 2, "retranslate_untranslated": False}
+        OptionDefaults(ensure_paragraphs=2)
     )
     assert parse_options_table("f", {"retranslate_untranslated": True}) == Ok(
-        {"ascii": False, "ensure_paragraphs": False, "retranslate_untranslated": True}
+        OptionDefaults(retranslate_untranslated=True)
     )
     assert isinstance(parse_options_table("f", {"ascii": "yes"}), Err)
     for bad in ("yes", 0, -1, 1.5, None):
@@ -347,7 +346,9 @@ def test_apply_default_options() -> None:
     )
     applied = apply_default_options(
         passes,
-        {"ascii": True, "ensure_paragraphs": True, "retranslate_untranslated": True},
+        OptionDefaults(
+            ascii=True, ensure_paragraphs=True, retranslate_untranslated=True
+        ),
         False,
     )
     assert [
@@ -364,7 +365,7 @@ def test_apply_default_options() -> None:
 
     applied = apply_default_options(
         passes,
-        {"ascii": False, "ensure_paragraphs": False, "retranslate_untranslated": False},
+        OptionDefaults(),
         True,
     )
     assert [
@@ -383,12 +384,10 @@ def test_apply_default_options() -> None:
 def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
     config = Config("u", "k", "m", 1.0, 100, {})
 
-    def setup_with(options: dict[str, bool | int], flag: bool) -> Setup:
-        resolved: Result[
-            tuple[dict[str, bool | int], tuple[PassDefinition, ...]], Any
-        ] = Ok(
+    def setup_with(options: OptionDefaults, flag: bool) -> Setup:
+        resolved: Result[tuple[OptionDefaults, tuple[PassDefinition, ...]], Any] = Ok(
             (
-                {"ascii": False, "ensure_paragraphs": False} | options,
+                options,
                 (
                     PassDefinition("unset", "i", "chunk", {}, None, None, None),
                     PassDefinition("explicit", "i", "chunk", {}, None, None, False),
@@ -400,7 +399,7 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
         assert isinstance(result, Ok)
         return result.value
 
-    setup = setup_with({}, True)
+    setup = setup_with(OptionDefaults(), True)
     assert setup.ensure_paragraphs
     assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
         True,
@@ -408,7 +407,7 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
         True,
     ]
 
-    setup = setup_with({}, False)
+    setup = setup_with(OptionDefaults(), False)
     assert not setup.ensure_paragraphs
     assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
         False,
@@ -416,7 +415,7 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
         True,
     ]
 
-    setup = setup_with({"ensure_paragraphs": 2}, False)
+    setup = setup_with(OptionDefaults(ensure_paragraphs=2), False)
     assert setup.ensure_paragraphs == 2
     assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
         2,
@@ -424,7 +423,7 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
         True,
     ]
 
-    setup = setup_with({"ensure_paragraphs": 2}, True)
+    setup = setup_with(OptionDefaults(ensure_paragraphs=2), True)
     assert setup.ensure_paragraphs == 2
     assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
         2,
@@ -579,11 +578,7 @@ def test_resolve_passes_selection_and_options() -> None:
     result = resolve_passes("user", user, None, Ok({})).run()
     assert isinstance(result, Ok)
     options, passes = result.value
-    assert options == {
-        "ascii": True,
-        "ensure_paragraphs": False,
-        "retranslate_untranslated": False,
-    }
+    assert options == OptionDefaults(ascii=True)
     assert len(passes) == 1
 
 
