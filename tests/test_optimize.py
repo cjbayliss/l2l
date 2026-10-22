@@ -156,26 +156,19 @@ def run_main(
     return code, stdout.getvalue(), stderr.getvalue()
 
 
-def test_compact_collapses_whitespace() -> None:
+def test_text_helpers() -> None:
     assert compact("a\n\n b\t c ", 10) == "a b c"
-
-
-def test_hash_text_is_stable() -> None:
     assert hash_text("abc") == hash_text("abc")
     assert len(hash_text("abc")) == 12
-
-
-def test_text_stem_and_output_path() -> None:
     assert text_stem("/x/ch1.txt") == "ch1"
     assert text_stem("/x/holdout") == "holdout"
     assert output_path("/lab", "v1", "/lab/chapters/ch1.txt") == os.path.join(
         "/lab", "out", "v1", "ch1.en.txt"
     )
-
-
-def test_strip_reply_removes_fences() -> None:
     assert strip_reply("```\nbody\n```") == "body"
     assert strip_reply("```python\nbody") == "body"
+    assert strip_reply("```python\nbetter body") == "better body"
+    assert strip_reply("```") == ""
     assert strip_reply("plain") == "plain"
 
 
@@ -199,25 +192,21 @@ def test_usable_verdict_and_error_verdict() -> None:
     assert "junk reply" in error["critique"]
 
 
-def test_reply_content_extracts_choice() -> None:
-    outcome = reply_content(verdict_body(" hello "))
-    assert isinstance(outcome, Ok)
-    assert outcome.value == " hello "
-
-
-def test_reply_content_reports_endpoint_error() -> None:
-    body = {"error": {"message": "quota"}}
-    outcome = reply_content(EndpointReply(json.dumps(body), body))
-    assert isinstance(outcome, Err)
-    assert "endpoint error" in describe(outcome.error)
-
-
-def test_reply_content_hints_on_length_finish() -> None:
-    body = {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
-    outcome = reply_content(EndpointReply(json.dumps(body), body))
-    assert isinstance(outcome, Err)
-    assert "finish_reason=length" in describe(outcome.error)
-    assert "--judge-params" in describe(outcome.error)
+def test_reply_content_variants() -> None:
+    extracted = reply_content(verdict_body(" hello "))
+    assert isinstance(extracted, Ok)
+    assert extracted.value == " hello "
+    endpoint_body = {"error": {"message": "quota"}}
+    endpoint_error = reply_content(
+        EndpointReply(json.dumps(endpoint_body), endpoint_body)
+    )
+    assert isinstance(endpoint_error, Err)
+    assert "endpoint error" in describe(endpoint_error.error)
+    length_body = {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
+    length_error = reply_content(EndpointReply(json.dumps(length_body), length_body))
+    assert isinstance(length_error, Err)
+    assert "finish_reason=length" in describe(length_error.error)
+    assert "--judge-params" in describe(length_error.error)
 
 
 def test_order_outcome_and_feedback_lines() -> None:

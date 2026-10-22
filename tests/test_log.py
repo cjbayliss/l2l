@@ -136,41 +136,25 @@ def test_run_log_captures_http_error(tmp_path: Path) -> None:
     assert "could not reach endpoint: down" in content
 
 
-def test_print_log_path_prints_log_path_to_stderr(tmp_path: Path) -> None:
-    http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
-    code, _, stderr = run_l2l(
-        write_config(tmp_path), tmp_path, http.open, ["--no-cache", "-p"]
-    )
-    assert code == 0
-
-    match = re.search(r"l2l: log: (\S+)", stderr)
-    assert match is not None
-    assert Path(match.group(1)).exists()
-
-
-def test_print_log_path_short_flag(tmp_path: Path) -> None:
-    http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
-    code, _, stderr = run_l2l(write_config(tmp_path), tmp_path, http.open, ["-p"])
-    assert code == 0
-    assert "l2l: log: " in stderr
-
-
-def test_verbose_alone_does_not_print_log_path(tmp_path: Path) -> None:
-    http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
-    code, _, stderr = run_l2l(
-        write_config(tmp_path), tmp_path, http.open, ["--no-cache", "-V"]
-    )
-    assert code == 0
-    assert "l2l: log:" not in stderr
-
-
-def test_without_verbose_log_path_not_printed(tmp_path: Path) -> None:
-    http = FakeHttp([FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))])
-    code, _, stderr = run_l2l(
-        write_config(tmp_path), tmp_path, http.open, ["--no-cache"]
-    )
-    assert code == 0
-    assert "l2l: log:" not in stderr
+def test_log_path_printing_flags(tmp_path: Path) -> None:
+    for arguments, expected in (
+        (["--no-cache", "-p"], True),
+        (["-p"], True),
+        (["--no-cache", "-V"], False),
+        (["--no-cache"], False),
+    ):
+        http = FakeHttp(
+            [FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))]
+        )
+        code, _, stderr = run_l2l(
+            write_config(tmp_path), tmp_path, http.open, arguments
+        )
+        assert code == 0
+        assert ("l2l: log:" in stderr) is expected
+        if expected:
+            match = re.search(r"l2l: log: (\S+)", stderr)
+            assert match is not None
+            assert Path(match.group(1)).exists()
 
 
 def test_run_log_write_ignores_absent_path() -> None:

@@ -16,7 +16,6 @@ from l2l.config import (
     load_setup,
     maximum_tokens_api_setting,
     merged_api_settings,
-    parameters_api_setting,
     parse_options_table,
     parse_pass_table,
     pass_definition_from,
@@ -52,41 +51,51 @@ def ok_document(document: dict[str, Any]) -> Result[dict[str, Any], TranslationE
     return Ok(document)
 
 
-def test_string_api_setting() -> None:
+def test_api_setting_parsers() -> None:
     base = PartialApiSettings()
-    result = string_api_setting("f", base, {"base_url": " http://x ", "model": 3})
-    assert isinstance(result, Err)
-    assert "[api] model" in describe(result.error)
+    invalid_model = string_api_setting(
+        "f", base, {"base_url": " http://x ", "model": 3}
+    )
+    assert isinstance(invalid_model, Err)
+    assert "[api] model" in describe(invalid_model.error)
 
-    result = string_api_setting("f", base, {"base_url": " http://x ", "api_key": "k"})
-    assert isinstance(result, Ok)
-    assert result.value.base_url == "http://x"
-    assert result.value.api_key == "k"
+    parsed = string_api_setting("f", base, {"base_url": " http://x ", "api_key": "k"})
+    assert isinstance(parsed, Ok)
+    assert parsed.value.base_url == "http://x"
+    assert parsed.value.api_key == "k"
+
+    for invalid_timeout in (0, True, "5", -3):
+        assert isinstance(
+            timeout_api_setting("f", base, {"timeout": invalid_timeout}), Err
+        )
+    parsed_timeout = timeout_api_setting("f", base, {"timeout": 5})
+    assert isinstance(parsed_timeout, Ok)
+    assert parsed_timeout.value.timeout == 5.0
+
+    for invalid_maximum in (-1, 1.5, 2.5):
+        assert isinstance(
+            maximum_tokens_api_setting("f", base, {"max_tokens": invalid_maximum}),
+            Err,
+        )
+    parsed_maximum = maximum_tokens_api_setting("f", base, {"max_tokens": 7})
+    assert isinstance(parsed_maximum, Ok)
+    assert parsed_maximum.value.maximum_tokens == 7
 
 
-def test_timeout_api_setting() -> None:
-    base = PartialApiSettings()
-    assert isinstance(timeout_api_setting("f", base, {"timeout": 0}), Err)
-    assert isinstance(timeout_api_setting("f", base, {"timeout": True}), Err)
-    assert isinstance(timeout_api_setting("f", base, {"timeout": "5"}), Err)
-    result = timeout_api_setting("f", base, {"timeout": 5})
-    assert isinstance(result, Ok)
-    assert result.value.timeout == 5.0
-
-
-def test_max_tokens_api_setting() -> None:
-    base = PartialApiSettings()
-    assert isinstance(maximum_tokens_api_setting("f", base, {"max_tokens": -1}), Err)
-    assert isinstance(maximum_tokens_api_setting("f", base, {"max_tokens": 1.5}), Err)
-    result = maximum_tokens_api_setting("f", base, {"max_tokens": 7})
-    assert isinstance(result, Ok)
-    assert result.value.maximum_tokens == 7
-
-
-def test_document_api_settings_unknown_key() -> None:
-    result = document_api_settings("f", {"api": {"nope": 1}})
-    assert isinstance(result, Err)
-    assert "unknown key(s): nope" in describe(result.error)
+def test_document_api_settings_rejects_invalid_tables() -> None:
+    outcomes = (
+        ({"api": {"nope": 1}}, "unknown key(s): nope"),
+        ({"api": "nope"}, "[api] must be a table"),
+        ({"api": {"params": ["x"]}}, "[api] params must be a table"),
+        (
+            {"api": {"params": {"t": object()}}},
+            "[api] params must contain only JSON values",
+        ),
+    )
+    for document, fragment in outcomes:
+        result = document_api_settings("f", document)
+        assert isinstance(result, Err)
+        assert fragment in describe(result.error)
 
 
 def test_merge_api_settings_params_deep_merge() -> None:
@@ -96,22 +105,24 @@ def test_merge_api_settings_params_deep_merge() -> None:
     assert merged == PartialApiSettings(model="b", parameters={"x": 1, "y": 2, "z": 3})
 
 
-def test_api_settings_from_environment() -> None:
-    result = api_settings_from_environment(
-        {"TRANSLATE_MODEL": " m ", "TRANSLATE_TIMEOUT": "bogus"}
+def test_api_settings_from_environment_and_arguments() -> None:
+    invalid_environment = (
+        ({"TRANSLATE_MODEL": " m ", "TRANSLATE_TIMEOUT": "bogus"}, "TRANSLATE_TIMEOUT"),
+        ({"TRANSLATE_MAX_TOKENS": "bogus"}, "TRANSLATE_MAX_TOKENS"),
+        ({"TRANSLATE_TIMEOUT": "-1"}, "TRANSLATE_TIMEOUT must be positive"),
     )
-    assert isinstance(result, Err)
-    assert "TRANSLATE_TIMEOUT" in describe(result.error)
+    for environment, fragment in invalid_environment:
+        result = api_settings_from_environment(environment)
+        assert isinstance(result, Err)
+        assert fragment in describe(result.error)
 
-    result = api_settings_from_environment(
+    parsed_environment = api_settings_from_environment(
         {"TRANSLATE_BASE_URL": "http://e", "TRANSLATE_MAX_TOKENS": "9"}
     )
-    assert isinstance(result, Ok)
-    assert result.value.base_url == "http://e"
-    assert result.value.maximum_tokens == 9
+    assert isinstance(parsed_environment, Ok)
+    assert parsed_environment.value.base_url == "http://e"
+    assert parsed_environment.value.maximum_tokens == 9
 
-
-def test_api_settings_from_arguments() -> None:
     arguments = Arguments(
         config=None,
         base_url=None,
@@ -125,9 +136,9 @@ def test_api_settings_from_arguments() -> None:
         print_log_path=False,
         cache_directory=None,
     )
-    result = api_settings_from_arguments(arguments)
-    assert isinstance(result, Ok)
-    assert result.value == PartialApiSettings(api_key="k", timeout=2.0)
+    parsed_arguments = api_settings_from_arguments(arguments)
+    assert isinstance(parsed_arguments, Ok)
+    assert parsed_arguments.value == PartialApiSettings(api_key="k", timeout=2.0)
 
 
 def arguments_with_numeric_flags(
@@ -148,25 +159,18 @@ def arguments_with_numeric_flags(
     )
 
 
-def test_api_settings_from_arguments_rejects_negative_timeout() -> None:
-    result = api_settings_from_arguments(arguments_with_numeric_flags(-5.0, None))
-    assert isinstance(result, Err)
-    assert describe(result.error) == "l2l: --timeout must be positive"
-
-
-def test_api_settings_from_arguments_rejects_zero_maximum_tokens() -> None:
-    result = api_settings_from_arguments(arguments_with_numeric_flags(None, 0))
-    assert isinstance(result, Err)
-    assert describe(result.error) == "l2l: --maximum-tokens must be positive"
-
-
-def test_merged_api_settings_reports_invalid_numeric_flags() -> None:
-    arguments = arguments_with_numeric_flags(-5.0, None)
-    user: Result[dict[str, Any], TranslationError] = Ok({})
-    selected: Result[dict[str, Any], TranslationError] = Ok({})
-    result = merged_api_settings(arguments, {}, "user", user, None, selected)
-    assert isinstance(result, Err)
-    assert describe(result.error) == "l2l: --timeout must be positive"
+def test_numeric_flags_are_validated() -> None:
+    empty: Result[dict[str, Any], TranslationError] = Ok({})
+    for arguments, fragment in (
+        (arguments_with_numeric_flags(-5.0, None), "--timeout must be positive"),
+        (arguments_with_numeric_flags(None, 0), "--maximum-tokens must be positive"),
+    ):
+        direct = api_settings_from_arguments(arguments)
+        assert isinstance(direct, Err)
+        assert fragment in describe(direct.error)
+        merged = merged_api_settings(arguments, {}, "user", empty, None, empty)
+        assert isinstance(merged, Err)
+        assert fragment in describe(merged.error)
 
 
 def test_merged_api_settings_precedence() -> None:
@@ -208,9 +212,19 @@ def test_build_config_missing() -> None:
 
 def test_validate_document() -> None:
     assert isinstance(validate_document("f", {}), Ok)
+    assert isinstance(validate_document("f", {"glossary": ["a.json"]}), Ok)
+    assert isinstance(validate_document("f", {"target_language": "English"}), Ok)
     result = validate_document("f", {"weird": 1})
     assert isinstance(result, Err)
     assert "weird" in describe(result.error)
+    for document in (
+        {"glossary": "a.json"},
+        {"glossary": [1]},
+        {"glossary": [""]},
+    ):
+        bad_glossary = validate_document("f", document)
+        assert isinstance(bad_glossary, Err)
+        assert "glossary must be a list of file paths" in describe(bad_glossary.error)
 
 
 def test_parse_options_table() -> None:
@@ -438,13 +452,9 @@ def test_resolve_call_settings() -> None:
     assert parameters == {"a": 1, "b": 2}
 
 
-def test_pass_salt() -> None:
+def test_pass_salt_includes_glossary_and_effective_language() -> None:
     pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
     assert pass_salt(pass_definition) == (CACHE_SALT_VERSION + "\x00p\x00i\x00\x00[]\n")
-
-
-def test_pass_salt_includes_the_glossary() -> None:
-    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
     entries = (GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),)
     salted = pass_salt(pass_definition, entries)
     assert salted != pass_salt(pass_definition)
@@ -452,22 +462,20 @@ def test_pass_salt_includes_the_glossary() -> None:
     assert '"translated": "Nanjing"' in salted
     assert pass_salt(pass_definition, entries) == salted
 
+    glossary_pass = PassDefinition("p", "", "update_glossary", {}, None, False)
+    assert pass_salt(glossary_pass, entries) == pass_salt(glossary_pass)
+    assert pass_salt(glossary_pass, effective_language="Chinese") == pass_salt(
+        replace(glossary_pass, target_language="Chinese"),
+        effective_language="Chinese",
+    )
 
-def test_pass_salt_omits_the_glossary_for_update_glossary_passes() -> None:
-    pass_definition = PassDefinition("p", "", "update_glossary", {}, None, False)
-    entries = (GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),)
-    assert pass_salt(pass_definition, entries) == pass_salt(pass_definition)
 
-
-def test_pass_salt_includes_the_effective_language_for_every_mode() -> None:
+def test_pass_and_retranslation_salts_normalize_language() -> None:
     for mode in ("analysis", "chunk", "paragraph", "update_glossary"):
         pass_definition = PassDefinition("p", "i", mode, {}, None, False)
         assert pass_salt(pass_definition, effective_language="Chinese") != pass_salt(
             pass_definition, effective_language="French"
         )
-
-
-def test_pass_salt_normalizes_the_effective_language() -> None:
     pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
     assert pass_salt(pass_definition, effective_language="Chinese") == pass_salt(
         pass_definition, effective_language="chinese"
@@ -475,26 +483,9 @@ def test_pass_salt_normalizes_the_effective_language() -> None:
     assert pass_salt(pass_definition, effective_language="Chinese") == pass_salt(
         pass_definition, effective_language="  CHINESE  "
     )
-
-
-def test_pass_salt_uses_the_effective_language_for_update_glossary_passes() -> None:
-    pass_definition = PassDefinition("p", "", "update_glossary", {}, None, False)
-    assert pass_salt(pass_definition, effective_language="Chinese") == pass_salt(
-        replace(pass_definition, target_language="Chinese"),
-        effective_language="Chinese",
-    )
-
-
-def test_retranslation_salt_extends_the_pass_salt() -> None:
-    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
     assert retranslation_salt(pass_definition) == (
         pass_salt(pass_definition) + "\x00retranslate"
     )
-    assert retranslation_salt(pass_definition) != pass_salt(pass_definition)
-
-
-def test_retranslation_salt_includes_the_effective_language() -> None:
-    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
     assert retranslation_salt(
         pass_definition, effective_language="Chinese"
     ) != retranslation_salt(pass_definition, effective_language="English")
@@ -525,34 +516,36 @@ def test_cache_key_variants() -> None:
     )
 
 
-def test_parse_pass_table_inline() -> None:
-    result = parse_pass_table("f", {"name": "p", "instruction": " do "}, ".").run()
-    assert isinstance(result, Ok)
-    assert result.value.instruction == "do"
+def test_parse_pass_table_and_inline_instruction() -> None:
+    parsed = parse_pass_table("f", {"name": "p", "instruction": " do "}, ".").run()
+    assert isinstance(parsed, Ok)
+    assert parsed.value.instruction == "do"
+    missing = parse_pass_table("f", {"name": "p"}, ".").run()
+    assert isinstance(missing, Err)
+    assert "exactly one of" in describe(missing.error)
 
-    result = parse_pass_table("f", {"name": "p"}, ".").run()
-    assert isinstance(result, Err)
-    assert "exactly one of" in describe(result.error)
-
-
-def test_load_instruction_text_inline() -> None:
-    result = load_instruction_text("f", "p", {"instruction": " inst "}, ".").run()
-    assert isinstance(result, Ok)
-    assert result.value == "inst"
-
-    result = load_instruction_text(
+    inline = load_instruction_text("f", "p", {"instruction": " inst "}, ".").run()
+    assert isinstance(inline, Ok)
+    assert inline.value == "inst"
+    conflicting = load_instruction_text(
         "f", "p", {"instruction": "", "instruction_file": "x"}, "."
     ).run()
-    assert isinstance(result, Err)
-
-
-def test_load_instruction_text_rejects_blank_inline_instructions() -> None:
+    assert isinstance(conflicting, Err)
     for instruction in ("   ", "", 3, None):
         result = load_instruction_text(
             "f", "p", {"instruction": instruction}, "."
         ).run()
         assert isinstance(result, Err)
         assert "instruction is empty" in describe(result.error)
+
+
+def test_parse_pass_table_rejects_non_table_and_empty_name() -> None:
+    non_table = parse_pass_table("f", "chunk", ".").run()
+    assert isinstance(non_table, Err)
+    assert "entries must be tables" in describe(non_table.error)
+    empty_name = parse_pass_table("f", {"name": "  ", "instruction": "i"}, ".").run()
+    assert isinstance(empty_name, Err)
+    assert "name must be a non-empty string" in describe(empty_name.error)
 
 
 def test_document_passes_without_tables_yields_no_passes() -> None:
@@ -624,44 +617,6 @@ def test_setup_report_lists_api_and_passes() -> None:
     assert "options.ensure_paragraphs: True" in report
 
 
-def test_document_api_settings_requires_a_table() -> None:
-    result = document_api_settings("f", {"api": "nope"})
-    assert isinstance(result, Err)
-    assert "[api] must be a table" in describe(result.error)
-
-
-def test_document_api_settings_rejects_non_table_params() -> None:
-    result = document_api_settings("f", {"api": {"params": ["x"]}})
-    assert isinstance(result, Err)
-    assert "[api] params must be a table" in describe(result.error)
-
-
-def test_timeout_api_setting_rejects_negative() -> None:
-    result = timeout_api_setting("f", PartialApiSettings(), {"timeout": -3})
-    assert isinstance(result, Err)
-    assert "timeout must be a positive number" in describe(result.error)
-
-
-def test_max_tokens_api_setting_rejects_float_with_message() -> None:
-    result = maximum_tokens_api_setting("f", PartialApiSettings(), {"max_tokens": 2.5})
-    assert isinstance(result, Err)
-    assert "max_tokens must be a positive integer" in describe(result.error)
-
-
-def test_environment_rejects_bogus_and_negative_numbers() -> None:
-    result = api_settings_from_environment({"TRANSLATE_MAX_TOKENS": "bogus"})
-    assert isinstance(result, Err)
-    assert "TRANSLATE_MAX_TOKENS must be an integer" in describe(result.error)
-
-    result = api_settings_from_environment({"TRANSLATE_TIMEOUT": "-1"})
-    assert isinstance(result, Err)
-    assert "TRANSLATE_TIMEOUT must be positive" in describe(result.error)
-
-    result = api_settings_from_environment({"TRANSLATE_TIMEOUT": "1.5"})
-    assert isinstance(result, Ok)
-    assert result.value.timeout == 1.5
-
-
 def test_pass_definition_from_rejects_bad_fields() -> None:
     result = pass_definition_from("f", "p", {"mode": "chunk", "ascii": "yes"}, "i")
     assert isinstance(result, Err)
@@ -674,16 +629,6 @@ def test_pass_definition_from_rejects_bad_fields() -> None:
     result = pass_definition_from("f", "p", {"mode": "chunk", "params": 3}, "i")
     assert isinstance(result, Err)
     assert "params must be a table" in describe(result.error)
-
-
-def test_parse_pass_table_rejects_non_table_and_empty_name() -> None:
-    result = parse_pass_table("f", "chunk", ".").run()
-    assert isinstance(result, Err)
-    assert "entries must be tables" in describe(result.error)
-
-    result = parse_pass_table("f", {"name": "  ", "instruction": "i"}, ".").run()
-    assert isinstance(result, Err)
-    assert "name must be a non-empty string" in describe(result.error)
 
 
 def test_document_passes_rejects_bad_entry_lists() -> None:
@@ -768,14 +713,6 @@ def test_load_setup_reports_malformed_toml(tmp_path: Path) -> None:
     assert "cannot parse config file" in describe(result.error)
 
 
-def test_api_params_must_contain_json_values() -> None:
-    result = parameters_api_setting(
-        "f", PartialApiSettings(), {"params": {"t": object()}}
-    )
-    assert isinstance(result, Err)
-    assert "[api] params must contain only JSON values" in describe(result.error)
-
-
 def test_pass_params_must_contain_json_values() -> None:
     result = pass_definition_from("f", "p", {"params": {"t": [object()]}}, "i")
     assert isinstance(result, Err)
@@ -810,14 +747,6 @@ def glossary_arguments(config_path: Path) -> Arguments:
         print_log_path=False,
         cache_directory=None,
     )
-
-
-def test_validate_document_accepts_glossary_paths() -> None:
-    assert isinstance(validate_document("f", {"glossary": ["a.json"]}), Ok)
-
-
-def test_validate_document_accepts_target_language() -> None:
-    assert isinstance(validate_document("f", {"target_language": "English"}), Ok)
 
 
 def test_document_target_language_validates() -> None:
@@ -1084,34 +1013,27 @@ def make_setup_for_warnings(
     )
 
 
-def test_validate_ascii_target_language_accepts_latin_targets() -> None:
-    for language in ("English", "Spanish", "English (US)"):
-        result = validate_ascii_target_language(
-            make_setup_for_warnings(
-                language,
-                (PassDefinition("p", "i", "chunk", {}, None, True),),
-            )
+def test_validate_ascii_target_language() -> None:
+    ascii_pass = (PassDefinition("p", "i", "chunk", {}, None, True),)
+    for language in ("English", "Spanish", "English (US)", "Zorblaxian"):
+        assert isinstance(
+            validate_ascii_target_language(
+                make_setup_for_warnings(language, ascii_pass)
+            ),
+            Ok,
         )
-        assert isinstance(result, Ok)
 
-
-def test_validate_ascii_target_language_rejects_known_non_latin_targets() -> None:
-    result = validate_ascii_target_language(
-        make_setup_for_warnings(
-            "Chinese",
-            (PassDefinition("p", "i", "chunk", {}, None, True),),
-        )
+    rejected = validate_ascii_target_language(
+        make_setup_for_warnings("Chinese", ascii_pass)
     )
-    assert isinstance(result, Err)
-    message = describe(result.error)
+    assert isinstance(rejected, Err)
+    message = describe(rejected.error)
     assert "pass 1 [p]" in message
     assert "Chinese" in message
     assert "Han" in message
     assert "ascii = false" in message
 
-
-def test_validate_ascii_target_language_honours_the_pass_override() -> None:
-    result = validate_ascii_target_language(
+    overridden = validate_ascii_target_language(
         make_setup_for_warnings(
             "English",
             (
@@ -1121,18 +1043,8 @@ def test_validate_ascii_target_language_honours_the_pass_override() -> None:
             ),
         )
     )
-    assert isinstance(result, Err)
-    assert "Japanese" in describe(result.error)
-
-
-def test_validate_ascii_target_language_allows_unknown_targets() -> None:
-    result = validate_ascii_target_language(
-        make_setup_for_warnings(
-            "Zorblaxian",
-            (PassDefinition("p", "i", "chunk", {}, None, True),),
-        )
-    )
-    assert isinstance(result, Ok)
+    assert isinstance(overridden, Err)
+    assert "Japanese" in describe(overridden.error)
 
 
 def test_setup_warnings_report_unknown_languages() -> None:
