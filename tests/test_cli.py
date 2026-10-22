@@ -17,7 +17,7 @@ from fakes import (
     with_usage,
 )
 
-from l2l import __version__, cli, effects, keys, pipeline
+from l2l import __version__, cli, config, effects, keys, pipeline
 from l2l.console import toggle_verbose
 from l2l.errors import FileError, TranslationError, describe, fail_http
 from l2l.monads import IO, Err, Just, Ok, Result, io_pure, io_result
@@ -39,6 +39,15 @@ CONFIG_TEXT = (
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
 
+@pytest.fixture(autouse=True)
+def isolate_user_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        config,
+        "user_config_path",
+        lambda _environment: io_pure(str(tmp_path / "absent-config.toml")),
+    )
+
+
 def write_config(tmp_path: Path) -> Path:
     config_path = tmp_path / "l2l.toml"
     config_path.write_text(CONFIG_TEXT)
@@ -54,9 +63,13 @@ def run_l2l(
         raise AssertionError("endpoint must not be contacted")
 
     stdout, stderr = io.StringIO(), io.StringIO()
+    environment = {
+        "XDG_CONFIG_HOME": str(tmp_path / "xdg-config"),
+        "XDG_CACHE_HOME": str(tmp_path / "xdg-cache"),
+    }
     code = cli.main(
         arguments,
-        {},
+        environment,
         io.StringIO(stdin),
         stdout,
         stderr,
