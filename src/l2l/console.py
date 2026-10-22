@@ -18,6 +18,7 @@ from l2l.monads import (
     io_and_then,
     io_atomic,
     io_bind,
+    io_join,
     io_map,
     io_pair,
     io_pure,
@@ -218,12 +219,6 @@ class StatusLine:
         def render(view: StatusView) -> tuple[StatusView, str]:
             return start_render(view, label, self.monotonic())
 
-        def drawn(_: None) -> IO[None]:
-            return io_atomic(
-                self.lock,
-                io_bind(modify_reference_with(self.view, render), self.write_rendered),
-            )
-
         def spawn_ticker_thread(_: None) -> IO[None]:
             thread = threading.Thread(
                 target=repeat_until(self.tick_action(), self.halt, TICK_SECONDS),
@@ -239,9 +234,11 @@ class StatusLine:
 
             return io_bind(write_reference(self.worker, thread), boot)
 
-        return io_when_unit(
-            self.live, io_and_then(drawn(None), spawn_ticker_thread(None))
+        drawn = io_atomic(
+            self.lock,
+            io_bind(modify_reference_with(self.view, render), self.write_rendered),
         )
+        return io_when_unit(self.live, io_and_then(drawn, spawn_ticker_thread(None)))
 
     def progress(self, label: str, count: int = 1) -> IO[None]:
         def updated(view: StatusView) -> StatusView:
@@ -312,13 +309,7 @@ class StatusLine:
             updated, text = draw_render(view, self.monotonic())
             return updated, self.write(text)
 
-        def emit(effect: IO[None]) -> IO[None]:
-            return effect
-
-        return io_atomic(
-            self.lock,
-            io_bind(modify_reference_with(self.view, redraw), emit),
-        )
+        return io_atomic(self.lock, io_join(modify_reference_with(self.view, redraw)))
 
 
 @dataclass(frozen=True)
@@ -454,14 +445,9 @@ class Console:
 
             return step
 
-        def emit(effect: IO[None]) -> IO[None]:
-            return effect
-
         return io_bind(
             io_map(self.term_size(), lambda size: size[0]),
-            lambda width: io_bind(
-                modify_reference_with(self.events, tracked(width)), emit
-            ),
+            lambda width: io_join(modify_reference_with(self.events, tracked(width))),
         )
 
     def commit_pending_raw(self) -> IO[None]:
@@ -490,34 +476,25 @@ class Console:
                 return interrupt_render(view, self.status.live)
 
             def logged(erase_text: str) -> IO[None]:
-                def committed(_: None) -> IO[None]:
-                    def printed(_: None) -> IO[None]:
-                        def recorded(__: None) -> IO[None]:
-                            return self.record(message, verbose_only, raw=False)
-
-                        return io_and_then(
-                            io_when_unit(shown, self.status.write(message + "\n")),
-                            recorded(None),
-                        )
-
-                    return io_and_then(self.commit_pending_raw(), printed(None))
-
                 return io_and_then(
                     io_when_unit(
                         shown and bool(erase_text), self.status.write(erase_text)
                     ),
-                    committed(None),
-                )
-
-            def section(_: None) -> IO[None]:
-                return io_atomic(
-                    self.status.lock,
-                    io_bind(modify_reference_with(self.status.view, erase), logged),
+                    io_and_then(
+                        self.commit_pending_raw(),
+                        io_and_then(
+                            io_when_unit(shown, self.status.write(message + "\n")),
+                            self.record(message, verbose_only, raw=False),
+                        ),
+                    ),
                 )
 
             return io_and_then(
                 io_when_unit(shown, self.status.stop_worker()),
-                section(None),
+                io_atomic(
+                    self.status.lock,
+                    io_bind(modify_reference_with(self.status.view, erase), logged),
+                ),
             )
 
         return io_bind(read_reference(self.verbose), act)
@@ -638,7 +615,7 @@ class Console:
                 written(None),
             )
 
-        def act(_: None) -> IO[None]:
+        def act() -> IO[None]:
             def sized(
                 inputs: tuple[
                     tuple[bool, tuple[tuple[LogEvent, ...], str]],
@@ -649,7 +626,7 @@ class Console:
 
             return io_atomic(self.status.lock, io_bind(snapshot(), sized))
 
-        return io_when_unit(self.status.live, act(None))
+        return io_when_unit(self.status.live, act())
 
     def write_partial(self, text: str) -> IO[None]:
         return self.status.write_partial(text)
@@ -675,13 +652,10 @@ class Console:
                 self.record(prefix + text, verbose_only=False, raw=False),
             )
 
-        def emit(effect: IO[None]) -> IO[None]:
-            return effect
-
         return io_and_then(
             self.status.stop_worker(),
             io_atomic(
                 self.status.lock,
-                io_bind(modify_reference_with(self.status.view, render), emit),
+                io_join(modify_reference_with(self.status.view, render)),
             ),
         )

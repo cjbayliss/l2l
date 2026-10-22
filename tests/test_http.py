@@ -762,7 +762,7 @@ def test_log_all_writes_each_message_when_verbose() -> None:
     console, stream = make_console()
     write_reference(console.verbose, True).run()
     outcome = log_all(console, ("one", "two")).run()
-    assert outcome == Ok(())
+    assert outcome is None
     assert stream.getvalue() == "one\ntwo\n"
 
 

@@ -16,7 +16,6 @@ from l2l.monads import (
     io_map,
     io_pure,
     io_result,
-    io_when_unit,
 )
 from l2l.text import Translated, Usage
 
@@ -45,20 +44,11 @@ def cache_lookup(
     return io_map(cache_read(run_context.cache_directory, key), checked)
 
 
-def discard_cache_write_outcome(_stored: bool) -> None:
-    return None
+def cache_store(run_context: Context, key: str, value: str) -> IO[None]:
+    if not run_context.use_cache:
+        return io_pure(None)
 
-
-def cache_store(
-    run_context: Context, key: str, value: str, condition: bool
-) -> IO[None]:
-    return io_when_unit(
-        run_context.use_cache and condition,
-        io_map(
-            cache_write(run_context.cache_directory, key, value),
-            discard_cache_write_outcome,
-        ),
-    )
+    return io_map(cache_write(run_context.cache_directory, key, value), lambda _: None)
 
 
 def store_translation(
@@ -73,7 +63,7 @@ def store_translation(
         and acceptable(result.value.text)
     ):
         return io_map(
-            cache_store(run_context, key, result.value.text, True), lambda _: result
+            cache_store(run_context, key, result.value.text), lambda _: result
         )
 
     return io_result(result)

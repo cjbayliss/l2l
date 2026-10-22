@@ -16,6 +16,7 @@ from l2l.monads import (
     io_bind,
     io_catch,
     io_catch_result,
+    io_join,
     io_map,
     io_pair,
     io_pure,
@@ -136,6 +137,10 @@ def test_repeat_until_runs_until_event_set() -> None:
 
     repeat_until(action(), until, 0.001)()
     assert log == ["tick"]
+
+
+def test_io_join_flattens_nested_io() -> None:
+    assert io_join(io_pure(io_pure(3))).run() == 3
 
 
 def test_io_catch_converts_exceptions_to_result() -> None:

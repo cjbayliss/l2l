@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
-from typing import TextIO
+from typing import Any, TextIO
 
 from l2l.ascii import enforce_pass_ascii
 from l2l.cache import (
@@ -147,14 +147,6 @@ class UnitResult:
 
 
 @dataclass(frozen=True, kw_only=True)
-class UnitsSoFar:
-    outputs: tuple[str, ...]
-    usage: Usage
-    validated: bool
-    problem: str | None
-
-
-@dataclass(frozen=True, kw_only=True)
 class PassExecution:
     run_context: Context
     pass_definition: PassDefinition
@@ -258,6 +250,31 @@ def analyze_document(
     return run_analysis(run_context, pass_definition, glossary, full_text, usage)
 
 
+def pass_cache_key(
+    run_context: Context,
+    pass_definition: PassDefinition,
+    text: str,
+    glossary: tuple[GlossaryEntry, ...] = (),
+) -> tuple[str, str, Mapping[str, Any]]:
+    model, parameters = resolve_call_settings(run_context.config, pass_definition)
+    return (
+        cache_key(
+            text,
+            model,
+            pass_salt(
+                pass_definition,
+                glossary,
+                effective_language=effective_target_language(
+                    run_context.target_language, pass_definition
+                ),
+            ),
+            overrides=parameters,
+        ),
+        model,
+        parameters,
+    )
+
+
 def run_analysis_once(
     run_context: Context,
     pass_definition: PassDefinition,
@@ -265,19 +282,7 @@ def run_analysis_once(
     full_text: str,
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
-    model, parameters = resolve_call_settings(run_context.config, pass_definition)
-    key = cache_key(
-        full_text,
-        model,
-        pass_salt(
-            pass_definition,
-            glossary,
-            effective_language=effective_target_language(
-                run_context.target_language, pass_definition
-            ),
-        ),
-        overrides=parameters,
-    )
+    key, _, _ = pass_cache_key(run_context, pass_definition, full_text, glossary)
     return cached_translation(
         run_context,
         key,
@@ -397,13 +402,10 @@ def retranslate_state(
             retranslate_untranslated(
                 run_context,
                 pass_definition,
-                state.text,
+                state,
                 source_paragraphs,
-                state.analysis,
-                state.usage,
                 retranslation_started,
                 retry_same_mode,
-                state.glossary,
             ),
             after_retranslation,
         )
@@ -811,14 +813,15 @@ def retranslation_majority_retry(
 def retranslate_untranslated(
     run_context: Context,
     pass_definition: PassDefinition,
-    text: str,
+    state: State,
     source_paragraphs: tuple[str, ...],
-    analysis: str | None,
-    usage: Usage,
     started_at: float,
     retry_same_mode: PassRetry | None = None,
-    glossary: tuple[GlossaryEntry, ...] = (),
 ) -> IO[Result[Translated, TranslationError]]:
+    text = state.text
+    analysis = state.analysis
+    usage = state.usage
+    glossary = state.glossary
     check = retranslation_check(run_context, pass_definition, text, source_paragraphs)
 
     if not check.has_matching_paragraph_count:
@@ -936,12 +939,8 @@ def run_update_glossary_once(
     target_language: str,
     state: State,
 ) -> IO[Result[Translated, TranslationError]]:
-    model, parameters = resolve_call_settings(run_context.config, pass_definition)
-    key = cache_key(
-        state.text,
-        model,
-        pass_salt(pass_definition, effective_language=target_language),
-        overrides=parameters,
+    key, model, parameters = pass_cache_key(
+        run_context, pass_definition, state.text, state.glossary
     )
 
     def reply_is_parseable_glossary(reply_text: str) -> bool:
@@ -1234,7 +1233,7 @@ def run_single_call(
     )
 
 
-def units_so_far(units: tuple[UnitResult, ...], usage: Usage) -> UnitsSoFar:
+def state_after_units(state: State, units: tuple[UnitResult, ...]) -> State:
     first_problem = next(
         (
             unit.problem
@@ -1243,11 +1242,12 @@ def units_so_far(units: tuple[UnitResult, ...], usage: Usage) -> UnitsSoFar:
         ),
         None,
     )
-    return UnitsSoFar(
-        outputs=tuple(unit.text for unit in units),
-        usage=reduce(usage_add, (unit.usage for unit in units), usage),
-        validated=all(unit.validated for unit in units),
-        problem=first_problem,
+    return state_with_output(
+        state,
+        ensure_blank_line_separators("".join(unit.text for unit in units)),
+        reduce(usage_add, (unit.usage for unit in units), state.usage),
+        all(unit.validated for unit in units),
+        first_problem,
     )
 
 
@@ -1259,7 +1259,7 @@ def run_units(
     analysis: str | None,
     usage: Usage,
     retry_attempt: int = 0,
-) -> IO[Result[UnitsSoFar, TranslationError]]:
+) -> IO[Result[tuple[UnitResult, ...], TranslationError]]:
     run_context = environment.run_context
     pass_definition = environment.pass_definition
     calls = plan_unit_calls(
@@ -1296,10 +1296,7 @@ def run_units(
             ),
         )
 
-    return io_result_map(
-        io_traverse(calls, unit_part),
-        lambda units: units_so_far(units, usage),
-    )
+    return io_traverse(calls, unit_part)
 
 
 def text_pass_unit_plan(
@@ -1313,16 +1310,6 @@ def text_pass_unit_plan(
 
         case _:
             return chunk_plan.chunks
-
-
-def state_after_units(state: State, units: UnitsSoFar) -> State:
-    return state_with_output(
-        state,
-        ensure_blank_line_separators("".join(units.outputs)),
-        units.usage,
-        units.validated,
-        units.problem,
-    )
 
 
 def run_text_pass_once(
@@ -1349,7 +1336,7 @@ def run_text_pass_once(
 
     def run_units_after_warning(_: None) -> IO[StateResult]:
         def after_units(
-            units_result: Result[UnitsSoFar, TranslationError],
+            units_result: Result[tuple[UnitResult, ...], TranslationError],
         ) -> IO[StateResult]:
             if isinstance(units_result, Err):
                 return io_result(units_result)
@@ -1398,12 +1385,11 @@ def run_pass_attempt(
     execution: PassExecution,
     state: State,
     started_at: float,
-    escalate: bool,
     retry_attempt: int = 0,
 ) -> IO[StateResult]:
     pass_definition = execution.pass_definition
     retry: PassRetry | None = None
-    if escalate and pass_definition.mode == "chunk":
+    if retry_attempt == 0 and pass_definition.mode == "chunk":
         retry_state = state
 
         def retry(accumulated: Usage, retry_started: float) -> IO[StateResult]:
@@ -1411,7 +1397,6 @@ def run_pass_attempt(
                 execution,
                 replace(retry_state, usage=accumulated),
                 retry_started,
-                escalate=False,
                 retry_attempt=1,
             )
 
@@ -1492,7 +1477,6 @@ def verify_paragraph_count(
                 paragraph_execution,
                 replace(state, usage=result.value.usage),
                 retry_started,
-                escalate=True,
             ),
             lambda retried: after_paragraph_retry(
                 run_context, pass_definition, source_count, tolerance, retried
@@ -1514,10 +1498,10 @@ def run_text_pass(
 ) -> IO[StateResult]:
     tolerance = paragraph_tolerance(execution.pass_definition.ensure_paragraphs)
     if tolerance is None:
-        return run_pass_attempt(execution, state, started_at, escalate=True)
+        return run_pass_attempt(execution, state, started_at)
 
     return io_bind(
-        run_pass_attempt(execution, state, started_at, escalate=True),
+        run_pass_attempt(execution, state, started_at),
         lambda result: verify_paragraph_count(execution, state, tolerance, result),
     )
 

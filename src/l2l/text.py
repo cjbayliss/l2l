@@ -72,12 +72,8 @@ def chars_per_token(char: str) -> int:
     return 2 if in_ranges(char, TWO_CHARS_PER_TOKEN_RANGES) else 4
 
 
-def token_weight(char: str) -> int:
-    return 4 // chars_per_token(char)
-
-
 def estimate_tokens(text: str) -> int:
-    return (sum(map(token_weight, text)) + 3) // 4
+    return (sum(4 // chars_per_token(character) for character in text) + 3) // 4
 
 
 def paragraph_separator_pattern(text: str) -> str:
@@ -89,12 +85,11 @@ def paragraph_separator_pattern(text: str) -> str:
 
 
 def split_paragraphs(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    pattern = paragraph_separator_pattern(text)
-    parts = re.split(pattern, text)
-    is_separator = re.compile(pattern).fullmatch
+    pattern = re.compile(paragraph_separator_pattern(text))
+    parts = pattern.split(text)
     return (
-        tuple(part for part in parts if part and not is_separator(part)),
-        tuple(part for part in parts if part and is_separator(part)),
+        tuple(part for part in parts if part and not pattern.fullmatch(part)),
+        tuple(part for part in parts if part and pattern.fullmatch(part)),
     )
 
 
@@ -106,23 +101,29 @@ def count_paragraphs(text: str) -> int:
     return len(split_paragraphs(text)[0])
 
 
-def make_chunks(
-    paragraphs: tuple[str, ...], budget: int
+def group_units_to_budget(
+    units: tuple[str, ...], budget: int
 ) -> tuple[tuple[str, ...], ...]:
     def fold(
         accumulator: tuple[tuple[tuple[str, ...], ...], tuple[str, ...], int],
-        paragraph: str,
+        unit: str,
     ) -> tuple[tuple[tuple[str, ...], ...], tuple[str, ...], int]:
-        chunks, current, size = accumulator
-        paragraph_size = estimate_tokens(paragraph)
-        if current and size + paragraph_size > budget:
-            return chunks + (current,), (paragraph,), paragraph_size
+        groups, current, size = accumulator
+        unit_size = estimate_tokens(unit)
+        if current and size + unit_size > budget:
+            return groups + (current,), (unit,), unit_size
 
-        return chunks, current + (paragraph,), size + paragraph_size
+        return groups, current + (unit,), size + unit_size
 
     initial: tuple[tuple[tuple[str, ...], ...], tuple[str, ...], int] = ((), (), 0)
-    chunks, current, _ = reduce(fold, paragraphs, initial)
-    return chunks + (current,) if current else chunks
+    groups, current, _ = reduce(fold, units, initial)
+    return groups + (current,) if current else groups
+
+
+def make_chunks(
+    paragraphs: tuple[str, ...], budget: int
+) -> tuple[tuple[str, ...], ...]:
+    return group_units_to_budget(paragraphs, budget)
 
 
 def split_sentences(text: str, boundary_characters: str) -> tuple[str, ...]:
@@ -134,21 +135,8 @@ def split_sentences(text: str, boundary_characters: str) -> tuple[str, ...]:
 def split_to_budget(
     text: str, budget: int, boundary_characters: str
 ) -> tuple[str, ...]:
-    def fold(
-        accumulator: tuple[tuple[str, ...], tuple[str, ...], int], sentence: str
-    ) -> tuple[tuple[str, ...], tuple[str, ...], int]:
-        pieces, buffer, size = accumulator
-        sentence_size = estimate_tokens(sentence)
-        if buffer and size + sentence_size > budget:
-            return pieces + ("".join(buffer),), (sentence,), sentence_size
-
-        return pieces, buffer + (sentence,), size + sentence_size
-
-    initial: tuple[tuple[str, ...], tuple[str, ...], int] = ((), (), 0)
-    pieces, buffer, _ = reduce(
-        fold, split_sentences(text, boundary_characters), initial
-    )
-    return pieces + ("".join(buffer),) if buffer else pieces
+    sentences = split_sentences(text, boundary_characters)
+    return tuple("".join(group) for group in group_units_to_budget(sentences, budget))
 
 
 def split_units_to_budget(

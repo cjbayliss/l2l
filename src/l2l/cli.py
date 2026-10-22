@@ -14,16 +14,17 @@ from l2l.config import load_setup
 from l2l.console import Console, StatusLine, toggle_verbose
 from l2l.context import Context, OpenHTTP
 from l2l.effects import (
+    LOG_SECONDS_PER_DAY,
     RunLog,
     Sleep,
     cache_entry_paths,
     close_run_log,
-    file_age,
+    count_removed_file,
     now,
     open_run_log,
     prune_old_logs,
     read_stdin,
-    remove_file,
+    remove_file_if_older,
     resolve_cache_directory,
     stream_isatty,
     time_sleep,
@@ -387,7 +388,9 @@ def with_cache_directory(
     return io_bind(resolve_cache_directory(environment, requested), program)
 
 
-def with_tab_listener[T](console: Console, action: IO[T]) -> IO[T]:
+def with_tab_listener[T](
+    console: Console, action: IO[T], finalize: IO[None] | None = None
+) -> IO[T]:
     def execute() -> T:
         def toggle() -> None:
             toggle_verbose(console).run()
@@ -397,23 +400,8 @@ def with_tab_listener[T](console: Console, action: IO[T]) -> IO[T]:
             return action.run()
         finally:
             stop_listener.run()
-
-    return IO(execute)
-
-
-def with_tab_listener_and_run_log(
-    console: Console, log: RunLog, action: IO[int]
-) -> IO[int]:
-    def execute() -> int:
-        def toggle() -> None:
-            toggle_verbose(console).run()
-
-        stop_listener = start_tab_listener(console, toggle).run()
-        try:
-            return action.run()
-        finally:
-            stop_listener.run()
-            close_run_log(log).run()
+            if finalize is not None:
+                finalize.run()
 
     return IO(execute)
 
@@ -589,41 +577,18 @@ def check_config_program(
     return with_console_io(stderr, with_console)
 
 
-def add_removed_entry(
-    count: int, removal: Result[bool, TranslationError]
-) -> Result[int, TranslationError]:
-    match removal:
-        case Err(error):
-            return Err(error)
-
-        case Ok(was_removed):
-            return Ok(count + (1 if was_removed else 0))
-
-
 def prune_cache_entry(
     clock: Callable[[], float],
     days: int,
     count: int,
     path: str,
 ) -> IO[Result[int, TranslationError]]:
-    def maybe_remove(
-        aged: Result[float, TranslationError],
-    ) -> IO[Result[int, TranslationError]]:
-        match aged:
-            case Err(error):
-                return io_result(Err(error))
-
-            case Ok(age):
-                if age <= days * 86400.0:
-                    return io_result(Ok(count))
-
-                return io_map(
-                    remove_file(path), lambda removal: add_removed_entry(count, removal)
-                )
-
     return io_bind(
         now(clock),
-        lambda now_value: io_bind(file_age(path, now_value), maybe_remove),
+        lambda now_value: io_map(
+            remove_file_if_older(path, now_value, days * LOG_SECONDS_PER_DAY),
+            lambda removal: count_removed_file(count, removal),
+        ),
     )
 
 
@@ -714,9 +679,8 @@ def run_main_program(
                         announce_run_log(parsed, console, log),
                         io_and_then(
                             prune_old_run_logs(parsed, cache_directory, clock),
-                            with_tab_listener_and_run_log(
+                            with_tab_listener(
                                 console,
-                                log,
                                 run_pipeline(
                                     build_context(
                                         parsed,
@@ -734,6 +698,7 @@ def run_main_program(
                                     started,
                                     stdout,
                                 ),
+                                close_run_log(log),
                             ),
                         ),
                     )

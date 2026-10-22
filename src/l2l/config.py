@@ -220,12 +220,6 @@ def document_api_settings(
     return reduce(step, API_FIELD_PARSERS, initial)
 
 
-def merge_api_settings(
-    base: PartialApiSettings, extra: PartialApiSettings
-) -> PartialApiSettings:
-    return base.merge(extra)
-
-
 def env_string_settings(environment: Mapping[str, str]) -> PartialApiSettings:
     def value(variable: str) -> str | None:
         raw = environment.get(variable, "").strip()
@@ -299,23 +293,13 @@ def api_settings_from_environment(
     )
 
 
-def argument_timeout_setting(
-    arguments: Arguments,
-) -> Result[float | None, TranslationError]:
-    return optional_positive_setting(arguments.timeout, "--timeout")
-
-
-def argument_maximum_tokens_setting(
-    arguments: Arguments,
-) -> Result[float | None, TranslationError]:
-    return optional_positive_setting(arguments.maximum_tokens, "--maximum-tokens")
-
-
 def api_settings_from_arguments(
     arguments: Arguments,
 ) -> Result[PartialApiSettings, TranslationError]:
-    timeout = argument_timeout_setting(arguments)
-    maximum_tokens = argument_maximum_tokens_setting(arguments)
+    timeout = optional_positive_setting(arguments.timeout, "--timeout")
+    maximum_tokens = optional_positive_setting(
+        arguments.maximum_tokens, "--maximum-tokens"
+    )
     return result_map(
         result_sequence((timeout, maximum_tokens)),
         lambda values: PartialApiSettings(
@@ -396,53 +380,27 @@ def merged_api_settings(
     selected_path: str | None,
     selected_document_result: Result[dict[str, Any], TranslationError],
 ) -> Result[Config, TranslationError]:
-    def merge_document(
+    def document_settings(
         path: str | None,
         document_result: Result[dict[str, Any], TranslationError],
-        partial: PartialApiSettings,
     ) -> Result[PartialApiSettings, TranslationError]:
         return result_bind(
             document_result,
-            lambda document: result_map(
-                document_api_settings(path or "", document),
-                lambda extra: merge_api_settings(partial, extra),
-            ),
+            lambda document: document_api_settings(path or "", document),
         )
-
-    def environment_layer(
-        partial: PartialApiSettings,
-    ) -> Result[PartialApiSettings, TranslationError]:
-        return result_map(
-            api_settings_from_environment(environment),
-            lambda extra: merge_api_settings(partial, extra),
-        )
-
-    def arguments_layer(
-        partial: PartialApiSettings,
-    ) -> Result[PartialApiSettings, TranslationError]:
-        return result_map(
-            api_settings_from_arguments(arguments),
-            lambda extra: merge_api_settings(partial, extra),
-        )
-
-    def step(
-        layer_result: Result[PartialApiSettings, TranslationError],
-        merge_layer: Callable[
-            [PartialApiSettings], Result[PartialApiSettings, TranslationError]
-        ],
-    ) -> Result[PartialApiSettings, TranslationError]:
-        return result_bind(layer_result, merge_layer)
 
     layers = (
-        lambda partial: merge_document(user_path, user_document_result, partial),
-        lambda partial: merge_document(
-            selected_path, selected_document_result, partial
-        ),
-        environment_layer,
-        arguments_layer,
+        document_settings(user_path, user_document_result),
+        document_settings(selected_path, selected_document_result),
+        api_settings_from_environment(environment),
+        api_settings_from_arguments(arguments),
     )
-    initial: Result[PartialApiSettings, TranslationError] = Ok(DEFAULT_API_SETTINGS)
-    return result_bind(reduce(step, layers, initial), build_config)
+    return result_bind(
+        result_sequence(layers),
+        lambda extras: build_config(
+            reduce(PartialApiSettings.merge, extras, DEFAULT_API_SETTINGS)
+        ),
+    )
 
 
 def parse_options_table(

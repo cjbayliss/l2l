@@ -17,7 +17,7 @@ from fakes import (
     with_usage,
 )
 
-from l2l import __version__, cli, keys, pipeline
+from l2l import __version__, cli, effects, keys, pipeline
 from l2l.console import toggle_verbose
 from l2l.errors import FileError, TranslationError, describe, fail_http
 from l2l.monads import IO, Err, Just, Ok, Result, io_pure, io_result
@@ -224,7 +224,7 @@ def test_prune_cache_reports_age_failure(
     (cache_directory / "stale.txt").write_text("old", encoding="utf-8")
 
     monkeypatch.setattr(
-        cli,
+        effects,
         "file_age",
         lambda path, now_value: io_result(
             Err(FileError(path, "read the age of", "[Errno 13] Permission denied"))
@@ -258,7 +258,7 @@ def test_prune_cache_reports_removal_failure(
     os.utime(stale, (stale_time, stale_time))
 
     monkeypatch.setattr(
-        cli,
+        effects,
         "remove_file",
         lambda path: io_result(
             Err(FileError(path, "remove", "[Errno 13] Permission denied"))

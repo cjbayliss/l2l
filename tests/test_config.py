@@ -15,7 +15,6 @@ from l2l.config import (
     load_instruction_text,
     load_setup,
     maximum_tokens_api_setting,
-    merge_api_settings,
     merged_api_settings,
     parameters_api_setting,
     parse_options_table,
@@ -91,9 +90,8 @@ def test_document_api_settings_unknown_key() -> None:
 
 
 def test_merge_api_settings_params_deep_merge() -> None:
-    merged = merge_api_settings(
-        PartialApiSettings(model="a", parameters={"x": 1, "y": 1}),
-        PartialApiSettings(parameters={"y": 2, "z": 3}, model="b"),
+    merged = PartialApiSettings(model="a", parameters={"x": 1, "y": 1}).merge(
+        PartialApiSettings(parameters={"y": 2, "z": 3}, model="b")
     )
     assert merged == PartialApiSettings(model="b", parameters={"x": 1, "y": 2, "z": 3})
 
