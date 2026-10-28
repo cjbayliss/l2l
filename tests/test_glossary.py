@@ -72,13 +72,6 @@ def test_null_attributes_are_treated_as_unset() -> None:
         ([{"original": "x", "translated": None}], "needs at least one attribute"),
         ([{"original": "x", "translated": ""}], "invalid value(s) for: translated"),
         ([{"original": "x", "translated": 3}], "invalid value(s) for: translated"),
-        (
-            [
-                {"original": "南京", "translated": "Nanjing"},
-                {"original": "南京", "translated": "Nanking"},
-            ],
-            'duplicate glossary "original" value(s): 南京',
-        ),
     ],
 )
 def test_parse_glossary_document_rejects_invalid_documents(
@@ -87,6 +80,20 @@ def test_parse_glossary_document_rejects_invalid_documents(
     result = parse_glossary_document("g.json", document)
     assert isinstance(result, Err)
     assert fragment in describe(result.error)
+
+
+def test_parse_glossary_document_drops_later_duplicate_entries() -> None:
+    result = parse_glossary_document(
+        "g.json",
+        [
+            {"original": "南京", "translated": "Nanjing"},
+            {"original": "甲", "translated": "Alpha"},
+            {"original": "南京", "translated": "Nanking"},
+        ],
+    )
+    assert isinstance(result, Ok)
+    assert [item.original for item in result.value] == ["南京", "甲"]
+    assert tuple(result.value[0].attributes.items()) == (("translated", "Nanjing"),)
 
 
 def test_merge_later_entry_replaces_earlier_wholesale() -> None:

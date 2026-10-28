@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
 from l2l.errors import TranslationError, fail_config
-from l2l.monads import Err, Ok, Result, result_bind, result_sequence
+from l2l.monads import Err, Ok, Result, result_map, result_sequence
 from l2l.text import strip_think_tag
 
 
@@ -104,25 +103,21 @@ def parse_glossary_document(
     if not isinstance(document, list):
         return fail_config("%s: glossary must be a JSON array of entries" % path)
 
-    def check_duplicates(
+    def drop_later_duplicate_entries(
         entries: tuple[GlossaryEntry, ...],
-    ) -> Result[tuple[GlossaryEntry, ...], TranslationError]:
-        counts = Counter(entry.original for entry in entries)
-        duplicates = tuple(original for original, count in counts.items() if count > 1)
-        if duplicates:
-            return fail_config(
-                '%s: duplicate glossary "original" value(s): %s'
-                % (path, ", ".join(duplicates))
-            )
+    ) -> tuple[GlossaryEntry, ...]:
+        return tuple(
+            entry
+            for index, entry in enumerate(entries)
+            if entry.original not in {earlier.original for earlier in entries[:index]}
+        )
 
-        return Ok(entries)
-
-    return result_bind(
+    return result_map(
         result_sequence(
             parse_glossary_entry(path, index, item)
             for index, item in enumerate(document, 1)
         ),
-        check_duplicates,
+        drop_later_duplicate_entries,
     )
 
 
