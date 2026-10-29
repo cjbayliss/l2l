@@ -85,6 +85,9 @@ Configuration and API:
   `[api] max_tokens` and `TRANSLATE_MAX_TOKENS`.
 - `-s`, `--stream` / `--no-stream` - force streamed or plain responses;
   default follows `api.params.stream`.
+- `--no-structured-output` - request glossary extraction without the
+  JSON-schema response format, for endpoints that do not support
+  structured output.
 
 Translation behaviour:
 
@@ -120,7 +123,9 @@ Modes:
   when a paragraph cannot fit in a single request.
 - `--extract-glossary FILE` - extract a starting glossary from the stdin
   text with one model call, write it to FILE, and exit. Existing
-  `--glossary` entries are carried over unchanged. Pipeline passes are
+  `--glossary` entries are sent as already-known names and are never
+  re-extracted; the model replies with only the new entries found, and
+  the reply is merged into the existing entries. Pipeline passes are
   ignored in this mode.
 - `--prune-cache DAYS` - delete cache entries older than DAYS days and
   exit.
@@ -263,6 +268,13 @@ Passes run in order; each pass's output is the next's input.
 - `instruction` and `instruction_file` may contain `{target_language}`;
   it is replaced with the pass's effective target language. Other braces
   are left untouched, and no directive is appended automatically.
+- `include_types` (default: all types) - `update_glossary` passes only:
+  a list restricting which entry types the extraction may add, e.g.
+  `include_types = ["character"]`. It applies only to what the model
+  returns, never to entries already in the glossary, and filtered-out
+  entries are neither written to the glossary file nor injected into
+  later translation prompts. Allowed type names are `"character"`,
+  `"place"`, and `"other"`.
 
 Modes:
 
@@ -281,18 +293,51 @@ Modes:
   `max_tokens`.
 - `update_glossary` - makes one whole-document model call with the
   built-in glossary extraction prompt, parses the JSON reply, and
-  appends only genuinely new entries to the glossary. Requires at least
+  appends only genuinely new entries to the glossary. The user message
+  carries a plain list of the already-known names, so the model replies
+  with only the entries it newly found instead of echoing the whole
+  glossary back, which keeps the call cheaper and faster. The request
+  uses a JSON-schema response format (`--no-structured-output` opts out
+  for endpoints without structured output support). Requires at least
   one `--glossary FILE` on the command line; the first one is rewritten
   with the updated entries. Existing entries always win: an extracted
   entry whose `original` already exists is discarded (Chinese names have
   many valid renderings and pronouns are context-dependent), so place an
-  `update_glossary` pass before the passes that translate. The updated
+  `update_glossary` pass before the passes that translate. The extraction
+  call is cached per document, independent of the current glossary
+  contents, so re-running the same document reuses the cached reply
+  instead of calling the model again. The updated
   glossary flows into the system prompts of all later passes in the same
   run. The pass's `instruction` is ignored; set `target_language` (or
   rely on the global `target_language` or `--target-language`) to name
   the target language for the extraction.
 
 A typical multi-pass setup pairs an `analysis` pass with a `chunk` pass.
+
+### Glossary file format
+
+A glossary file is a JSON array of entry objects with fixed fields:
+
+```json
+[
+  {
+    "original": "林黛玉",
+    "translated": "Lin Daiyu",
+    "pronouns": "she/her",
+    "type": "character"
+  },
+  {"original": "金陵", "translated": "Nanjing", "pronouns": null, "type": "place"}
+]
+```
+
+- `original` (required) - the exact source name; must be a non-empty
+  string.
+- `translated` - the mandatory rendering in the target language, or
+  `null` when unknown.
+- `pronouns` - the pronouns for characters, or `null`.
+- `type` (required) - one of `"character"`, `"place"`, `"other"`;
+  omitted `type` fields in existing files are read as `"other"`.
+
 
 ### Target language and script checks
 

@@ -1,7 +1,6 @@
 import io
 import json
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 from fakes import (
@@ -1562,9 +1561,7 @@ def test_run_pipeline_updates_glossary_mid_run(tmp_path: Path) -> None:
     run_context = make_context(
         console,
         http.open,
-        glossary_entries=(
-            GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),
-        ),
+        glossary_entries=(GlossaryEntry("南京", "Nanjing", None, "other"),),
         glossary_update_path=str(glossary),
     )
     stdout = io.StringIO()
@@ -1592,8 +1589,8 @@ def test_run_pipeline_updates_glossary_mid_run(tmp_path: Path) -> None:
     extraction_payload = json.loads(http.requests[0].body)
     extraction_user = extraction_payload["messages"][1]["content"]
     assert "Target language: Chinese" in extraction_user
-    assert "Already decided" in extraction_user
-    assert '"original": "南京"' in extraction_user
+    assert "Already known names" in extraction_user
+    assert "南京" in extraction_user
     assert "你好。" in extraction_user
 
     for request in http.requests[1:]:
@@ -1714,7 +1711,7 @@ def test_update_glossary_pass_without_glossary_path_fails_the_run() -> None:
 
 
 def test_state_with_output_preserves_identity_and_merges_validation() -> None:
-    entry = GlossaryEntry("name", MappingProxyType({"translated": "name"}))
+    entry = GlossaryEntry("name", "name", None, "other")
     state = State(
         text="old",
         analysis="brief",

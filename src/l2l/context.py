@@ -41,3 +41,4 @@ class Context:
     best_effort: bool = False
     glossary_entries: tuple[GlossaryEntry, ...] = ()
     glossary_update_path: str | None = None
+    no_structured_output: bool = False

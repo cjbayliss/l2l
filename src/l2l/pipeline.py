@@ -28,10 +28,11 @@ from l2l.errors import (
 )
 from l2l.glossary import (
     GlossaryEntry,
-    append_glossary_entries,
     entries_to_json_text,
     extraction_user_message,
+    glossary_response_format,
     instruction_with_glossary,
+    integrate_glossary_reply,
     parse_model_glossary_reply,
 )
 from l2l.http import RepairOutcome, RepairPolicy, chat, repaired_call
@@ -962,6 +963,7 @@ def run_update_glossary_once(
             model,
             parameters,
             state.usage,
+            response_format=glossary_response_format(run_context.no_structured_output),
         ),
         hit_log=verbose_log(run_context, pass_cache_hit_message(pass_definition.name)),
         acceptable=reply_is_parseable_glossary,
@@ -985,7 +987,9 @@ def apply_glossary_update(
     if isinstance(reply_entries, Err):
         return io_result(fail_pass(pass_definition.name, reply_entries.error))
 
-    merged = append_glossary_entries(state.glossary, reply_entries.value)
+    merged = integrate_glossary_reply(
+        state.glossary, reply_entries.value, pass_definition.include_types
+    )
 
     def after_write(written: Result[None, TranslationError]) -> IO[StateResult]:
         if isinstance(written, Err):

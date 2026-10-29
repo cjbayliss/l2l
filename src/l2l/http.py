@@ -973,6 +973,8 @@ def chat(
     model: str,
     parameters: Mapping[str, Any],
     usage: Usage,
+    *,
+    response_format: Mapping[str, Any] | None = None,
 ) -> IO[Result[Translated, TranslationError]]:
     estimated = estimate_tokens(system) + estimate_tokens(user)
     if estimated > run_context.config.maximum_tokens:
@@ -982,6 +984,8 @@ def chat(
         run_context,
         build_chat_payload(model, system, user, parameters),
     )
+    if response_format is not None:
+        payload = {**payload, "response_format": dict(response_format)}
     call = with_retries(
         run_context,
         lambda: (

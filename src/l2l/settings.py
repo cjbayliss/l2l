@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Literal
 
-from l2l.glossary import GlossaryEntry, entries_to_json_text
+from l2l.glossary import (
+    GlossaryEntry,
+    entries_to_json_text,
+)
 from l2l.languages import normalized_language_name
 from l2l.text import CACHE_SALT_VERSION
 
@@ -40,6 +43,7 @@ class PassDefinition:
     ensure_paragraphs: bool | int | None = None
     retranslate_untranslated: bool | None = None
     target_language: str | None = None
+    include_types: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -88,6 +92,7 @@ class Arguments:
     glossary: tuple[str, ...] = ()
     extract_glossary: str | None = None
     target_language: str | None = None
+    no_structured_output: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,15 +117,15 @@ def build_settings() -> Settings:
         retry_base_delay=1.0,
         retry_cap=30.0,
         glossary_extraction_instruction="""
-You extract a glossary of names from source text. Cover named and
+You extract new glossary entries from source text. Find named and
 speaking characters (assign pronouns only where they are meaningful and
-the character can be referred to pronominally) and place names. Reply
-with a bare JSON array of objects; each object has "original" holding
-the exact source name plus only the attributes that carry information:
-"translated" with the rendering in the target language (always when
-known), "pronouns" only for characters, and any other helpful attribute
-as a non-empty string. Entries already marked as decided must be
-carried over unchanged. Output JSON only: no markdown fences, no
+the character can be referred to pronominally) and place names that are
+not already known. Reply with a JSON object {"entries": [...]}: each
+entry has "original" holding the exact source name, "translated" with
+the rendering in the target language (or null when unknown), "pronouns"
+with the pronouns (or null), and "type" which is one of "character",
+"place", "other". Never output entries for names listed as already
+known in the user message. Output JSON only: no markdown fences, no
 commentary. The target language is named in the user message.
 """,
         sentence_boundary_characters="。！？…⋯!?；;\n؟؛।॥։።",
@@ -198,6 +203,7 @@ PASS_KEYS = (
     "model",
     "params",
     "target_language",
+    "include_types",
 )
 
 
@@ -281,10 +287,12 @@ def glossary_salt_component(
     pass_definition: PassDefinition,
     glossary: tuple[GlossaryEntry, ...],
 ) -> str:
-    if pass_definition.mode == "update_glossary":
-        return ""
+    match pass_definition.mode:
+        case "update_glossary":
+            return ""
 
-    return entries_to_json_text(glossary)
+        case _:
+            return entries_to_json_text(glossary)
 
 
 def pass_salt(
