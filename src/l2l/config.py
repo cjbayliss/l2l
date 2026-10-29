@@ -17,6 +17,7 @@ from l2l.effects import (
 )
 from l2l.errors import TranslationError, fail_config, fail_missing_settings
 from l2l.glossary import (
+    GLOSSARY_ENTRY_TYPES,
     GlossaryEntry,
     merge_glossary_entries,
     parse_glossary_document,
@@ -489,6 +490,24 @@ def pass_definition_from(
             "%s: [[pass]] %s: target_language must be a non-empty string" % (path, name)
         )
 
+    if "include_types" in table and mode != "update_glossary":
+        return fail_config(
+            "%s: [[pass]] %s: include_types applies only to update_glossary passes"
+            % (path, name)
+        )
+
+    include_types_value = table.get("include_types", [])
+    if not isinstance(include_types_value, list):
+        return fail_config(
+            "%s: [[pass]] %s: include_types must be a list of strings" % (path, name)
+        )
+
+    if any(value not in GLOSSARY_ENTRY_TYPES for value in include_types_value):
+        return fail_config(
+            "%s: [[pass]] %s: include_types entries must be chosen from: %s"
+            % (path, name, ", ".join(GLOSSARY_ENTRY_TYPES))
+        )
+
     parameters = table.get("params", {})
     if not isinstance(parameters, dict):
         return fail_config("%s: [[pass]] %s: params must be a table" % (path, name))
@@ -511,6 +530,7 @@ def pass_definition_from(
             target_language=(
                 target_language.strip() if target_language is not None else None
             ),
+            include_types=tuple(include_types_value),
         )
     )
 

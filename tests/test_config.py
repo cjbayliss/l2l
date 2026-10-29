@@ -1,6 +1,5 @@
 from dataclasses import replace
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 from l2l.config import (
@@ -455,7 +454,7 @@ def test_resolve_call_settings() -> None:
 def test_pass_salt_includes_glossary_and_effective_language() -> None:
     pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
     assert pass_salt(pass_definition) == (CACHE_SALT_VERSION + "\x00p\x00i\x00\x00[]\n")
-    entries = (GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),)
+    entries = (GlossaryEntry("南京", "Nanjing", None, "other"),)
     salted = pass_salt(pass_definition, entries)
     assert salted != pass_salt(pass_definition)
     assert '"original": "南京"' in salted
@@ -464,6 +463,7 @@ def test_pass_salt_includes_glossary_and_effective_language() -> None:
 
     glossary_pass = PassDefinition("p", "", "update_glossary", {}, None, False)
     assert pass_salt(glossary_pass, entries) == pass_salt(glossary_pass)
+    assert "南京" not in pass_salt(glossary_pass, entries)
     assert pass_salt(glossary_pass, effective_language="Chinese") == pass_salt(
         replace(glossary_pass, target_language="Chinese"),
         effective_language="Chinese",
@@ -629,6 +629,39 @@ def test_pass_definition_from_rejects_bad_fields() -> None:
     result = pass_definition_from("f", "p", {"mode": "chunk", "params": 3}, "i")
     assert isinstance(result, Err)
     assert "params must be a table" in describe(result.error)
+
+
+def test_pass_definition_from_validates_include_types() -> None:
+    result = pass_definition_from(
+        "f", "p", {"mode": "update_glossary", "include_types": ["character"]}, "i"
+    )
+    assert isinstance(result, Ok)
+    assert result.value.include_types == ("character",)
+
+    result = pass_definition_from(
+        "f", "p", {"mode": "chunk", "include_types": ["character"]}, "i"
+    )
+    assert isinstance(result, Err)
+    assert "include_types applies only to update_glossary passes" in describe(
+        result.error
+    )
+
+    for bad_include_types in (
+        "character",
+        3,
+        [""],
+        ["vehicle"],
+        [3],
+        ["character", ""],
+    ):
+        result = pass_definition_from(
+            "f",
+            "p",
+            {"mode": "update_glossary", "include_types": bad_include_types},
+            "i",
+        )
+        assert isinstance(result, Err)
+        assert "include_types" in describe(result.error)
 
 
 def test_document_passes_rejects_bad_entry_lists() -> None:
@@ -869,15 +902,11 @@ def test_load_setup_resolves_and_merges_glossaries(tmp_path: Path) -> None:
         str(cli_glossary),
     )
     assert [entry.original for entry in setup.glossary_entries] == ["甲", "乙"]
-    assert tuple(setup.glossary_entries[0].attributes.items()) == (
-        ("translated", "Aleph"),
-    )
+    assert setup.glossary_entries[0].translated == "Aleph"
     for pass_definition in setup.passes:
         assert pass_definition.instruction == "Translate."
     assert [entry.original for entry in setup.glossary_entries] == ["甲", "乙"]
-    assert tuple(setup.glossary_entries[0].attributes.items()) == (
-        ("translated", "Aleph"),
-    )
+    assert setup.glossary_entries[0].translated == "Aleph"
 
 
 def test_load_setup_without_glossary_keeps_instructions(tmp_path: Path) -> None:
@@ -972,9 +1001,7 @@ def test_setup_report_lists_glossary_when_configured() -> None:
         ensure_paragraphs=False,
         target_language="English",
         glossary_paths=("generic.json", "book.json"),
-        glossary_entries=(
-            GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),
-        ),
+        glossary_entries=(GlossaryEntry("南京", "Nanjing", None, "other"),),
     )
     report = setup_report(setup, False)
     assert "glossary: 2 file(s), 1 entries" in report
@@ -1088,9 +1115,7 @@ def test_setup_warnings_report_instructions_without_the_language() -> None:
 def test_setup_warnings_report_glossary_script_mismatches() -> None:
     mismatched = make_setup_for_warnings(
         "English",
-        glossary_entries=(
-            GlossaryEntry("南京", MappingProxyType({"translated": "南京"})),
-        ),
+        glossary_entries=(GlossaryEntry("南京", "南京", None, "other"),),
     )
     warnings = setup_warnings(mismatched)
     assert len(warnings) == 1
@@ -1099,22 +1124,18 @@ def test_setup_warnings_report_glossary_script_mismatches() -> None:
 
     matched = make_setup_for_warnings(
         "English",
-        glossary_entries=(
-            GlossaryEntry("南京", MappingProxyType({"translated": "Nanjing"})),
-        ),
+        glossary_entries=(GlossaryEntry("南京", "Nanjing", None, "other"),),
     )
     assert setup_warnings(matched) == ()
 
     unknown = make_setup_for_warnings(
         "Zorblaxian",
-        glossary_entries=(
-            GlossaryEntry("南京", MappingProxyType({"translated": "南京"})),
-        ),
+        glossary_entries=(GlossaryEntry("南京", "南京", None, "other"),),
     )
     assert all("glossary entry" not in warning for warning in setup_warnings(unknown))
 
     untranslated_entry = make_setup_for_warnings(
         "English",
-        glossary_entries=(GlossaryEntry("南京", MappingProxyType({})),),
+        glossary_entries=(GlossaryEntry("南京", None, None, "other"),),
     )
     assert setup_warnings(untranslated_entry) == ()

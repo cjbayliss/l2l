@@ -35,7 +35,8 @@ from l2l.errors import TranslationError, describe, fail_config
 from l2l.glossary import (
     entries_to_json_text,
     extraction_user_message,
-    merge_glossary_entries,
+    glossary_response_format,
+    integrate_glossary_reply,
     parse_model_glossary_reply,
 )
 from l2l.http import chat, curl_open
@@ -167,6 +168,13 @@ def add_configuration_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="force streamed (--stream) or plain (--no-stream) responses; "
         "default follows api.params.stream",
+    )
+    group.add_argument(
+        "--no-structured-output",
+        action="store_true",
+        dest="no_structured_output",
+        help="request glossary extraction without the JSON-schema response "
+        "format, for endpoints that do not support structured output",
     )
 
 
@@ -302,6 +310,7 @@ def arguments_from_namespace(parsed: argparse.Namespace) -> Arguments:
         glossary=tuple(parsed.glossary),
         extract_glossary=parsed.extract_glossary,
         target_language=parsed.target_language,
+        no_structured_output=parsed.no_structured_output,
     )
 
 
@@ -525,6 +534,7 @@ def build_context(
         glossary_entries=setup.glossary_entries,
         glossary_update_path=parsed.glossary[0] if parsed.glossary else None,
         target_language=setup.target_language,
+        no_structured_output=parsed.no_structured_output,
     )
 
 
@@ -738,7 +748,7 @@ def write_extracted_glossary(
                     return report_error_and_exit(console, error, 1)
 
                 case Ok(entries):
-                    merged = merge_glossary_entries((setup.glossary_entries, entries))
+                    merged = integrate_glossary_reply(setup.glossary_entries, entries)
 
                     def report(written: Result[None, TranslationError]) -> IO[int]:
                         match written:
@@ -789,6 +799,9 @@ def extract_glossary_program(
                 run_context.config.model,
                 {},
                 Usage(),
+                response_format=glossary_response_format(
+                    run_context.no_structured_output
+                ),
             ),
         )
 

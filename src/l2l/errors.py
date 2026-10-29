@@ -75,6 +75,12 @@ class InvalidOutputError:
 
 
 @dataclass(frozen=True)
+class GlossaryReplyError:
+    pass_name: str
+    problem: str
+
+
+@dataclass(frozen=True)
 class FileError:
     path: str
     operation: str
@@ -92,6 +98,7 @@ type TranslationError = (
     | AsciiCollapseError
     | UntranslatedError
     | InvalidOutputError
+    | GlossaryReplyError
     | FileError
 )
 
@@ -231,6 +238,12 @@ def describe(error: TranslationError) -> str:
             return (
                 "l2l: pass [%s] paragraph %d is still untranslated after "
                 "retranslation: %r" % (error.pass_name, error.index + 1, error.sample)
+            )
+
+        case GlossaryReplyError():
+            return "l2l: [%s] the model reply is not valid glossary output: %s" % (
+                error.pass_name,
+                error.problem,
             )
 
         case InvalidOutputError():

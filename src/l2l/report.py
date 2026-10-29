@@ -262,7 +262,7 @@ def setup_warnings(setup: Setup) -> tuple[str, ...]:
             scripts_description(target_scripts),
         )
         for entry in setup.glossary_entries
-        for rendering in (entry.attributes.get("translated", ""),)
+        for rendering in (entry.translated or "",)
         for script in (dominant_script(rendering),)
         if rendering.strip()
         and target_scripts
