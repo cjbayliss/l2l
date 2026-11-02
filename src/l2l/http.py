@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from functools import reduce
@@ -52,6 +53,7 @@ from l2l.monads import (
     maybe_map,
     maybe_or,
     maybe_to_optional,
+    modify_reference,
     read_reference,
     reference_collector,
     reference_gate,
@@ -103,6 +105,62 @@ def retry_delay(error: TranslationError, planned: float) -> float:
 
         case _:
             return planned
+
+
+OPENROUTER_HOST = "openrouter.ai"
+
+PROVIDER_NAME_PATTERN = re.compile(r"['\"]provider_name['\"]\s*:\s*['\"]([^'\"]+)['\"]")
+
+
+def is_openrouter(config: Config) -> bool:
+    return OPENROUTER_HOST in config.base_url
+
+
+def failed_provider_name(error: TranslationError) -> str | None:
+    match error:
+        case HttpError(detail=str(detail)):
+            found = PROVIDER_NAME_PATTERN.search(detail)
+            return found.group(1) if found is not None else None
+
+        case _:
+            return None
+
+
+def with_blocked_providers(
+    config: Config, payload: Mapping[str, Any], blocked_providers: frozenset[str]
+) -> Mapping[str, Any]:
+    if not is_openrouter(config) or not blocked_providers:
+        return payload
+
+    routing = payload.get("provider")
+    existing_routing = routing if isinstance(routing, dict) else {}
+    existing_ignored = existing_routing.get("ignore", ())
+    return {
+        **payload,
+        "provider": {
+            **existing_routing,
+            "ignore": sorted(set(existing_ignored) | blocked_providers),
+        },
+    }
+
+
+def block_failing_provider(run_context: Context, failure: TranslationError) -> IO[None]:
+    provider = failed_provider_name(failure)
+    if provider is None or not is_openrouter(run_context.config):
+        return io_pure(None)
+
+    def announce(_: frozenset[str]) -> IO[None]:
+        return run_context.console.log_verbose(
+            "l2l: openrouter provider %s failed; added to the blocklist" % provider
+        )
+
+    return io_bind(
+        modify_reference(
+            run_context.provider_blocklist,
+            lambda blocked: blocked | frozenset({provider}),
+        ),
+        announce,
+    )
 
 
 ProgressCallback = Callable[[str, int], IO[None]]
@@ -711,16 +769,27 @@ def with_retries[T](
                 return io_result(outcome)
 
             failure = outcome.error
-            if index >= len(delays) or not transient(failure):
+            if not transient(failure):
                 return io_result(outcome)
 
-            wait = retry_delay(failure, delays[index])
+            def proceed_after_blocking(
+                _: None,
+            ) -> IO[Result[T, TranslationError]]:
+                if index >= len(delays):
+                    return io_result(outcome)
+
+                wait = retry_delay(failure, delays[index])
+                return io_bind(
+                    verbose_retry_log(run_context, index + 1, len(delays), wait),
+                    lambda _: io_and_then(
+                        IO(lambda: run_context.sleep(wait)),
+                        attempt_at(index + 1),
+                    ),
+                )
+
             return io_bind(
-                verbose_retry_log(run_context, index + 1, len(delays), wait),
-                lambda _: io_and_then(
-                    IO(lambda: run_context.sleep(wait)),
-                    attempt_at(index + 1),
-                ),
+                block_failing_provider(run_context, failure),
+                proceed_after_blocking,
             )
 
         return io_bind(retryable_action(), decide)
@@ -986,14 +1055,25 @@ def chat(
     )
     if response_format is not None:
         payload = {**payload, "response_format": dict(response_format)}
-    call = with_retries(
-        run_context,
-        lambda: (
-            streamed_call(run_context, payload)
-            if payload.get("stream", True)
-            else plain_call(run_context, payload)
-        ),
-    )
+
+    def request_reply() -> IO[Result[ChatReply, TranslationError]]:
+        def reply_with_blocklist(
+            blocked_providers: frozenset[str],
+        ) -> IO[Result[ChatReply, TranslationError]]:
+            scoped_payload = with_blocked_providers(
+                run_context.config, payload, blocked_providers
+            )
+            return (
+                streamed_call(run_context, scoped_payload)
+                if scoped_payload.get("stream", True)
+                else plain_call(run_context, scoped_payload)
+            )
+
+        return io_bind(
+            read_reference(run_context.provider_blocklist), reply_with_blocklist
+        )
+
+    call = with_retries(run_context, request_reply)
 
     def stopped(
         reply_result: Result[ChatReply, TranslationError],

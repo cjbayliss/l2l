@@ -1,5 +1,6 @@
 import json
 import socket
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -20,7 +21,7 @@ from fakes import (
 from http_server import json_reply, local_endpoint, raw_reply
 
 from l2l.console import toggle_verbose
-from l2l.errors import HttpError, TranslationError, describe, fail_http
+from l2l.errors import ConfigError, HttpError, TranslationError, describe, fail_http
 from l2l.http import (
     CurlResponse,
     chat,
@@ -28,14 +29,17 @@ from l2l.http import (
     curl_error_detail,
     curl_open,
     drive_stream,
+    failed_provider_name,
     http_post_json,
     http_request,
     http_stream,
     is_error_status_line,
+    is_openrouter,
     log_all,
     noproxy_for,
     proxy_for,
     retry_after_seconds,
+    with_blocked_providers,
 )
 from l2l.monads import (
     IO,
@@ -50,6 +54,7 @@ from l2l.monads import (
     io_map,
     io_pure,
     io_result,
+    read_reference,
     write_reference,
 )
 from l2l.text import Usage
@@ -822,3 +827,112 @@ def test_chat_streams_a_completion_from_a_local_server() -> None:
     stream_options = payload["stream_options"]
     assert isinstance(stream_options, dict)
     assert "include_usage" in stream_options
+
+
+OPENROUTER_429_DETAIL = (
+    '{"error":{"message":"Provider returned error","code":429,'
+    '"metadata":{"raw":"deepseek is temporarily rate-limited upstream. '
+    'Please retry shortly: https://openrouter.ai/settings/integrations",'
+    '"provider_name":"Modal","is_byok":false}}}'
+)
+
+
+def openrouter_context(console: Any, open_http: Any) -> Any:
+    run_context = make_context(console, open_http)
+    return replace(
+        run_context,
+        config=replace(run_context.config, base_url="https://openrouter.ai/api/v1"),
+    )
+
+
+def test_is_openrouter_matches_the_base_url() -> None:
+    console, _ = make_console()
+    assert is_openrouter(openrouter_context(console, FakeHttp([]).open).config)
+    assert not is_openrouter(make_context(console, FakeHttp([]).open).config)
+
+
+def test_failed_provider_name_extracts_the_provider_from_the_detail() -> None:
+    failure = fail_http("status", OPENROUTER_429_DETAIL, 429).error
+    assert failed_provider_name(failure) == "Modal"
+    assert failed_provider_name(fail_http("status", "slow down", 429).error) is None
+    assert failed_provider_name(ConfigError("nope")) is None
+
+
+def test_with_blocked_providers_adds_an_ignore_list_on_openrouter() -> None:
+    console, _ = make_console()
+    run_context = openrouter_context(console, FakeHttp([]).open)
+    payload = {"model": "m", "provider": {"order": ["A"]}}
+    scoped = with_blocked_providers(
+        run_context.config, payload, frozenset({"Modal", "DeepInfra"})
+    )
+    assert scoped["provider"] == {
+        "order": ["A"],
+        "ignore": ["DeepInfra", "Modal"],
+    }
+    plain = {"model": "m"}
+    assert with_blocked_providers(run_context.config, plain, frozenset()) is plain
+    other = make_context(console, FakeHttp([]).open)
+    assert with_blocked_providers(other.config, plain, frozenset({"Modal"})) is plain
+
+
+def rate_limited_open(
+    requests: list[Any], chunks: list[dict[str, Any]]
+) -> Callable[[Any, float], Result[Any, TranslationError]]:
+    def open_http(request: Any, timeout: float) -> Result[Any, TranslationError]:
+        requests.append(request)
+        if len(requests) == 1:
+            return fail_http("status", OPENROUTER_429_DETAIL, 429)
+
+        return Ok(FakeStreamResponse(chunks))
+
+    return open_http
+
+
+def test_chat_blocks_a_failing_openrouter_provider_and_retries() -> None:
+    sleep, sleeps = make_sleep_recorder()
+    console, _ = make_console()
+    chunks = with_usage(stream_chunks("Hi"), USAGE)
+    requests: list[Any] = []
+    run_context = openrouter_context(console, rate_limited_open(requests, chunks))
+    run_context = replace(run_context, sleep=sleep)
+    result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == "Hi"
+    assert len(requests) == 2
+    first = json.loads(requests[0].body)
+    second = json.loads(requests[1].body)
+    assert "provider" not in first
+    assert second["provider"] == {"ignore": ["Modal"]}
+    assert read_reference(run_context.provider_blocklist).run() == frozenset({"Modal"})
+    assert sleeps() == (1.0,)
+
+
+def test_chat_blocklist_persists_across_chat_calls() -> None:
+    console, _ = make_console()
+    chunks = with_usage(stream_chunks("Hi"), USAGE)
+    requests: list[Any] = []
+    run_context = openrouter_context(console, rate_limited_open(requests, chunks))
+    first = chat(run_context, "s", "u", "m", {}, Usage()).run()
+    assert isinstance(first, Ok)
+    second = chat(run_context, "s", "u", "m", {}, Usage()).run()
+    assert isinstance(second, Ok)
+    assert "provider" not in json.loads(requests[0].body)
+    assert json.loads(requests[1].body)["provider"] == {"ignore": ["Modal"]}
+    assert json.loads(requests[2].body)["provider"] == {"ignore": ["Modal"]}
+
+
+def test_chat_does_not_block_providers_off_openrouter() -> None:
+    sleep, sleeps = make_sleep_recorder()
+    console, _ = make_console()
+    chunks = with_usage(stream_chunks("Hi"), USAGE)
+    requests: list[Any] = []
+    run_context = make_context(
+        console, rate_limited_open(requests, chunks), sleep=sleep
+    )
+    result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert len(requests) == 2
+    assert "provider" not in json.loads(requests[1].body)
+    assert read_reference(run_context.provider_blocklist).run() == frozenset()
+    assert sleeps() == (1.0,)
+    assert read_reference(run_context.provider_blocklist).run() == frozenset()
