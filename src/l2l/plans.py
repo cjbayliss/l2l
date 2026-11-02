@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import accumulate, chain
@@ -55,6 +56,9 @@ def unit_output_problem(
 
     source_estimate = estimate_tokens(source_text)
     output_estimate = estimate_tokens(output)
+    if not re.search(r"\w", source_text):
+        return NOTHING
+
     if output_estimate > settings.unit_output_max_ratio * max(source_estimate, 1):
         return Just(
             "the reply is ~%d tokens against a source of ~%d tokens "
@@ -401,14 +405,25 @@ def build_unit_retry_user(
     bad_output: str,
     problem: str,
 ) -> str:
+    has_draft = work_chunk is not None and work_chunk != source_chunk
+    draft_part = (
+        "Current draft (correct this where the problem requires it):\n%s" % work_chunk
+        if has_draft
+        else ""
+    )
     return "\n\n".join(
         (
             "Your previous reply below does not satisfy the output rules: %s."
             % problem,
-            "Previous reply:\n%s" % bad_output,
-            build_pass_user(source_chunk, work_chunk, None, context),
+            *context_parts(context),
+            "Translate only the source text between the <<<SOURCE and SOURCE>>> "
+            "markers, as exactly one paragraph; do not translate the context "
+            "paragraphs and do not repeat the rejected reply.",
+            "<<<SOURCE\n%s\nSOURCE>>>" % source_chunk,
+            draft_part,
+            "Your previous rejected reply (do not copy it):\n<<<\n%s\n>>>" % bad_output,
             "Translate the source text again, fixing the problem; output only "
-            "the translation.",
+            "the translation of the source text.",
         )
     )
 

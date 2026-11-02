@@ -81,6 +81,13 @@ def unit_no_source_message(pass_name: str, index: int, total: int) -> str:
     )
 
 
+def unit_passed_through_message(pass_name: str, index: int, total: int) -> str:
+    return (
+        "l2l: [%s] unit %d/%d has no translatable text; "
+        "passing it through unchanged" % (pass_name, index, total)
+    )
+
+
 def unit_done_message(pass_name: str, index: int, total: int) -> str:
     return "l2l: [%s] unit %d/%d done" % (pass_name, index, total)
 

@@ -61,6 +61,7 @@ from l2l.messages import (
     unit_failed_validation_attempt,
     unit_failed_validation_final,
     unit_no_source_message,
+    unit_passed_through_message,
     untranslated_kept_message,
     untranslated_problem,
     usage_line,
@@ -118,6 +119,7 @@ from l2l.text import (
     excerpt,
     make_chunks,
     paragraph_is_in_target_script,
+    paragraph_is_translatable,
     separator_at,
     source_script,
     split_paragraphs,
@@ -1280,25 +1282,43 @@ def run_units(
     def unit_part(
         call: UnitCall,
     ) -> IO[Result[UnitResult, TranslationError]]:
-        if call.source_chunk:
-            return run_single_call(environment, call, usage)
-
-        return io_map(
-            verbose_log(
-                run_context,
-                unit_no_source_message(
-                    pass_definition.name, call.index + 1, call.total
+        if not call.source_chunk:
+            return io_map(
+                verbose_log(
+                    run_context,
+                    unit_no_source_message(
+                        pass_definition.name, call.index + 1, call.total
+                    ),
                 ),
-            ),
-            lambda _: Ok(
-                UnitResult(
-                    text=call.work_chunk + call.trailing_separator,
-                    validated=True,
-                    usage=Usage(),
-                    problem=None,
-                )
-            ),
-        )
+                lambda _: Ok(
+                    UnitResult(
+                        text=call.work_chunk + call.trailing_separator,
+                        validated=True,
+                        usage=Usage(),
+                        problem=None,
+                    )
+                ),
+            )
+
+        if not paragraph_is_translatable(call.source_chunk):
+            return io_map(
+                verbose_log(
+                    run_context,
+                    unit_passed_through_message(
+                        pass_definition.name, call.index + 1, call.total
+                    ),
+                ),
+                lambda _: Ok(
+                    UnitResult(
+                        text=call.source_chunk + call.trailing_separator,
+                        validated=True,
+                        usage=Usage(),
+                        problem=None,
+                    )
+                ),
+            )
+
+        return run_single_call(environment, call, usage)
 
     return io_traverse(calls, unit_part)
 

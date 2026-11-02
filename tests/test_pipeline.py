@@ -1067,8 +1067,11 @@ def test_refine_pass_echoing_source_language_is_repaired_with_draft() -> None:
     assert (
         "the reply is not in the target language (English: Latin script)" in retry_user
     )
-    assert "Source text:\n你好。\n\n世界。" in retry_user
-    assert "Current draft:\nHello.\n\nWorld." in retry_user
+    assert "<<<SOURCE\n你好。\n\n世界。\nSOURCE>>>" in retry_user
+    assert "Current draft (correct this where the problem requires it):\n" in retry_user
+    assert "Hello.\n\nWorld." in retry_user
+    assert "rejected reply" in retry_user
+    assert retry_user.index("<<<SOURCE") < retry_user.index("rejected reply")
     assert "failed validation" not in stderr.getvalue()
 
 

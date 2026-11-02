@@ -101,6 +101,14 @@ def count_paragraphs(text: str) -> int:
     return len(split_paragraphs(text)[0])
 
 
+NON_PROSE_PARAGRAPH_PATTERN = re.compile(r"^(?:\s|</?[A-Za-z][^<>]*>|\.)+$")
+
+
+def paragraph_is_translatable(text: str) -> bool:
+    remainder = NON_PROSE_PARAGRAPH_PATTERN.sub("", text).strip()
+    return bool(remainder) and any(char.isalnum() for char in remainder)
+
+
 def group_units_to_budget(
     units: tuple[str, ...], budget: int
 ) -> tuple[tuple[str, ...], ...]:

@@ -264,15 +264,14 @@ def test_context_parts_and_build_pass_user_with_context() -> None:
 def test_build_unit_retry_user_includes_problem_and_reply() -> None:
     user = build_unit_retry_user("src", "src", (), "bad reply", "the reply was empty")
     assert "the reply was empty" in user
-    assert "Previous reply:\nbad reply" in user
-    assert "\n\nsrc\n\n" in user
-    assert user.endswith("output only the translation.")
+    assert "rejected reply" in user
+    assert "<<<SOURCE\nsrc\nSOURCE>>>" in user
+    assert user.endswith("the translation of the source text.")
 
 
-def test_build_unit_retry_user_includes_distinct_draft() -> None:
+def test_build_unit_retry_user_keeps_rejected_reply_after_the_source() -> None:
     user = build_unit_retry_user("src", "draft", (), "bad reply", "problem")
-    assert "Source text:\nsrc" in user
-    assert "Current draft:\ndraft" in user
+    assert user.index("<<<SOURCE") < user.index("rejected reply")
 
 
 def test_script_mismatch_problem() -> None:
