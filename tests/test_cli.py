@@ -465,7 +465,7 @@ def test_translation_request_carries_glossary_block(tmp_path: Path) -> None:
             str(glossary),
         ],
         {},
-        io.StringIO("你好。"),
+        io.StringIO("你好南京。"),
         stdout,
         stderr,
         time.time,
@@ -700,6 +700,7 @@ def test_update_glossary_pass_updates_file_and_flows_into_later_passes(
         http,
         "--target-language",
         "French",
+        stdin="你好南京大观园。",
     )
     assert code == 0
     assert stdout.strip() == "Hello."
@@ -811,7 +812,13 @@ def test_update_glossary_pass_applies_the_include_types_filter(
         ]
     )
     code, stdout, _ = run_update_glossary_pass(
-        tmp_path, config_path, glossary, http, "--target-language", "French"
+        tmp_path,
+        config_path,
+        glossary,
+        http,
+        "--target-language",
+        "French",
+        stdin="你好林黛玉。",
     )
     assert code == 0
     assert stdout.strip() == "Hello."

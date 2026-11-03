@@ -11,10 +11,12 @@ from fakes import (
     update_pass,
 )
 
+from l2l.glossary import GlossaryEntry
 from l2l.monads import Just, Nothing
 from l2l.plans import (
     TRANSLATED_CONTEXT_TOKEN_BUDGET,
     earlier_passes_translated_text,
+    glossary_term_problem,
     instruction_with_target_language,
     plan_retranslation_calls,
     plan_unit_calls,
@@ -209,6 +211,30 @@ def test_target_script_problem_rejects_other_scripts() -> None:
     assert isinstance(
         target_script_problem("Hello.", "Japanese", ("Hira", "Kana", "Hani")), Just
     )
+
+
+def test_glossary_term_problem_flags_untranslated_terms() -> None:
+    entries = (
+        GlossaryEntry("林黛玉", "Lin Daiyu", "she/her", "character"),
+        GlossaryEntry("大观园", "Grand View Garden", None, "place"),
+    )
+    assert isinstance(glossary_term_problem("Lin Daiyu smiled.", entries), Nothing)
+
+    problem = glossary_term_problem("林黛玉 walked in 大观园.", entries)
+    assert isinstance(problem, Just)
+    assert "untranslated glossary term" in problem.value
+    assert '林黛玉" (use "Lin Daiyu")' in problem.value
+    assert '大观园" (use "Grand View Garden")' in problem.value
+
+    many = tuple(
+        GlossaryEntry("名字%d" % index, "Name %d" % index, None, "other")
+        for index in range(5)
+    )
+    sampled = glossary_term_problem("名字0名字1名字2名字3名字4", many)
+    assert isinstance(sampled, Just)
+    assert "名字0" in sampled.value
+    listed_all = all("名字%d" % index in sampled.value for index in range(5))
+    assert not listed_all, "the message should sample, not list every term"
 
 
 def test_instruction_with_target_language_substitutes_only_the_placeholder() -> None:

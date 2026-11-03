@@ -34,6 +34,7 @@ from l2l.glossary import (
     instruction_with_glossary,
     integrate_glossary_reply,
     parse_model_glossary_reply,
+    select_glossary_entries_for_texts,
 )
 from l2l.http import RepairOutcome, RepairPolicy, chat, repaired_call
 from l2l.languages import (
@@ -92,6 +93,7 @@ from l2l.plans import (
     UnitCall,
     build_pass_user,
     build_unit_retry_user,
+    glossary_term_problem,
     instruction_with_target_language,
     pass_chunk_plans,
     plan_information_message,
@@ -1097,6 +1099,10 @@ def run_unit(
         run_context.target_language, pass_definition
     )
     target_scripts = expected_target_scripts(target_language)
+    unit_glossary_entries = select_glossary_entries_for_texts(
+        environment.glossary,
+        (call.source_chunk, call.work_chunk),
+    )
 
     def validate(output: str) -> Maybe[str]:
         return maybe_or(
@@ -1107,8 +1113,11 @@ def run_unit(
                 unit_paragraph_tolerance(pass_definition),
             ),
             maybe_or(
-                target_script_problem(output, target_language, target_scripts),
-                script_mismatch_problem(call.source_chunk, call.work_chunk, output),
+                glossary_term_problem(output, unit_glossary_entries),
+                maybe_or(
+                    target_script_problem(output, target_language, target_scripts),
+                    script_mismatch_problem(call.source_chunk, call.work_chunk, output),
+                ),
             ),
         )
 
@@ -1157,7 +1166,7 @@ def run_unit(
                     pass_definition.instruction,
                     target_language,
                 ),
-                environment.glossary,
+                unit_glossary_entries,
             ),
             build_pass_user(
                 call.source_chunk, call.work_chunk, call.analysis, call.context

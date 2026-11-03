@@ -1576,7 +1576,7 @@ def test_run_pipeline_updates_glossary_mid_run(tmp_path: Path) -> None:
             chunk_pass(),
             paragraph_pass("review"),
         ),
-        "你好。",
+        "你好南京大观园。",
         0.0,
         stdout,
     ).run()
@@ -1594,7 +1594,7 @@ def test_run_pipeline_updates_glossary_mid_run(tmp_path: Path) -> None:
     assert "Target language: Chinese" in extraction_user
     assert "Already known names" in extraction_user
     assert "南京" in extraction_user
-    assert "你好。" in extraction_user
+    assert "你好南京大观园。" in extraction_user
 
     for request in http.requests[1:]:
         system = json.loads(request.body)["messages"][0]["content"]
@@ -1732,3 +1732,68 @@ def test_state_with_output_preserves_identity_and_merges_validation() -> None:
     newer = state_with_output(updated, "newer", Usage(), True, "fresh")
     assert newer.validated is False
     assert newer.problem == "fresh"
+
+
+def test_text_pass_injects_only_chunk_selected_glossary_entries() -> None:
+    console, _ = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("Daiyu arrives."), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Jinling is far."), USAGE)),
+        ]
+    )
+    run_context = make_context(
+        console,
+        http.open,
+        glossary_entries=(
+            GlossaryEntry("林黛玉", "Lin Daiyu", "she/her", "character"),
+            GlossaryEntry("大观园", "Grand View Garden", None, "place"),
+            GlossaryEntry("金陵", "Jinling", None, "place"),
+        ),
+    )
+    stdout = io.StringIO()
+    code = run_pipeline(
+        run_context,
+        (paragraph_pass(),),
+        "林黛玉走进大观园。\n\n金陵很远。",
+        0.0,
+        stdout,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Daiyu arrives.\n\nJinling is far.\n"
+    assert len(http.requests) == 2
+    first_system = json.loads(http.requests[0].body)["messages"][0]["content"]
+    second_system = json.loads(http.requests[1].body)["messages"][0]["content"]
+    assert "林黛玉" in first_system
+    assert "Lin Daiyu" in first_system
+    assert "大观园" in first_system
+    assert "金陵" not in first_system
+    assert "金陵" in second_system
+    assert "Jinling" in second_system
+    assert "林黛玉" not in second_system
+
+
+def test_untranslated_glossary_term_triggers_repair() -> None:
+    console, _ = make_console()
+    http = FakeHttp(
+        [
+            FakeStreamResponse(with_usage(stream_chunks("林黛玉来了。"), USAGE)),
+            FakeStreamResponse(with_usage(stream_chunks("Lin Daiyu arrived."), USAGE)),
+        ]
+    )
+    run_context = make_context(
+        console,
+        http.open,
+        glossary_entries=(
+            GlossaryEntry("林黛玉", "Lin Daiyu", "she/her", "character"),
+        ),
+    )
+    stdout = io.StringIO()
+    code = run_pipeline(run_context, (chunk_pass(),), "林黛玉来了。", 0.0, stdout).run()
+    assert code == 0
+    assert stdout.getvalue() == "Lin Daiyu arrived.\n"
+    assert len(http.requests) == 2
+    retry_user = json.loads(http.requests[1].body)["messages"][1]["content"]
+    assert "untranslated glossary term" in retry_user
+    assert "林黛玉" in retry_user
+    assert "Lin Daiyu" in retry_user

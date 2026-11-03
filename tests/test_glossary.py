@@ -17,6 +17,8 @@ from l2l.glossary import (
     parse_glossary_document,
     parse_model_glossary_reply,
     render_glossary_block,
+    select_glossary_entries_for_texts,
+    untranslated_glossary_entries,
 )
 from l2l.monads import Err, Ok
 
@@ -146,6 +148,46 @@ def test_render_glossary_block_and_instruction_integration() -> None:
     )
     assert combined.startswith("Translate.\n\nGlossary (mandatory):")
     assert '- 南京 = "Nanjing" (type: place)' in combined
+
+
+def test_select_glossary_entries_for_texts_selects_longest_matches_in_order() -> None:
+    entries = (
+        entry("林黛玉", "Lin Daiyu", "she/her", "character"),
+        entry("黛玉", "Daiyu", "she/her", "character"),
+        entry("大观园", "Grand View Garden", entry_type="place"),
+        entry("大观", "Grand View", entry_type="place"),
+        entry("拳法"),
+    )
+    assert select_glossary_entries_for_texts(entries, ("林黛玉走进大观园。",)) == (
+        entries[0],
+        entries[2],
+    )
+    assert select_glossary_entries_for_texts(entries, ("黛玉练拳法。",)) == (
+        entries[1],
+        entries[4],
+    )
+    assert select_glossary_entries_for_texts(entries, ("大观园很美。",)) == (
+        entries[2],
+    )
+    assert select_glossary_entries_for_texts(
+        entries, ("黛玉练拳法。", "林黛玉来了。")
+    ) == (
+        entries[0],
+        entries[1],
+        entries[4],
+    )
+    assert select_glossary_entries_for_texts(entries, ()) == ()
+
+
+def test_untranslated_glossary_entries_flags_leftover_originals() -> None:
+    entries = (
+        entry("林黛玉", "Lin Daiyu", "she/her", "character"),
+        entry("拳法"),
+        entry("TCP", "TCP"),
+    )
+    assert untranslated_glossary_entries(entries, "Lin Daiyu smiled.") == ()
+    assert untranslated_glossary_entries(entries, "林黛玉 smiled.") == (entries[0],)
+    assert untranslated_glossary_entries(entries, "拳法 and TCP") == ()
 
 
 def test_parse_model_glossary_reply_accepts_the_wrapper_object() -> None:

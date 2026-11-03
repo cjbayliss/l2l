@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import reduce
 from typing import Any, Literal, get_args
 
 from l2l.errors import (
@@ -65,6 +66,70 @@ def instruction_with_glossary(
         return instruction
 
     return instruction + "\n\n" + render_glossary_block(entries)
+
+
+def longest_glossary_match_at(
+    ordered_entries: tuple[GlossaryEntry, ...], text: str, position: int
+) -> GlossaryEntry | None:
+    return next(
+        (
+            entry
+            for entry in ordered_entries
+            if text.startswith(entry.original, position)
+        ),
+        None,
+    )
+
+
+def longest_match_glossary_entries(
+    entries: tuple[GlossaryEntry, ...], text: str
+) -> frozenset[GlossaryEntry]:
+    ordered_entries = tuple(
+        sorted(
+            (entry for entry in entries if entry.original),
+            key=lambda entry: len(entry.original),
+            reverse=True,
+        )
+    )
+
+    def advance(
+        state: tuple[int, frozenset[GlossaryEntry]], _: int
+    ) -> tuple[int, frozenset[GlossaryEntry]]:
+        position, matched = state
+        if position >= len(text):
+            return state
+
+        entry = longest_glossary_match_at(ordered_entries, text, position)
+        if entry is None:
+            return (position + 1, matched)
+
+        return (position + len(entry.original), matched | {entry})
+
+    _, matched = reduce(advance, range(len(text)), (0, frozenset[GlossaryEntry]()))
+    return matched
+
+
+def select_glossary_entries_for_texts(
+    entries: tuple[GlossaryEntry, ...], texts: tuple[str, ...]
+) -> tuple[GlossaryEntry, ...]:
+    matched = frozenset(
+        entry
+        for text in texts
+        for entry in longest_match_glossary_entries(entries, text)
+    )
+    return tuple(entry for entry in entries if entry in matched)
+
+
+def untranslated_glossary_entries(
+    entries: tuple[GlossaryEntry, ...], output: str
+) -> tuple[GlossaryEntry, ...]:
+    return tuple(
+        entry
+        for entry in entries
+        if entry.translated is not None
+        and entry.translated != entry.original
+        and entry.original in output
+    )
 
 
 def text_or_none(value: Any) -> str | None:

@@ -8,7 +8,11 @@ from typing import Any
 
 from l2l.context import Context
 from l2l.errors import TranslationError, fail_budget, fail_pass
-from l2l.glossary import GlossaryEntry, render_glossary_block
+from l2l.glossary import (
+    GlossaryEntry,
+    render_glossary_block,
+    untranslated_glossary_entries,
+)
 from l2l.languages import scripts_description
 from l2l.monads import IO, NOTHING, Err, Just, Maybe, Ok, Result
 from l2l.settings import (
@@ -71,6 +75,26 @@ def unit_output_problem(
         )
 
     return NOTHING
+
+
+UNTRANSLATED_GLOSSARY_TERM_SAMPLE_COUNT = 3
+
+
+def glossary_term_problem(
+    output: str, entries: tuple[GlossaryEntry, ...]
+) -> Maybe[str]:
+    untranslated = untranslated_glossary_entries(entries, output)
+    if not untranslated:
+        return NOTHING
+
+    return Just(
+        "the reply contains untranslated glossary term(s) %s; use their "
+        "mandated renderings"
+        % ", ".join(
+            '"%s" (use "%s")' % (entry.original, entry.translated)
+            for entry in untranslated[:UNTRANSLATED_GLOSSARY_TERM_SAMPLE_COUNT]
+        )
+    )
 
 
 def script_mismatch_problem(
