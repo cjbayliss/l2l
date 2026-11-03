@@ -87,6 +87,7 @@ from l2l.monads import (
     result_map,
 )
 from l2l.plans import (
+    PassModeSet,
     PassPlan,
     UnitCall,
     build_pass_user,
@@ -96,6 +97,7 @@ from l2l.plans import (
     plan_information_message,
     plan_retranslation_calls,
     plan_unit_calls,
+    preceding_modes,
     resolve_work_groups,
     script_mismatch_problem,
     target_script_problem,
@@ -104,6 +106,7 @@ from l2l.plans import (
 )
 from l2l.settings import (
     PassDefinition,
+    PassMode,
     effective_target_language,
     paragraph_tolerance,
     pass_salt,
@@ -153,6 +156,7 @@ class UnitResult:
 class PassExecution:
     run_context: Context
     pass_definition: PassDefinition
+    earlier_pass_modes: PassModeSet
     source_paragraphs: tuple[str, ...]
     separators: tuple[str, ...]
     chunk_plan: PassPlan
@@ -1110,7 +1114,12 @@ def run_unit(
 
     def build_retry_user(bad_output: str, problem: str) -> str:
         return build_unit_retry_user(
-            call.source_chunk, call.work_chunk, call.context, bad_output, problem
+            call.source_chunk,
+            call.work_chunk,
+            call.context,
+            bad_output,
+            problem,
+            call.translated_context,
         )
 
     def on_repair(failed: int, problem: str) -> IO[None]:
@@ -1265,6 +1274,7 @@ def run_units(
     analysis: str | None,
     usage: Usage,
     retry_attempt: int = 0,
+    earlier_pass_modes: PassModeSet = frozenset[PassMode](),
 ) -> IO[Result[tuple[UnitResult, ...], TranslationError]]:
     run_context = environment.run_context
     pass_definition = environment.pass_definition
@@ -1277,6 +1287,7 @@ def run_units(
         analysis,
         retry_attempt,
         environment.glossary,
+        earlier_pass_modes,
     )
 
     def unit_part(
@@ -1394,6 +1405,7 @@ def run_text_pass_once(
                     state.analysis,
                     state.usage,
                     retry_attempt,
+                    execution.earlier_pass_modes,
                 ),
                 after_units,
             ),
@@ -1603,17 +1615,19 @@ def build_pass_executions(
     chunk_plans: tuple[PassPlan, ...],
 ) -> tuple[PassExecution, ...]:
     paragraph_plan = tuple((paragraph,) for paragraph in source_paragraphs)
+    earlier_pass_modes = preceding_modes(pass_definitions)
     return tuple(
         PassExecution(
             run_context=run_context,
             pass_definition=pass_definition,
+            earlier_pass_modes=earlier_pass_modes[index],
             source_paragraphs=source_paragraphs,
             separators=separators,
             chunk_plan=chunk_plan,
             paragraph_plan=paragraph_plan,
         )
-        for pass_definition, chunk_plan in zip(
-            pass_definitions, chunk_plans, strict=True
+        for index, (pass_definition, chunk_plan) in enumerate(
+            zip(pass_definitions, chunk_plans, strict=True)
         )
     )
 

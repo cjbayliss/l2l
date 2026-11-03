@@ -260,6 +260,27 @@ def test_context_parts_and_build_pass_user_with_context() -> None:
     assert "before\n\nafter" in user
     assert user.endswith("src")
 
+    labeled = build_pass_user("src", None, None, ("after",), ("before",))
+    assert "Already-translated context" in labeled
+    assert labeled.count("reference only") == 2
+    assert labeled.index("Already-translated") < labeled.index("Context paragraphs")
+    assert labeled.index("before") < labeled.index("after")
+    assert labeled.endswith("src")
+
+    assert (
+        build_pass_user("src", None, None, (), ("before",)).count("reference only") == 1
+    )
+    assert build_pass_user("src", None, None, (), ()).count("reference only") == 0
+
+
+def test_build_unit_retry_user_includes_translated_context() -> None:
+    user = build_unit_retry_user(
+        "src", "src", (), "bad reply", "the reply was empty", ("earlier",)
+    )
+    assert "Already-translated context" in user
+    assert "earlier" in user
+    assert user.index("Already-translated") < user.index("<<<SOURCE")
+
 
 def test_build_unit_retry_user_includes_problem_and_reply() -> None:
     user = build_unit_retry_user("src", "src", (), "bad reply", "the reply was empty")

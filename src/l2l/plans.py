@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from itertools import accumulate, chain
+from itertools import accumulate, chain, takewhile
 from typing import Any
 
 from l2l.context import Context
@@ -116,6 +116,18 @@ def target_script_problem(
     )
 
 
+def translated_context_parts(translated_context: tuple[str, ...]) -> tuple[str, ...]:
+    if not translated_context:
+        return ()
+
+    return (
+        "Already-translated context (reference only — do not translate it, "
+        "do not continue the story from it, and do not include it in the "
+        "output):",
+        *translated_context,
+    )
+
+
 def context_parts(context: tuple[str, ...]) -> tuple[str, ...]:
     if not context:
         return ()
@@ -134,12 +146,14 @@ def build_pass_user(
     work_chunk: str | None,
     analysis: str | None,
     context: tuple[str, ...] = (),
+    translated_context: tuple[str, ...] = (),
 ) -> str:
     has_draft = work_chunk is not None and work_chunk != source_chunk
     source_block = ("Source text:\n%s" % source_chunk) if has_draft else source_chunk
     draft_block = ("Current draft:\n%s" % work_chunk) if has_draft else ""
     parts = (
         analysis.strip() if analysis else "",
+        *translated_context_parts(translated_context),
         *context_parts(context),
         source_block,
         draft_block,
@@ -192,8 +206,26 @@ def resolve_work_groups(
 
 type ChunkPlan = tuple[tuple[str, ...], ...]
 
-
 PROMPT_SCAFFOLDING_TOKENS = 16
+TRANSLATED_CONTEXT_PARAGRAPH_COUNT = 2
+TRANSLATED_CONTEXT_TOKEN_BUDGET = 400
+NON_TEXT_PASS_MODES = frozenset[PassMode](("analysis", "update_glossary"))
+
+
+def earlier_passes_translated_text(earlier_pass_modes: PassModeSet) -> bool:
+    return bool(earlier_pass_modes - NON_TEXT_PASS_MODES)
+
+
+def suffix_within_token_budget(
+    paragraphs: tuple[str, ...], budget_tokens: int
+) -> tuple[str, ...]:
+    cumulative_sizes = accumulate(
+        estimate_tokens(paragraph) for paragraph in reversed(paragraphs)
+    )
+    affordable_paragraph_count = len(
+        tuple(takewhile(lambda total: total <= budget_tokens, cumulative_sizes))
+    )
+    return paragraphs[len(paragraphs) - affordable_paragraph_count :]
 
 
 type PassModeSet = frozenset[PassMode]
@@ -254,7 +286,7 @@ def prompt_allowance(
             else 0
         ),
         scaffolding_tokens=PROMPT_SCAFFOLDING_TOKENS,
-        includes_draft=bool(earlier_pass_modes - {"analysis"}),
+        includes_draft=earlier_passes_translated_text(earlier_pass_modes),
     )
 
 
@@ -404,6 +436,7 @@ def build_unit_retry_user(
     context: tuple[str, ...],
     bad_output: str,
     problem: str,
+    translated_context: tuple[str, ...] = (),
 ) -> str:
     has_draft = work_chunk is not None and work_chunk != source_chunk
     draft_part = (
@@ -415,6 +448,7 @@ def build_unit_retry_user(
         (
             "Your previous reply below does not satisfy the output rules: %s."
             % problem,
+            *translated_context_parts(translated_context),
             *context_parts(context),
             "Translate only the source text between the <<<SOURCE and SOURCE>>> "
             "markers, as exactly one paragraph; do not translate the context "
@@ -443,6 +477,7 @@ class UnitCall:
     source_chunk: str
     work_chunk: str
     context: tuple[str, ...]
+    translated_context: tuple[str, ...]
     analysis: str | None
     key: str
     trailing_separator: str
@@ -462,6 +497,7 @@ def build_unit_call(
     work_chunk: str,
     context: tuple[str, ...],
     analysis: str | None,
+    translated_context: tuple[str, ...] = (),
 ) -> UnitCall:
     return UnitCall(
         index=index,
@@ -469,6 +505,7 @@ def build_unit_call(
         source_chunk=source_chunk,
         work_chunk=work_chunk,
         context=context,
+        translated_context=translated_context,
         analysis=analysis,
         key=cache_key(
             source_chunk,
@@ -477,6 +514,7 @@ def build_unit_call(
             work_chunk,
             overrides=parameters,
             context="\n\n".join(context),
+            translated_context="\n\n".join(translated_context),
             analysis=analysis or "",
         ),
         trailing_separator=separator_at(separators, separator_index),
@@ -494,6 +532,7 @@ def plan_unit_calls(
     analysis: str | None,
     retry_attempt: int = 0,
     glossary: tuple[GlossaryEntry, ...] = (),
+    earlier_pass_modes: PassModeSet = frozenset[PassMode](),
 ) -> tuple[UnitCall, ...]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
     call_salt = pass_salt(
@@ -504,8 +543,31 @@ def plan_unit_calls(
     )
     flat_plan = tuple(chain.from_iterable(plan))
     plan_starts = tuple(accumulate(map(len, plan), initial=0))
+    working_text_is_translated = earlier_passes_translated_text(earlier_pass_modes)
 
-    def neighbour_context(index: int) -> tuple[str, ...]:
+    def rolling_translated_context(index: int) -> tuple[str, ...]:
+        if index == 0 or not working_text_is_translated:
+            return ()
+
+        previous_group = work_groups[index - 1]
+        match pass_definition.mode:
+            case "paragraph":
+                return suffix_within_token_budget(
+                    previous_group[-1:], TRANSLATED_CONTEXT_TOKEN_BUDGET
+                )
+
+            case "chunk":
+                return suffix_within_token_budget(
+                    previous_group[-TRANSLATED_CONTEXT_PARAGRAPH_COUNT:],
+                    TRANSLATED_CONTEXT_TOKEN_BUDGET,
+                )
+
+            case _:
+                return ()
+
+    def neighbour_context(
+        index: int, translated_context: tuple[str, ...]
+    ) -> tuple[str, ...]:
         match pass_definition.mode:
             case "paragraph":
                 if index >= len(plan):
@@ -513,7 +575,12 @@ def plan_unit_calls(
 
                 start = plan_starts[index]
                 end = plan_starts[index + 1]
-                return (flat_plan[start - 1 : start] if start > 0 else ()) + (
+                preceding_source = (
+                    flat_plan[start - 1 : start]
+                    if start > 0 and not translated_context
+                    else ()
+                )
+                return preceding_source + (
                     flat_plan[end : end + 1] if end < len(flat_plan) else ()
                 )
 
@@ -521,6 +588,7 @@ def plan_unit_calls(
                 return ()
 
     def call(index: int, work_group: tuple[str, ...]) -> UnitCall:
+        translated_context = rolling_translated_context(index)
         return build_unit_call(
             model,
             parameters,
@@ -531,8 +599,9 @@ def plan_unit_calls(
             len(work_groups),
             "\n\n".join(plan[index]) if index < len(plan) else "",
             "\n\n".join(work_group),
-            neighbour_context(index),
+            neighbour_context(index, translated_context),
             analysis,
+            translated_context,
         )
 
     return tuple(call(index, group) for index, group in enumerate(work_groups))

@@ -530,11 +530,17 @@ def cache_key(
     work_text: str = "",
     overrides: Mapping[str, Any] | None = None,
     context: str = "",
+    translated_context: str = "",
     analysis: str = "",
 ) -> str:
     salt_bytes = pass_salt.encode("utf-8") + b"\x00" if pass_salt else b""
     work_bytes = b"\x00work\x00" + work_text.encode("utf-8") if work_text else b""
     context_bytes = b"\x00context\x00" + context.encode("utf-8") if context else b""
+    translated_context_bytes = (
+        b"\x00translated_context\x00" + translated_context.encode("utf-8")
+        if translated_context
+        else b""
+    )
     analysis_bytes = b"\x00analysis\x00" + analysis.encode("utf-8") if analysis else b""
     override_bytes = (
         b"\x00"
@@ -549,6 +555,7 @@ def cache_key(
         chunk_text.encode("utf-8"),
         work_bytes,
         context_bytes,
+        translated_context_bytes,
         analysis_bytes,
         b"\x00" + model.encode("utf-8"),
         override_bytes,

@@ -132,6 +132,7 @@ def text_pass_report_lines(
         unit_separators(plan, separators),
         None,
         glossary=run_context.glossary_entries,
+        earlier_pass_modes=earlier_pass_modes,
     )
     is_chunk = pass_definition.mode == "chunk"
     budget_note = (

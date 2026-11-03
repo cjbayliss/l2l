@@ -13,15 +13,18 @@ from fakes import (
 
 from l2l.monads import Just, Nothing
 from l2l.plans import (
+    TRANSLATED_CONTEXT_TOKEN_BUDGET,
+    earlier_passes_translated_text,
     instruction_with_target_language,
     plan_retranslation_calls,
     plan_unit_calls,
     resolve_work_groups,
+    suffix_within_token_budget,
     target_script_problem,
 )
 from l2l.report import plan_report
 from l2l.settings import PassDefinition
-from l2l.text import unit_separators
+from l2l.text import estimate_tokens, unit_separators
 
 
 def test_plan_unit_calls_builds_keys_and_context() -> None:
@@ -258,3 +261,99 @@ def test_retranslation_keys_differ_by_effective_language() -> None:
         chinese_context, paragraph_pass(), sources, sources, (0,), ("s1",), None
     )
     assert english_calls[0].key != chinese_calls[0].key
+
+
+def test_translated_context_helpers() -> None:
+    assert suffix_within_token_budget((), 100) == ()
+    assert suffix_within_token_budget(("a b", "c d"), 100) == ("a b", "c d")
+    assert suffix_within_token_budget(("a b", "c d"), 1) == ("c d",)
+    assert suffix_within_token_budget(("a b", "c d"), 0) == ()
+    assert not earlier_passes_translated_text(frozenset())
+    assert not earlier_passes_translated_text(frozenset({"analysis"}))
+    assert not earlier_passes_translated_text(
+        frozenset({"analysis", "update_glossary"})
+    )
+    assert earlier_passes_translated_text(frozenset({"chunk"}))
+    assert earlier_passes_translated_text(frozenset({"analysis", "paragraph"}))
+
+
+def test_chunk_pass_uses_previous_output_as_translated_context() -> None:
+    console, _ = make_console()
+    run_context = make_context(console, FakeHttp([]).open)
+    plan = (("一。", "二。"), ("三。", "四。"))
+    translated_groups = (("One.", "Two."), ("Three.", "Four."))
+    separators = unit_separators(plan, ("s1", "s2", "s3", "s4"))
+    calls = plan_unit_calls(
+        run_context,
+        chunk_pass(),
+        plan,
+        translated_groups,
+        separators,
+        None,
+        earlier_pass_modes=frozenset({"chunk"}),
+    )
+    assert calls[0].translated_context == ()
+    assert calls[1].translated_context == ("One.", "Two.")
+    first_pass = plan_unit_calls(
+        run_context,
+        chunk_pass(),
+        plan,
+        translated_groups,
+        separators,
+        None,
+    )
+    assert [call.translated_context for call in first_pass] == [(), ()]
+    assert calls[1].key != first_pass[1].key
+
+
+def test_paragraph_pass_prefers_translated_preceding_paragraph() -> None:
+    console, _ = make_console()
+    run_context = make_context(console, FakeHttp([]).open)
+    plan = (("一。",), ("二。",), ("三。",))
+    translated_groups = (("One.",), ("Two.",), ("Three.",))
+    separators = unit_separators(plan, ("s1", "s2", "s3"))
+    calls = plan_unit_calls(
+        run_context,
+        paragraph_pass(),
+        plan,
+        translated_groups,
+        separators,
+        None,
+        earlier_pass_modes=frozenset({"paragraph"}),
+    )
+    assert [call.context for call in calls] == [("二。",), ("三。",), ()]
+    assert [call.translated_context for call in calls] == [
+        (),
+        ("One.",),
+        ("Two.",),
+    ]
+    first_pass = plan_unit_calls(
+        run_context,
+        paragraph_pass(),
+        plan,
+        translated_groups,
+        separators,
+        None,
+    )
+    assert [call.translated_context for call in first_pass] == [(), (), ()]
+
+
+def test_translated_context_skips_paragraphs_over_token_budget() -> None:
+    console, _ = make_console()
+    run_context = make_context(console, FakeHttp([]).open)
+    oversized = "word " * 500
+    assert estimate_tokens(oversized) > TRANSLATED_CONTEXT_TOKEN_BUDGET
+    plan = ((oversized,), ("二。",))
+    translated_groups = ((oversized,), ("Two.",))
+    separators = unit_separators(plan, ("s1", "s2"))
+    calls = plan_unit_calls(
+        run_context,
+        paragraph_pass(),
+        plan,
+        translated_groups,
+        separators,
+        None,
+        earlier_pass_modes=frozenset({"paragraph"}),
+    )
+    assert calls[1].translated_context == ()
+    assert calls[1].context == (oversized,)
