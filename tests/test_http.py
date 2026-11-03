@@ -875,26 +875,39 @@ def test_with_blocked_providers_adds_an_ignore_list_on_openrouter() -> None:
     assert with_blocked_providers(other.config, plain, frozenset({"Modal"})) is plain
 
 
-def rate_limited_open(
-    requests: list[Any], chunks: list[dict[str, Any]]
+def rate_limited_providers_open(
+    requests: list[Any], chunks: list[dict[str, Any]], providers: tuple[str, ...]
 ) -> Callable[[Any, float], Result[Any, TranslationError]]:
     def open_http(request: Any, timeout: float) -> Result[Any, TranslationError]:
         requests.append(request)
-        if len(requests) == 1:
-            return fail_http("status", OPENROUTER_429_DETAIL, 429)
+        index = len(requests) - 1
+        if index < len(providers):
+            detail = OPENROUTER_429_DETAIL.replace("Modal", providers[index])
+            return fail_http("status", detail, 429)
 
         return Ok(FakeStreamResponse(chunks))
 
     return open_http
 
 
-def test_chat_blocks_a_failing_openrouter_provider_and_retries() -> None:
+def rate_limited_chat_context(
+    providers: tuple[str, ...], provider_block_attempts: int | None = None
+) -> tuple[Any, list[Any], Callable[[], tuple[float, ...]]]:
     sleep, sleeps = make_sleep_recorder()
     console, _ = make_console()
     chunks = with_usage(stream_chunks("Hi"), USAGE)
     requests: list[Any] = []
-    run_context = openrouter_context(console, rate_limited_open(requests, chunks))
-    run_context = replace(run_context, sleep=sleep)
+    run_context = openrouter_context(
+        console, rate_limited_providers_open(requests, chunks, providers)
+    )
+    settings = run_context.settings
+    if provider_block_attempts is not None:
+        settings = replace(settings, provider_block_attempts=provider_block_attempts)
+    return replace(run_context, sleep=sleep, settings=settings), requests, sleeps
+
+
+def test_chat_blocks_a_failing_openrouter_provider_and_retries() -> None:
+    run_context, requests, sleeps = rate_limited_chat_context(("Modal",))
     result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
     assert isinstance(result, Ok)
     assert result.value.text == "Hi"
@@ -904,14 +917,59 @@ def test_chat_blocks_a_failing_openrouter_provider_and_retries() -> None:
     assert "provider" not in first
     assert second["provider"] == {"ignore": ["Modal"]}
     assert read_reference(run_context.provider_blocklist).run() == frozenset({"Modal"})
+    assert sleeps() == ()
+
+
+def test_chat_blocks_each_new_rate_limited_provider_without_backoff() -> None:
+    run_context, requests, sleeps = rate_limited_chat_context(
+        ("Modal", "DeepInfra", "Crusoe")
+    )
+    result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == "Hi"
+    assert len(requests) == 4
+    ignored = [
+        json.loads(request.body).get("provider", {}).get("ignore", [])
+        for request in requests
+    ]
+    assert ignored == [
+        [],
+        ["Modal"],
+        ["DeepInfra", "Modal"],
+        ["Crusoe", "DeepInfra", "Modal"],
+    ]
+    assert read_reference(run_context.provider_blocklist).run() == frozenset(
+        {"Modal", "DeepInfra", "Crusoe"}
+    )
+    assert sleeps() == ()
+
+
+def test_chat_falls_back_to_backoff_after_exhausting_provider_blocks() -> None:
+    run_context, requests, sleeps = rate_limited_chat_context(
+        ("Modal", "DeepInfra"), provider_block_attempts=1
+    )
+    result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == "Hi"
+    assert len(requests) == 3
+    third = json.loads(requests[2].body)
+    assert third["provider"] == {"ignore": ["DeepInfra", "Modal"]}
     assert sleeps() == (1.0,)
 
 
+def test_chat_repeats_backoff_for_a_known_rate_limited_provider() -> None:
+    run_context, requests, sleeps = rate_limited_chat_context(
+        ("Modal", "Modal", "Modal")
+    )
+    result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
+    assert isinstance(result, Ok)
+    assert result.value.text == "Hi"
+    assert len(requests) == 4
+    assert sleeps() == (1.0, 2.0)
+
+
 def test_chat_blocklist_persists_across_chat_calls() -> None:
-    console, _ = make_console()
-    chunks = with_usage(stream_chunks("Hi"), USAGE)
-    requests: list[Any] = []
-    run_context = openrouter_context(console, rate_limited_open(requests, chunks))
+    run_context, requests, _ = rate_limited_chat_context(("Modal",))
     first = chat(run_context, "s", "u", "m", {}, Usage()).run()
     assert isinstance(first, Ok)
     second = chat(run_context, "s", "u", "m", {}, Usage()).run()
@@ -927,7 +985,7 @@ def test_chat_does_not_block_providers_off_openrouter() -> None:
     chunks = with_usage(stream_chunks("Hi"), USAGE)
     requests: list[Any] = []
     run_context = make_context(
-        console, rate_limited_open(requests, chunks), sleep=sleep
+        console, rate_limited_providers_open(requests, chunks, ("Modal",)), sleep=sleep
     )
     result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
     assert isinstance(result, Ok)

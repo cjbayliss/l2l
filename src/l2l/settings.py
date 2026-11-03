@@ -60,6 +60,7 @@ class Settings:
     retry_attempts: int
     retry_base_delay: float
     retry_cap: float
+    provider_block_attempts: int
     glossary_extraction_instruction: str
 
 
@@ -116,6 +117,7 @@ def build_settings() -> Settings:
         retry_attempts=2,
         retry_base_delay=1.0,
         retry_cap=30.0,
+        provider_block_attempts=8,
         glossary_extraction_instruction="""
 You extract glossary entries from source text. Find named and
 speaking characters (assign pronouns only where they are meaningful and

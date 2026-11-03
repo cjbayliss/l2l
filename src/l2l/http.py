@@ -53,7 +53,7 @@ from l2l.monads import (
     maybe_map,
     maybe_or,
     maybe_to_optional,
-    modify_reference,
+    modify_reference_with,
     read_reference,
     reference_collector,
     reference_gate,
@@ -144,22 +144,34 @@ def with_blocked_providers(
     }
 
 
-def block_failing_provider(run_context: Context, failure: TranslationError) -> IO[None]:
+def block_failing_provider(run_context: Context, failure: TranslationError) -> IO[bool]:
     provider = failed_provider_name(failure)
     if provider is None or not is_openrouter(run_context.config):
-        return io_pure(None)
+        return io_pure(False)
 
-    def announce(_: frozenset[str]) -> IO[None]:
-        return run_context.console.log_verbose(
-            "l2l: openrouter provider %s failed; added to the blocklist" % provider
+    def add_provider_when_absent(
+        blocked: frozenset[str],
+    ) -> tuple[frozenset[str], bool]:
+        return (blocked | frozenset({provider}), provider not in blocked)
+
+    def announce_blocked_provider(blocked_a_new_provider: bool) -> IO[bool]:
+        if not blocked_a_new_provider:
+            return io_pure(False)
+
+        return io_map(
+            run_context.console.log_verbose(
+                "l2l: openrouter provider %s failed; added to the blocklist, "
+                "retrying without it" % provider
+            ),
+            lambda _: True,
         )
 
     return io_bind(
-        modify_reference(
+        modify_reference_with(
             run_context.provider_blocklist,
-            lambda blocked: blocked | frozenset({provider}),
+            add_provider_when_absent,
         ),
-        announce,
+        announce_blocked_provider,
     )
 
 
@@ -761,7 +773,9 @@ def with_retries[T](
         run_context.settings.retry_attempts,
     )
 
-    def attempt_at(index: int) -> IO[Result[T, TranslationError]]:
+    def attempt_at(
+        index: int, blocked_provider_retries: int
+    ) -> IO[Result[T, TranslationError]]:
         def decide(
             outcome: Result[T, TranslationError],
         ) -> IO[Result[T, TranslationError]]:
@@ -773,8 +787,15 @@ def with_retries[T](
                 return io_result(outcome)
 
             def proceed_after_blocking(
-                _: None,
+                blocked_a_new_provider: bool,
             ) -> IO[Result[T, TranslationError]]:
+                if (
+                    blocked_a_new_provider
+                    and blocked_provider_retries
+                    < run_context.settings.provider_block_attempts
+                ):
+                    return attempt_at(index, blocked_provider_retries + 1)
+
                 if index >= len(delays):
                     return io_result(outcome)
 
@@ -783,7 +804,7 @@ def with_retries[T](
                     verbose_retry_log(run_context, index + 1, len(delays), wait),
                     lambda _: io_and_then(
                         IO(lambda: run_context.sleep(wait)),
-                        attempt_at(index + 1),
+                        attempt_at(index + 1, blocked_provider_retries),
                     ),
                 )
 
@@ -794,7 +815,7 @@ def with_retries[T](
 
         return io_bind(retryable_action(), decide)
 
-    return attempt_at(0)
+    return attempt_at(0, 0)
 
 
 def parse_json_body(
