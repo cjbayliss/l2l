@@ -1592,8 +1592,7 @@ def test_run_pipeline_updates_glossary_mid_run(tmp_path: Path) -> None:
     extraction_payload = json.loads(http.requests[0].body)
     extraction_user = extraction_payload["messages"][1]["content"]
     assert "Target language: Chinese" in extraction_user
-    assert "Already known names" in extraction_user
-    assert "南京" in extraction_user
+    assert "Already known names" not in extraction_user
     assert "你好南京大观园。" in extraction_user
 
     for request in http.requests[1:]:

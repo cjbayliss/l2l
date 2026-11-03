@@ -357,22 +357,5 @@ def entries_to_json_text(entries: tuple[GlossaryEntry, ...]) -> str:
     )
 
 
-def known_originals_component(entries: tuple[GlossaryEntry, ...]) -> str:
-    if not entries:
-        return ""
-
-    return "Already known names (do not output entries for these):\n%s\n" % "\n".join(
-        sorted(entry.original for entry in entries)
-    )
-
-
-def extraction_user_message(
-    target_language: str,
-    known_entries: tuple[GlossaryEntry, ...],
-    text: str,
-) -> str:
-    return "Target language: %s\n\n%sSource text:\n%s" % (
-        target_language,
-        known_originals_component(known_entries),
-        text,
-    )
+def extraction_user_message(target_language: str, text: str) -> str:
+    return "Target language: %s\n\nSource text:\n%s" % (target_language, text)

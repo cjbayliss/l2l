@@ -948,9 +948,7 @@ def run_update_glossary_once(
     target_language: str,
     state: State,
 ) -> IO[Result[Translated, TranslationError]]:
-    key, model, parameters = pass_cache_key(
-        run_context, pass_definition, state.text, state.glossary
-    )
+    key, model, parameters = pass_cache_key(run_context, pass_definition, state.text)
 
     def reply_is_parseable_glossary(reply_text: str) -> bool:
         return isinstance(
@@ -967,7 +965,7 @@ def run_update_glossary_once(
         compute=lambda: chat(
             run_context,
             run_context.settings.glossary_extraction_instruction,
-            extraction_user_message(target_language, state.glossary, state.text),
+            extraction_user_message(target_language, state.text),
             model,
             parameters,
             state.usage,

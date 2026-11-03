@@ -12,7 +12,6 @@ from l2l.glossary import (
     glossary_response_format,
     instruction_with_glossary,
     integrate_glossary_reply,
-    known_originals_component,
     merge_glossary_entries,
     parse_glossary_document,
     parse_model_glossary_reply,
@@ -249,24 +248,10 @@ def test_entries_to_json_text_round_trips() -> None:
     assert parse_glossary_document("g.json", json.loads(text)) == Ok(entries)
 
 
-def test_known_originals_component_lists_sorted_names() -> None:
-    component = known_originals_component((entry("乙"), entry("南京"), entry("甲")))
-    expected = "Already known names (do not output entries for these):\n乙\n南京\n甲\n"
-    assert component == expected
-    assert known_originals_component(()) == ""
-
-
-def test_extraction_user_message_carries_known_originals_and_source() -> None:
-    message = extraction_user_message(
-        "French", (entry("南京", "Nanjing", entry_type="place"),), "hello"
-    )
-    assert message.startswith("Target language: French")
-    assert "Already known names" in message
-    assert "南京" in message
-    assert message.endswith("Source text:\nhello")
+def test_extraction_user_message_carries_source_only() -> None:
     assert (
-        extraction_user_message("English", (), "hello")
-        == "Target language: English\n\nSource text:\nhello"
+        extraction_user_message("French", "hello")
+        == "Target language: French\n\nSource text:\nhello"
     )
 
 

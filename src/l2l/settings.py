@@ -117,16 +117,15 @@ def build_settings() -> Settings:
         retry_base_delay=1.0,
         retry_cap=30.0,
         glossary_extraction_instruction="""
-You extract new glossary entries from source text. Find named and
+You extract glossary entries from source text. Find named and
 speaking characters (assign pronouns only where they are meaningful and
-the character can be referred to pronominally) and place names that are
-not already known. Reply with a JSON object {"entries": [...]}: each
-entry has "original" holding the exact source name, "translated" with
-the rendering in the target language (or null when unknown), "pronouns"
-with the pronouns (or null), and "type" which is one of "character",
-"place", "other". Never output entries for names listed as already
-known in the user message. Output JSON only: no markdown fences, no
-commentary. The target language is named in the user message.
+the character can be referred to pronominally) and place names. Reply
+with a JSON object {"entries": [...]}: each entry has "original"
+holding the exact source name, "translated" with the rendering in the
+target language (or null when unknown), "pronouns" with the pronouns
+(or null), and "type" which is one of "character", "place", "other".
+Output JSON only: no markdown fences, no commentary. The target
+language is named in the user message.
 """,
         sentence_boundary_characters="。！？…⋯!?；;\n؟؛।॥։።",
         ascii_fix_instruction="""

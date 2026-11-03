@@ -793,7 +793,6 @@ def extract_glossary_program(
                 run_context.settings.glossary_extraction_instruction,
                 extraction_user_message(
                     setup.target_language,
-                    setup.glossary_entries,
                     text,
                 ),
                 run_context.config.model,

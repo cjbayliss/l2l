@@ -544,8 +544,7 @@ def test_extract_glossary_happy_path(tmp_path: Path) -> None:
     user_message = payload["messages"][1]["content"]
     assert payload["model"] == "m"
     assert "Target language: English" in user_message
-    assert "Already known names" in user_message
-    assert "南京" in user_message
+    assert "南京" not in user_message
     assert "book text" in user_message
 
 
@@ -713,7 +712,7 @@ def test_update_glossary_pass_updates_file_and_flows_into_later_passes(
     extraction_payload = json.loads(http.requests[0].body)
     extraction_user = extraction_payload["messages"][1]["content"]
     assert "Target language: French" in extraction_user
-    assert "Already known names" in extraction_user
+    assert "Already known names" not in extraction_user
 
     translation_payload = json.loads(http.requests[1].body)
     translation_system = translation_payload["messages"][0]["content"]
