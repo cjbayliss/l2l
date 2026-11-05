@@ -144,9 +144,7 @@ def test_cli_source_language_overrides_config_and_normalizes_aliases(
     assert code == 0
     assert "source_language: mixed" in stdout
 
-    code, stdout, _ = run_l2l(
-        tmp_path, ["-c", str(config_path), "--check-config"]
-    )
+    code, stdout, _ = run_l2l(tmp_path, ["-c", str(config_path), "--check-config"])
     assert code == 0
     assert "source_language: Chinese" in stdout
 
@@ -1358,3 +1356,125 @@ def test_target_language_separates_the_cache_and_fills_the_prompt(
         json.loads(request.body)["messages"][0]["content"] for request in http.requests
     ]
     assert systems == ["Translate to English.", "Translate to French."]
+
+
+def test_check_config_shows_built_in_prompt_metadata(tmp_path: Path) -> None:
+    config_path = tmp_path / "builtin.toml"
+    config_path.write_text(
+        CONFIG_TEXT.replace(
+            'instruction = "Translate to {target_language}."', ""
+        ).rstrip() + "\n",
+    )
+    code, stdout, _ = run_l2l(
+        tmp_path, ["-c", str(config_path), "--check-config", "-l", "French"]
+    )
+    assert code == 0
+    assert "prompt=built-in role=translator" in stdout
+    assert "prompt sections: role=built-in, task=built-in" in stdout
+    assert "prompt omitted sections: source_guidance" in stdout
+    assert (
+        "Translate from the source language (identify it from the text) "
+        "into French." in stdout
+    )
+
+
+def test_check_config_labels_legacy_instructions_and_warns_on_unused_prompts(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "legacy.toml"
+    config_path.write_text(CONFIG_TEXT + "\n[prompts]\n" + 'accuracy = "Replaced."\n')
+    code, stdout, _stderr = run_l2l(
+        tmp_path, ["-c", str(config_path), "--check-config"]
+    )
+    assert code == 0
+    assert "prompt=legacy instruction" in stdout
+    assert "instruction text:" not in stdout
+    assert "do not apply to the legacy pass [translate]" in stdout
+
+
+def test_check_config_shows_prompt_override_origins_and_warnings(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "overrides.toml"
+    config_path.write_text(
+        CONFIG_TEXT.replace('instruction = "Translate to {target_language}."', "")
+        + "\n[prompts]\n"
+        'style = ""\n'
+        "\n[[pass]]\n"
+        'name = "review"\n'
+        "mode = \"paragraph\"\n"
+        "\n[pass.prompts]\n"
+        'accuracy = { file = "accuracy.txt" }\n',
+    )
+    (tmp_path / "accuracy.txt").write_text("Only keep the meaning exact.\n")
+    code, stdout, _ = run_l2l(
+        tmp_path, ["-c", str(config_path), "--check-config", "-l", "French"]
+    )
+    assert code == 0
+    assert "Only keep the meaning exact." in stdout
+    assert "accuracy=pass-file" in stdout
+    assert "prompt=built-in role=reviewer" in stdout
+    assert (
+        "the empty prompt override for section style removes nothing"
+        in stdout
+    )
+
+
+def test_per_pass_prompts_on_legacy_instruction_fail_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "legacy.toml"
+    config_path.write_text(
+        CONFIG_TEXT + "\n[pass.prompts]\n" + 'style = "Short sentences."\n'
+    )
+    code, _stdout, stderr = run_l2l(
+        tmp_path, ["-c", str(config_path), "--check-config"]
+    )
+    assert code == 2
+    assert "per-pass prompt overrides apply only to" in stderr
+
+
+def test_global_prompts_warn_on_legacy_passes(tmp_path: Path) -> None:
+    config_path = tmp_path / "global-override.toml"
+    config_path.write_text(CONFIG_TEXT + "\n[prompts]\n" + 'accuracy = "Replaced."\n')
+    code, stdout, _stderr = run_l2l(
+        tmp_path, ["-c", str(config_path), "--check-config"]
+    )
+    assert code == 0
+    assert "do not apply to the legacy pass [translate]" in stdout
+
+
+def test_check_config_shows_resolved_style_and_guidance(tmp_path: Path) -> None:
+    config_path = tmp_path / "styled.toml"
+    config_path.write_text(
+        'target_language = "English"\n'
+        'source_language = "Japanese"\n'
+        "\n[api]\n"
+        'base_url = "http://endpoint.test/v1"\n'
+        'api_key = "secret-key"\n'
+        'model = "m"\n'
+        "max_tokens = 1000\n"
+        "\n[style]\n"
+        'formality = "informal"\n'
+        'honorifics = "titles"\n'
+        "\n[[pass]]\n"
+        'name = "translate"\n'
+        'mode = "chunk"\n'
+        "\n[output]\n"
+        'paragraphs = "approximate"\n'
+        "maximum_characters = 300\n"
+    )
+    code, stdout, _ = run_l2l(
+        tmp_path, ["-c", str(config_path), "--check-config", "-l", "en-AU"]
+    )
+    assert code == 0
+    assert "style=formality:informal honorifics:titles register_fidelity:preserve" in (
+        stdout
+    )
+    assert "Use Australian English spelling and conventions." in stdout
+    assert "Render honorifics as natural titles" in stdout
+    assert "Render onomatopoeia" in stdout
+    assert "Write the translation in an informal register." in stdout
+    assert (
+        "output: paragraphs=approximate maximum_characters=300 "
+        "unit_tolerance=1 pass_tolerance=1" in stdout
+    )
+    assert "Keep each output paragraph to at most 300 characters." in stdout

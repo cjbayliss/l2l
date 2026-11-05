@@ -51,8 +51,10 @@ l2l -c zh2en.toml < chapter1.txt > chapter1.en.txt
 Empty input succeeds without calling the endpoint. To get started:
 
 1. Copy `docs/configs/zh2en.toml` (Chinese → English) or
-   `docs/configs/ja2en.toml` (Japanese → English), plus the matching
-   instruction files from `docs/prompts/`.
+   `docs/configs/ja2en.toml` (Japanese → English). Both use the built-in
+   rendered prompts, so no instruction files are needed; the
+   hand-written prompts in `docs/prompts/` remain as labelled legacy
+   examples for when you want full manual control.
 2. Put your API key in the config - or better, in the
    `TRANSLATE_API_KEY` environment variable.
 3. Run `l2l --check-config` to verify your setup, then translate.
@@ -198,11 +200,11 @@ The optional top-level `source_language` (or `--source-language`) names
 the language the input text is written in. `auto` is the default and
 asserts nothing; aliases `guess`, `detect`, and `und` mean the same
 thing. `mixed` (alias `mul`) says the document genuinely mixes source
-languages. Any other value is kept as written, subject to the same
-name resolution as the target language: names CLDR does not know stay
-valid and simply disable language-derived reasoning. Precedence is
-`--source-language`, then the selected config file's
-`source_language`, then the user config file's, then `auto`.
+languages. Any other value is kept as written, subject to the same name
+resolution as the target language: names CLDR does not know stay valid
+and simply disable language-derived reasoning. Precedence is
+`--source-language`, then the selected config file's `source_language`,
+then the user config file's, then `auto`.
 
 A minimal example:
 
@@ -220,8 +222,9 @@ instruction = "Translate Chinese fiction to natural {target_language}."
 mode = "chunk"
 ```
 
-Complete multi-pass examples live in `docs/configs/`, with their
-instruction files in `docs/prompts/`.
+Complete multi-pass examples live in `docs/configs/`; they render the
+built-in prompts. The hand-written instruction files in `docs/prompts/`
+are kept as labelled legacy examples of full manual control.
 
 ### Config file resolution
 
@@ -266,10 +269,11 @@ Passes run in order; each pass's output is the next's input.
 
 - `name` (required) - non-empty string, used in logs and cache keys.
 - `instruction` or `instruction_file` (exactly one required, except for
-  `mode = "update_glossary"` where both may be omitted) - the
-  instruction as inline text, or a path to a text file (relative to the
-  config file). The instruction defines the language pair and target
-  style.
+  `mode = "update_glossary"` where both may be omitted, and for `chunk`
+  / `paragraph` passes where both may be omitted to use the built-in
+  prompt, see below) - the instruction as inline text, or a path to a
+  text file (relative to the config file). The instruction defines the
+  language pair and target style.
 - `mode` (default `"chunk"`) - how the document is processed, see below.
 - `model` (default `[api] model`) - model override for this pass's
   calls.
@@ -277,6 +281,8 @@ Passes run in order; each pass's output is the next's input.
   calls, merged over `[api] params`.
 - `ascii`, `ensure_paragraphs`, `retranslate_untranslated` - per-pass
   overrides of the `[options]` toggles below.
+- `[pass.prompts]`, `[pass.style]`, `[pass.output]` - per-pass prompt
+  section, style, and output policy settings; see the sections below.
 - `target_language` - per-pass target language for every mode; falls
   back to the resolved global target language (config file or
   `--target-language`). It selects prompt substitution, the cache
@@ -291,6 +297,180 @@ Passes run in order; each pass's output is the next's input.
   entries are neither written to the glossary file nor injected into
   later translation prompts. Allowed type names are `"character"`,
   `"place"`, and `"other"`.
+
+### Built-in prompts
+
+A `chunk` or `paragraph` pass with no `instruction` / `instruction_file`
+gets a deterministic built-in system prompt assembled from named
+sections (`role`, `task`, `languages`, `source_guidance`,
+`target_guidance`, `accuracy`, `fluency`, `style`, `context_handling`,
+`output_rules`) in that canonical order. Role selection is fixed: an
+`analysis` pass uses the analyser role, the first text-transforming pass
+uses the translator role, and later `chunk` / `paragraph` passes use the
+reviewer role, which keeps correct draft wording and repairs the rest.
+`analysis` and `update_glossary` passes never count as earlier text.
+`{source_language}` and `{target_language}` are substituted during
+rendering, so a built-in prompt always names the resolved language pair.
+An explicit `instruction` / `instruction_file` remains a complete
+system-prompt replacement and is never mixed with the built-in sections;
+it is the escape hatch when the built-ins do not fit, and global
+`[prompts]`, `[style]`, or `[output]` settings that cannot apply to such
+a pass produce one warning per unaffected pass instead of being silently
+ignored. `--check-config` prints, for each rendered pass, its role,
+every section's origin, the omitted sections, and the exact final
+instruction; legacy passes are labelled `legacy instruction`. Cache
+identity follows the rendered bytes: a pass that switches between a
+legacy instruction and a built-in render changes its cache key, while
+passes that never rendered keep their existing keys.
+
+A real `--check-config` run (trimmed) shows the resolved languages,
+effective policy values, section origins, and the exact final
+instruction, and warns about globals a legacy pass cannot use:
+
+```text
+$ l2l -c l2l.toml --check-config
+api.base_url: https://openrouter.ai/api/v1
+api.model: z-ai/glm-5.3-flash
+target_language: English (scripts: Latin)
+source_language: Chinese
+pass 1/2 [translate]: mode=chunk ascii=False ensure_paragraphs=False \
+  ... style=formality:preserve honorifics:keep register_fidelity:preserve \
+  prompt=built-in role=translator
+  output: paragraphs=approximate maximum_characters=900 unit_tolerance=1 pass_tolerance=1
+  prompt sections: role=built-in, task=built-in, languages=built-in, \
+    source_guidance=built-in, target_guidance=built-in, accuracy=global-inline, \
+    fluency=built-in, style=built-in, context_handling=built-in, output_rules=built-in
+  prompt omitted sections: none
+  instruction text:
+    You are a professional literary translator of fiction.
+    ...
+    Translate from Chinese into English.
+    ...
+    Keep the paragraph structure close to the source.
+    Keep each output paragraph to at most 900 characters.
+pass 2/2 [polish]: mode=chunk ... prompt=legacy instruction
+  output: paragraphs=exact maximum_characters=unset unit_tolerance=unset pass_tolerance=unset
+warning: global prompt section override(s) accuracy do not apply to the legacy pass [polish]
+warning: global output settings do not apply to the pass [polish]
+```
+
+### Prompt section overrides
+
+`[prompts]` (global) and `[pass.prompts]` (per pass) replace individual
+sections of the built-in prompts without giving up the rest of the
+assembly:
+
+```toml
+[prompts]
+accuracy = "Inline replacement prose."
+fluency = { file = "prompts/fluency.txt" }
+
+[[pass]]
+name = "translate"
+
+[pass.prompts]
+style = "Use short sentences for a young-adult audience."
+accuracy = ""
+```
+
+A plain string is always inline text, even when a file of the same name
+exists. An inline table must have exactly one key, `file`, whose value
+is a non-empty path resolved relative to the config file that declares
+it and read once at startup; missing, unreadable, empty, and
+whitespace-only files fail the run. A non-empty value has its outer
+whitespace stripped. An exactly empty string (`""`) deliberately removes
+the static built-in text of that section and is the only removal
+spelling; a whitespace-only value is an error.
+
+Overrides replace only the static built-in portion. Generated policy
+text (paragraph structure rules, language and style guidance) stays in
+place in canonical order, so deleting or replacing `output_rules` or
+`source_guidance` cannot disable a mechanical check or derived guidance.
+
+Layering is field-by-field: the selected config file wins over the user
+config file, and a `[pass.prompts]` member wins over the merged global
+value for that section without resetting unrelated global entries.
+Global overrides apply to built-in rendered passes only: a per-pass
+`[pass.prompts]` table on a pass with an explicit `instruction` (or on
+an `update_glossary` pass) is a config error, and global overrides on
+legacy passes produce one warning per unaffected pass. An empty override
+that removes nothing (because the built-in static text of that section
+is already empty for that pass) warns naming the section and pass. The
+override roles are translator, reviewer, and analyser; the dedicated
+glossary extraction and ASCII fix templates cannot be targeted.
+
+`--check-config` shows the effective origin of every section
+(`built-in`, `global-inline`, `global-file`, `pass-inline`, `pass-file`)
+together with the exact final instruction.
+
+### Output policy
+
+The optional top-level `[output]` table (and `[pass.output]` after a
+`[[pass]]`) controls how a built-in translator or reviewer pass shapes
+and checks its output. Each knob is parsed once and drives both the
+prompt contract and the mechanical validator, so the two can never
+disagree:
+
+- `paragraphs` (`"exact"` default, `"approximate"`) - `exact` renders
+  "keep the source's paragraph structure exactly" and, unless
+  `ensure_paragraphs` was set explicitly, uses the legacy defaults
+  (chunk validation disabled, paragraph mode checked exactly);
+  `approximate` renders "keep the paragraph structure close to the
+  source" and uses tolerance 1 for text-unit and whole-pass checks,
+  including paragraph mode. An explicit `ensure_paragraphs` (pass,
+  `[options]`, or CLI) always wins over the output-derived default.
+- `maximum_characters` (unset by default) - a positive integer that
+  renders "Keep each output paragraph to at most N characters." and
+  makes the unit validator reject any output paragraph longer than N
+  code points, naming the 1-based paragraph index, actual length, and
+  limit in the repair feedback.
+
+Values merge field-wise like style settings: defaults, then the user
+config, then the selected config, then the active pass. Per-pass output
+on a pass with an explicit `instruction`, an `analysis` pass, or an
+`update_glossary` pass is a config error; global output settings unused
+by any built-in pass warn. The effective values (`paragraphs`,
+`maximum_characters`, unit and pass tolerances) appear in
+`--check-config` next to the rendered instruction, and the resolved
+policy is part of the cache key, so a reply accepted under an old
+tolerance or limit is never reused under a stricter one.
+
+### Language-derived guidance and style policy
+
+Built-in translator and reviewer prompts include generated guidance,
+placed deterministically inside its named section:
+
+- `target_guidance` names regional conventions (`en-AU`, `en-GB`, and
+  `en-US` render "Use ... spelling and conventions."; other regions and
+  bare `en` emit nothing rather than guessing) and, for a recognized
+  target with known scripts, "Write the translation in the ... script".
+- `source_guidance` is selected from the parsed base language: Chinese
+  (omitted subjects, vocatives, idiom force, pinyin checked syllable by
+  syllable, tilde and repetition handling), Japanese (Hepburn, name
+  order, honorific policy, onomatopoeia), other recognized languages
+  (idiom-by-meaning, no calques, consistent renderings for
+  untranslatable terms), and `mixed` (identify each passage). `auto` and
+  unknown languages get no invented preset.
+- `style` carries the resolved style policy: a register-fidelity rule
+  (always emitted) and, when `formality` is not `preserve`, a register
+  sentence using an explicit table for Japanese 敬体/常体 and
+  fr/de/es/ru pronoun choices.
+
+The optional top-level `[style]` table (and `[pass.style]` after a
+`[[pass]]`) has the closed keys `formality` (`preserve` default,
+`formal`, `informal`), `honorifics` (`keep` default, `drop`, `titles` -
+natural English titles instead of romanized suffixes), and
+`register_fidelity` (`preserve` default, `soften`, which permits
+reducing vulgarity, scorn, or sarcasm while preserving intent). Values
+merge field-wise: defaults, then the user config, then the selected
+config, then the active pass. `honorifics` guidance is emitted only for
+Japanese or Korean sources; an explicitly nondefault value elsewhere
+warns as unused. Global style settings unused by any translator or
+reviewer pass also warn. Per-pass style is an error on legacy, analysis,
+and `update_glossary` passes. Section overrides replace only static
+text: an empty `source_guidance`, `target_guidance`, or `style` override
+leaves the generated guidance in place (and warns that it removes
+nothing).
 
 Modes:
 
@@ -319,14 +499,14 @@ Modes:
   with the updated entries. Existing entries always win: an extracted
   entry whose `original` already exists is discarded (Chinese names have
   many valid renderings and pronouns are context-dependent), so place an
-  `update_glossary` pass before the passes that translate. The extraction
-  call is cached per document, independent of the current glossary
-  contents, so re-running the same document reuses the cached reply
-  instead of calling the model again. The updated
-  glossary flows into the system prompts of all later passes in the same
-  run. The pass's `instruction` is ignored; set `target_language` (or
-  rely on the global `target_language` or `--target-language`) to name
-  the target language for the extraction.
+  `update_glossary` pass before the passes that translate. The
+  extraction call is cached per document, independent of the current
+  glossary contents, so re-running the same document reuses the cached
+  reply instead of calling the model again. The updated glossary flows
+  into the system prompts of all later passes in the same run. The
+  pass's `instruction` is ignored; set `target_language` (or rely on the
+  global `target_language` or `--target-language`) to name the target
+  language for the extraction.
 
 A typical multi-pass setup pairs an `analysis` pass with a `chunk` pass.
 
@@ -342,7 +522,12 @@ A glossary file is a JSON array of entry objects with fixed fields:
     "pronouns": "she/her",
     "type": "character"
   },
-  {"original": "金陵", "translated": "Nanjing", "pronouns": null, "type": "place"}
+  {
+    "original": "金陵",
+    "translated": "Nanjing",
+    "pronouns": null,
+    "type": "place"
+  }
 ]
 ```
 
@@ -353,7 +538,6 @@ A glossary file is a JSON array of entry objects with fixed fields:
 - `pronouns` - the pronouns for characters, or `null`.
 - `type` (required) - one of `"character"`, `"place"`, `"other"`;
   omitted `type` fields in existing files are read as `"other"`.
-
 
 ### Target language and script checks
 

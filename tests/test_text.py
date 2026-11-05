@@ -489,3 +489,16 @@ def test_unit_no_source_message_reports_the_pass_through() -> None:
     assert unit_no_source_message("polish", 2, 5) == (
         "l2l: [polish] unit 2/5 has no matching source; passing it through unchanged"
     )
+
+
+def test_unit_output_problem_enforces_maximum_characters() -> None:
+    settings = build_settings()
+    assert unit_output_problem("你好。", "short", settings, None, 10) == NOTHING
+    assert unit_output_problem("你好。", "x" * 10, settings, None, 10) == NOTHING
+    over = unit_output_problem("你好。", "x" * 11, settings, None, 10)
+    assert isinstance(over, Just)
+    assert over.value == "paragraph 1 has 11 characters but the limit is at most 10"
+    output = "short\n\n" + "y" * 21 + "\n\n" + "z" * 31
+    problem = unit_output_problem("你好。", output, settings, None, 20)
+    assert isinstance(problem, Just)
+    assert problem.value == "paragraph 2 has 21 characters but the limit is at most 20"

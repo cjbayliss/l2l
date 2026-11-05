@@ -73,7 +73,9 @@ def ascii_fix_llm(
             "ascii-fix",
             pass_definition.name,
             normalized_language_name(
-                effective_target_language(run_context.target_language, pass_definition)
+                effective_target_language(
+                    run_context.target_language, pass_definition.target_language
+                )
             ),
             run_context.settings.ascii_fix_instruction,
         ),

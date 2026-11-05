@@ -1,8 +1,8 @@
 target_language = "English"
+source_language = "Chinese"
 
 [api]
 base_url = "https://openrouter.ai/api/v1"
-api_key = "sk-..."
 model = "z-ai/glm-5.3-flash"
 timeout = 120.0
 max_tokens = 100000
@@ -14,16 +14,13 @@ stop = ["END"]
 [[pass]]
 name = "analyse"
 mode = "analysis"
-instruction_file = "../prompts/zh2en-analyse.txt"
 [pass.params]
 reasoning.effort = "high"
 
 [[pass]]
 name = "translate"
 ascii = true
-ensure_paragraphs = 2
 retranslate_untranslated = true
-instruction_file = "../prompts/zh2en-translate.txt"
 mode = "chunk"
 [pass.params]
 reasoning.effort = "high"
@@ -31,9 +28,7 @@ reasoning.effort = "high"
 [[pass]]
 name = "review"
 ascii = true
-ensure_paragraphs = 2
 retranslate_untranslated = true
-instruction_file = "../prompts/zh2en-review.txt"
 mode = "chunk"
 [pass.params]
 reasoning.effort = "high"

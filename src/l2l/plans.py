@@ -13,11 +13,7 @@ from l2l.glossary import (
     render_glossary_block,
     untranslated_glossary_entries,
 )
-from l2l.languages import (
-    expected_source_scripts,
-    scripts_description,
-    source_language_description,
-)
+from l2l.languages import expected_source_scripts, scripts_description
 from l2l.monads import IO, NOTHING, Err, Just, Maybe, Ok, Result
 from l2l.settings import (
     PassDefinition,
@@ -39,6 +35,7 @@ from l2l.text import (
     non_ascii_sample,
     regroup_by_plan,
     separator_at,
+    split_paragraphs,
 )
 
 
@@ -47,10 +44,22 @@ def verbose_log(run_context: Context, message: str) -> IO[None]:
 
 
 def unit_output_problem(
-    source_text: str, output: str, settings: Settings, tolerance: int | None
+    source_text: str,
+    output: str,
+    settings: Settings,
+    tolerance: int | None,
+    maximum_characters: int | None = None,
 ) -> Maybe[str]:
     if not output.strip():
         return Just("the reply was empty")
+
+    if maximum_characters is not None:
+        for index, paragraph in enumerate(split_paragraphs(output)[0], start=1):
+            if len(paragraph) > maximum_characters:
+                return Just(
+                    "paragraph %d has %d characters but the limit is "
+                    "at most %d" % (index, len(paragraph), maximum_characters)
+                )
 
     if tolerance is not None:
         expected = count_paragraphs(source_text)
@@ -125,14 +134,6 @@ def script_mismatch_problem(
         "the reply is in the source language (%s script) instead of the "
         "draft's language" % scripts_description((output_script,))
     )
-
-
-def instruction_with_languages(
-    instruction: str, source_language: str, target_language: str
-) -> str:
-    return instruction.replace(
-        "{source_language}", source_language_description(source_language)
-    ).replace("{target_language}", target_language)
 
 
 def target_script_problem(
@@ -581,7 +582,9 @@ def plan_unit_calls(
         pass_definition,
         glossary,
         retry_attempt,
-        effective_target_language(run_context.target_language, pass_definition),
+        effective_target_language(
+            run_context.target_language, pass_definition.target_language
+        ),
         run_context.source_language,
     )
     flat_plan = tuple(chain.from_iterable(plan))
@@ -664,7 +667,9 @@ def plan_retranslation_calls(
     call_salt = retranslation_salt(
         pass_definition,
         glossary,
-        effective_target_language(run_context.target_language, pass_definition),
+        effective_target_language(
+            run_context.target_language, pass_definition.target_language
+        ),
         run_context.source_language,
     )
 

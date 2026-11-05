@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal
 
@@ -10,6 +10,18 @@ from l2l.glossary import (
     entries_to_json_text,
 )
 from l2l.languages import normalized_language_name, normalized_source_language
+from l2l.prompts import (
+    ASCII_FIX_INSTRUCTION_TEXT,
+    GLOSSARY_EXTRACTION_INSTRUCTION_TEXT,
+    OutputPolicy,
+    OutputPolicyPatch,
+    PromptRole,
+    PromptSectionName,
+    PromptSectionOrigin,
+    PromptSectionOverride,
+    StylePolicy,
+    StylePolicyPatch,
+)
 from l2l.text import CACHE_SALT_VERSION
 
 
@@ -44,6 +56,34 @@ class PassDefinition:
     retranslate_untranslated: bool | None = None
     target_language: str | None = None
     include_types: tuple[str, ...] = ()
+    style: StylePolicy = field(default_factory=StylePolicy)
+    output: OutputPolicy = field(default_factory=OutputPolicy)
+    unit_paragraph_tolerance: int | None = None
+    pass_paragraph_tolerance: int | None = None
+    prompt_role: PromptRole | None = None
+    prompt_sections: tuple[PromptSectionName, ...] = ()
+    prompt_omitted_sections: tuple[PromptSectionName, ...] = ()
+    prompt_section_origins: Mapping[PromptSectionName, PromptSectionOrigin] = (
+        MappingProxyType({})
+    )
+
+
+@dataclass(frozen=True)
+class PassDraft:
+    name: str
+    mode: PassMode
+    instruction: str | None
+    parameters: Mapping[str, Any]
+    model: str | None
+    ascii: bool | None
+    ensure_paragraphs: bool | int | None = None
+    retranslate_untranslated: bool | None = None
+    target_language: str | None = None
+    include_types: tuple[str, ...] = ()
+    prompts: Mapping[PromptSectionName, PromptSectionOverride] = MappingProxyType({})
+    style_patch: StylePolicyPatch = field(default_factory=StylePolicyPatch)
+    output_patch: OutputPolicyPatch = field(default_factory=OutputPolicyPatch)
+    ensure_paragraphs_explicit: bool | int | None = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +109,7 @@ class OptionDefaults:
     ascii: bool = False
     ensure_paragraphs: bool | int = False
     retranslate_untranslated: bool = False
+    ensure_paragraphs_explicit: bool = False
 
 
 @dataclass(frozen=True)
@@ -104,6 +145,7 @@ class Setup:
     ensure_paragraphs: bool | int
     target_language: str
     source_language: str
+    config_warnings: tuple[str, ...] = ()
     glossary_paths: tuple[str, ...] = ()
     glossary_entries: tuple[GlossaryEntry, ...] = ()
 
@@ -120,23 +162,9 @@ def build_settings() -> Settings:
         retry_base_delay=1.0,
         retry_cap=30.0,
         provider_block_attempts=8,
-        glossary_extraction_instruction="""
-You extract glossary entries from source text. Find named and
-speaking characters (assign pronouns only where they are meaningful and
-the character can be referred to pronominally) and place names. Reply
-with a JSON object {"entries": [...]}: each entry has "original"
-holding the exact source name, "translated" with the rendering in the
-target language (or null when unknown), "pronouns" with the pronouns
-(or null), and "type" which is one of "character", "place", "other".
-Output JSON only: no markdown fences, no commentary. The target
-language is named in the user message.
-""",
+        glossary_extraction_instruction=GLOSSARY_EXTRACTION_INSTRUCTION_TEXT,
         sentence_boundary_characters="。！？…⋯!?；;\n؟؛।॥։።",
-        ascii_fix_instruction="""
-This paragraph failed to be fully translated or contains non-ASCII
-characters. Please analyse it and only output a clean translation that
-uses ASCII characters only.
-""",
+        ascii_fix_instruction=ASCII_FIX_INSTRUCTION_TEXT,
         ascii_character_map=MappingProxyType(
             {
                 "\u00a0": " ",
@@ -207,6 +235,8 @@ PASS_KEYS = (
     "params",
     "target_language",
     "include_types",
+    "prompts",
+    "style",
 )
 
 
@@ -277,11 +307,11 @@ def salt(*parts: str) -> str:
 
 
 def effective_target_language(
-    global_target_language: str, pass_definition: PassDefinition
+    global_target_language: str, pass_target_language: str | None
 ) -> str:
     return (
-        pass_definition.target_language
-        if pass_definition.target_language is not None
+        pass_target_language
+        if pass_target_language is not None
         else global_target_language
     )
 
@@ -296,6 +326,23 @@ def glossary_salt_component(
 
         case _:
             return entries_to_json_text(glossary)
+
+
+def output_policy_salt_component(pass_definition: PassDefinition) -> str:
+    if pass_definition.prompt_role is None:
+        return ""
+
+    policy_values = (
+        ("unit_tolerance", pass_definition.unit_paragraph_tolerance),
+        ("pass_tolerance", pass_definition.pass_paragraph_tolerance),
+        ("maximum_characters", pass_definition.output.maximum_characters),
+    )
+    return salt(
+        *(
+            "%s=%s" % (label, "none" if value is None else value)
+            for label, value in policy_values
+        )
+    )
 
 
 def pass_salt(
@@ -313,6 +360,10 @@ def pass_salt(
         normalized_source_language(source_language),
         glossary_salt_component(pass_definition, glossary),
     )
+    output_component = output_policy_salt_component(pass_definition)
+    if output_component:
+        base = salt(base, output_component)
+
     return salt(base, "retry%d" % retry_attempt) if retry_attempt else base
 
 

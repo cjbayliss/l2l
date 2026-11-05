@@ -94,7 +94,6 @@ from l2l.plans import (
     build_pass_user,
     build_unit_retry_user,
     glossary_term_problem,
-    instruction_with_languages,
     pass_chunk_plans,
     plan_information_message,
     plan_retranslation_calls,
@@ -106,11 +105,11 @@ from l2l.plans import (
     unit_output_problem,
     verbose_log,
 )
+from l2l.prompts import instruction_with_languages
 from l2l.settings import (
     PassDefinition,
     PassMode,
     effective_target_language,
-    paragraph_tolerance,
     pass_salt,
     resolve_call_settings,
 )
@@ -208,7 +207,9 @@ def run_analysis(
     instruction = instruction_with_languages(
         pass_definition.instruction,
         run_context.source_language,
-        effective_target_language(run_context.target_language, pass_definition),
+        effective_target_language(
+            run_context.target_language, pass_definition.target_language
+        ),
     )
     return io_result_map(
         chat(
@@ -233,7 +234,9 @@ def analyze_document(
     instruction = instruction_with_languages(
         pass_definition.instruction,
         run_context.source_language,
-        effective_target_language(run_context.target_language, pass_definition),
+        effective_target_language(
+            run_context.target_language, pass_definition.target_language
+        ),
     )
     budget = max(
         run_context.config.maximum_tokens
@@ -276,7 +279,7 @@ def pass_cache_key(
                 pass_definition,
                 glossary,
                 effective_language=effective_target_language(
-                    run_context.target_language, pass_definition
+                    run_context.target_language, pass_definition.target_language
                 ),
                 source_language=run_context.source_language,
             ),
@@ -499,7 +502,7 @@ def retranslation_check(
 ) -> RetranslationCheck:
     work_paragraphs, separators = split_paragraphs(text)
     target_language = effective_target_language(
-        run_context.target_language, pass_definition
+        run_context.target_language, pass_definition.target_language
     )
     target_scripts = expected_target_scripts(target_language)
     source_script_name = source_script(source_paragraphs)
@@ -1043,7 +1046,7 @@ def run_update_glossary_pass(
         )
 
     target_language = effective_target_language(
-        run_context.target_language, pass_definition
+        run_context.target_language, pass_definition.target_language
     )
     return io_bind(
         verbose_log(
@@ -1064,15 +1067,6 @@ def run_update_glossary_pass(
             ),
         ),
     )
-
-
-def unit_paragraph_tolerance(pass_definition: PassDefinition) -> int | None:
-    match pass_definition.mode:
-        case "paragraph":
-            return 0
-
-        case _:
-            return paragraph_tolerance(pass_definition.ensure_paragraphs)
 
 
 def unit_result_from_repair(
@@ -1097,7 +1091,7 @@ def run_unit(
     run_context = environment.run_context
     pass_definition = environment.pass_definition
     target_language = effective_target_language(
-        run_context.target_language, pass_definition
+        run_context.target_language, pass_definition.target_language
     )
     target_scripts = expected_target_scripts(target_language)
     unit_glossary_entries = select_glossary_entries_for_texts(
@@ -1111,7 +1105,8 @@ def run_unit(
                 call.source_chunk,
                 output,
                 run_context.settings,
-                unit_paragraph_tolerance(pass_definition),
+                pass_definition.unit_paragraph_tolerance,
+                pass_definition.output.maximum_characters,
             ),
             maybe_or(
                 glossary_term_problem(output, unit_glossary_entries),
@@ -1548,7 +1543,7 @@ def run_text_pass(
     state: State,
     started_at: float,
 ) -> IO[StateResult]:
-    tolerance = paragraph_tolerance(execution.pass_definition.ensure_paragraphs)
+    tolerance = execution.pass_definition.pass_paragraph_tolerance
     if tolerance is None:
         return run_pass_attempt(execution, state, started_at)
 

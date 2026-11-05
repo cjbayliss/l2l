@@ -46,7 +46,9 @@ def source_report_line(text: str, source_paragraphs: tuple[str, ...]) -> str:
 def target_language_report_note(
     run_context: Context, pass_definition: PassDefinition
 ) -> str:
-    language = effective_target_language(run_context.target_language, pass_definition)
+    language = effective_target_language(
+        run_context.target_language, pass_definition.target_language
+    )
     scripts = expected_target_scripts(language)
     return "target language %s (scripts: %s)" % (
         language,
@@ -248,7 +250,9 @@ def setup_warnings(setup: Setup) -> tuple[str, ...]:
         )
         for number, pass_definition in enumerate(setup.passes, 1)
         for language in (
-            effective_target_language(setup.target_language, pass_definition),
+            effective_target_language(
+                setup.target_language, pass_definition.target_language
+            ),
         )
         if pass_definition.mode != "update_glossary"
         and pass_definition.instruction.strip()
@@ -270,7 +274,9 @@ def setup_warnings(setup: Setup) -> tuple[str, ...]:
         and script
         and script not in target_scripts
     )
-    return unknown_language_warnings + instruction_warnings + glossary_warnings
+    return setup.config_warnings + (
+        unknown_language_warnings + instruction_warnings + glossary_warnings
+    )
 
 
 def api_setup_lines(config: Config) -> tuple[str, ...]:
@@ -288,14 +294,46 @@ def api_setup_lines(config: Config) -> tuple[str, ...]:
     )
 
 
+def prompt_label(pass_definition: PassDefinition) -> str:
+    return (
+        "built-in role=%s" % pass_definition.prompt_role
+        if pass_definition.prompt_role is not None
+        else "legacy instruction"
+    )
+
+
+def prompt_metadata_lines(pass_definition: PassDefinition) -> tuple[str, ...]:
+    if pass_definition.prompt_role is None:
+        return ()
+
+    included = ", ".join(
+        "%s=%s" % (name, pass_definition.prompt_section_origins.get(name, "built-in"))
+        for name in pass_definition.prompt_sections
+    )
+    omitted = (
+        ", ".join(pass_definition.prompt_omitted_sections)
+        if pass_definition.prompt_omitted_sections
+        else "none"
+    )
+    return (
+        "  prompt sections: %s" % included,
+        "  prompt omitted sections: %s" % omitted,
+        "  instruction text:",
+        *("    %s" % line for line in pass_definition.instruction.splitlines()),
+    )
+
+
 def pass_setup_lines(
     setup: Setup, number: int, pass_definition: PassDefinition
 ) -> tuple[str, ...]:
-    language = effective_target_language(setup.target_language, pass_definition)
+    language = effective_target_language(
+        setup.target_language, pass_definition.target_language
+    )
     summary = (
         "pass %d/%d [%s]: mode=%s ascii=%s ensure_paragraphs=%s "
         "retranslate_untranslated=%s model=%s instruction=%d chars "
-        "target_language=%s scripts=%s uses_target_language_placeholder=%s"
+        "target_language=%s scripts=%s uses_target_language_placeholder=%s "
+        "style=formality:%s honorifics:%s register_fidelity:%s prompt=%s"
         % (
             number,
             len(setup.passes),
@@ -309,6 +347,10 @@ def pass_setup_lines(
             language,
             scripts_description(expected_target_scripts(language)),
             "{target_language}" in pass_definition.instruction,
+            pass_definition.style.formality,
+            pass_definition.style.honorifics,
+            pass_definition.style.register_fidelity,
+            prompt_label(pass_definition),
         )
     )
     parameters = (
@@ -316,7 +358,17 @@ def pass_setup_lines(
         if pass_definition.parameters
         else ()
     )
-    return (summary, *parameters)
+    output_values = (
+        ("paragraphs", pass_definition.output.paragraphs),
+        ("maximum_characters", pass_definition.output.maximum_characters),
+        ("unit_tolerance", pass_definition.unit_paragraph_tolerance),
+        ("pass_tolerance", pass_definition.pass_paragraph_tolerance),
+    )
+    output_line = "  output: %s" % " ".join(
+        "%s=%s" % (label, "unset" if value is None else value)
+        for label, value in output_values
+    )
+    return (summary, *parameters, output_line, *prompt_metadata_lines(pass_definition))
 
 
 def glossary_setup_lines(setup: Setup) -> tuple[str, ...]:

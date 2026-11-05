@@ -986,7 +986,17 @@ def test_paragraph_pass_validation_modes() -> None:
         )
         run_context = make_context(console, http.open, best_effort=best_effort)
         stdout = io.StringIO()
-        merged = PassDefinition("translate", "T.", "paragraph", {}, None, False, True)
+        merged = PassDefinition(
+            "translate",
+            "T.",
+            "paragraph",
+            {},
+            None,
+            False,
+            True,
+            unit_paragraph_tolerance=0,
+            pass_paragraph_tolerance=0,
+        )
         code = run_pipeline(run_context, (merged,), "你好。", 0.0, stdout).run()
         assert code == expected_code
         assert stdout.getvalue() == expected_output
@@ -1409,7 +1419,17 @@ def test_paragraph_mode_stays_strict_despite_tolerance() -> None:
     )
     run_context = make_context(console, http.open)
     stdout = io.StringIO()
-    merged = PassDefinition("translate", "T.", "paragraph", {}, None, False, 2)
+    merged = PassDefinition(
+        "translate",
+        "T.",
+        "paragraph",
+        {},
+        None,
+        False,
+        2,
+        unit_paragraph_tolerance=0,
+        pass_paragraph_tolerance=2,
+    )
     code = run_pipeline(run_context, (merged,), "你好。", 0.0, stdout).run()
     assert code == 0
     assert stdout.getvalue() == "One.\n"

@@ -17,13 +17,13 @@ from l2l.plans import (
     TRANSLATED_CONTEXT_TOKEN_BUDGET,
     earlier_passes_translated_text,
     glossary_term_problem,
-    instruction_with_languages,
     plan_retranslation_calls,
     plan_unit_calls,
     resolve_work_groups,
     suffix_within_token_budget,
     target_script_problem,
 )
+from l2l.prompts import instruction_with_languages
 from l2l.report import plan_report
 from l2l.settings import PassDefinition
 from l2l.text import estimate_tokens, unit_separators

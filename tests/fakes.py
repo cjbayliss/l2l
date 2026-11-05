@@ -27,7 +27,12 @@ from l2l.monads import (
     read_reference,
     write_reference,
 )
-from l2l.settings import Config, PassDefinition, build_settings
+from l2l.settings import (
+    Config,
+    PassDefinition,
+    build_settings,
+    paragraph_tolerance,
+)
 
 
 def chunk_pass(
@@ -45,6 +50,8 @@ def chunk_pass(
         ascii_output,
         ensure_paragraphs,
         retranslate_untranslated,
+        unit_paragraph_tolerance=paragraph_tolerance(ensure_paragraphs),
+        pass_paragraph_tolerance=paragraph_tolerance(ensure_paragraphs),
     )
 
 
@@ -60,6 +67,8 @@ def paragraph_pass(
         False,
         False,
         retranslate_untranslated,
+        unit_paragraph_tolerance=0,
+        pass_paragraph_tolerance=None,
     )
 
 

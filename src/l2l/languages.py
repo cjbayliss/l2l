@@ -92,6 +92,17 @@ def expected_target_scripts(target_language: str) -> tuple[str, ...]:
     return expected_language_scripts(target_language)
 
 
+def language_base_and_region(
+    language_name_or_tag: str,
+) -> tuple[str, str] | None:
+    language = language_from_name_or_tag(language_name_or_tag)
+    if language is None or language.language is None:
+        return None
+
+    territory = language.territory
+    return (str(language.language), str(territory) if territory else "")
+
+
 def expected_source_scripts(source_language: str) -> tuple[str, ...]:
     normalized = normalized_source_language(source_language)
     if normalized in (AUTO_SOURCE_LANGUAGE, MIXED_SOURCE_LANGUAGE):
