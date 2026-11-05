@@ -240,6 +240,7 @@ def make_context(
     glossary_entries: tuple[GlossaryEntry, ...] = (),
     glossary_update_path: str | None = None,
     target_language: str = "English",
+    source_language: str = "auto",
 ) -> Context:
     config = Config(
         base_url="http://endpoint.test/v1",
@@ -265,6 +266,7 @@ def make_context(
         glossary_entries=glossary_entries,
         glossary_update_path=glossary_update_path,
         target_language=target_language,
+        source_language=source_language,
     )
 
 

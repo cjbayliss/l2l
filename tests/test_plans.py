@@ -17,7 +17,7 @@ from l2l.plans import (
     TRANSLATED_CONTEXT_TOKEN_BUDGET,
     earlier_passes_translated_text,
     glossary_term_problem,
-    instruction_with_target_language,
+    instruction_with_languages,
     plan_retranslation_calls,
     plan_unit_calls,
     resolve_work_groups,
@@ -237,13 +237,32 @@ def test_glossary_term_problem_flags_untranslated_terms() -> None:
     assert not listed_all, "the message should sample, not list every term"
 
 
-def test_instruction_with_target_language_substitutes_only_the_placeholder() -> None:
+def test_instruction_with_languages_substitutes_both_placeholders() -> None:
     assert (
-        instruction_with_target_language(
-            "Translate to {target_language}. Keep JSON braces {like: this}.",
+        instruction_with_languages(
+            "Translate {source_language} to {target_language}. "
+            "Keep JSON braces {like: this}.",
             "Chinese",
+            "English",
         )
-        == "Translate to Chinese. Keep JSON braces {like: this}."
+        == "Translate Chinese to English. Keep JSON braces {like: this}."
+    )
+    assert (
+        instruction_with_languages(
+            "Translate {source_language} to {target_language}.",
+            "auto",
+            "English",
+        )
+        == "Translate the source language (identify it from the text) to English."
+    )
+    assert (
+        instruction_with_languages(
+            "Translate {source_language} to {target_language}.",
+            "mixed",
+            "English",
+        )
+        == "Translate the source languages (identify the language of each "
+        "passage) to English."
     )
 
 
@@ -383,3 +402,56 @@ def test_translated_context_skips_paragraphs_over_token_budget() -> None:
     )
     assert calls[1].translated_context == ()
     assert calls[1].context == (oversized,)
+
+
+def test_plan_keys_differ_by_source_language_but_not_auto_aliases() -> None:
+    console, _ = make_console()
+    plan = (("一。",),)
+    separators = unit_separators(plan, ("s1",))
+    auto_context = make_context(console, FakeHttp([]).open)
+    chinese_context = make_context(
+        console, FakeHttp([]).open, source_language="Chinese"
+    )
+    guess_context = make_context(console, FakeHttp([]).open, source_language="guess")
+    mixed_context = make_context(console, FakeHttp([]).open, source_language="mixed")
+    auto_calls = plan_unit_calls(
+        auto_context, paragraph_pass(), plan, plan, separators, None
+    )
+    chinese_calls = plan_unit_calls(
+        chinese_context, paragraph_pass(), plan, plan, separators, None
+    )
+    guess_calls = plan_unit_calls(
+        guess_context, paragraph_pass(), plan, plan, separators, None
+    )
+    mixed_calls = plan_unit_calls(
+        mixed_context, paragraph_pass(), plan, plan, separators, None
+    )
+    assert auto_calls[0].key != chinese_calls[0].key
+    assert guess_calls[0].key == auto_calls[0].key
+    assert mixed_calls[0].key != auto_calls[0].key
+
+
+def test_retranslation_keys_differ_by_source_language() -> None:
+    console, _ = make_console()
+    sources = ("你好。",)
+    flagged = (0,)
+    separators = ("s1",)
+    auto_calls = plan_retranslation_calls(
+        make_context(console, FakeHttp([]).open),
+        paragraph_pass(),
+        sources,
+        sources,
+        flagged,
+        separators,
+        None,
+    )
+    chinese_calls = plan_retranslation_calls(
+        make_context(console, FakeHttp([]).open, source_language="Chinese"),
+        paragraph_pass(),
+        sources,
+        sources,
+        flagged,
+        separators,
+        None,
+    )
+    assert auto_calls[0].key != chinese_calls[0].key

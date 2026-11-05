@@ -119,6 +119,47 @@ def test_cli_target_language_overrides_config(tmp_path: Path) -> None:
     assert "target_language: French" in stdout
 
 
+def test_check_config_prints_source_language(tmp_path: Path) -> None:
+    code, stdout, _ = run_l2l(
+        tmp_path, ["-c", str(write_config(tmp_path)), "--check-config"]
+    )
+    assert code == 0
+    assert "source_language: auto" in stdout
+
+
+def test_cli_source_language_overrides_config_and_normalizes_aliases(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "with-source.toml"
+    config_path.write_text(
+        CONFIG_TEXT.replace(
+            'target_language = "English"\n',
+            'target_language = "English"\nsource_language = "Chinese"\n',
+        )
+    )
+    code, stdout, _ = run_l2l(
+        tmp_path,
+        ["-c", str(config_path), "--check-config", "--source-language", " MUL "],
+    )
+    assert code == 0
+    assert "source_language: mixed" in stdout
+
+    code, stdout, _ = run_l2l(
+        tmp_path, ["-c", str(config_path), "--check-config"]
+    )
+    assert code == 0
+    assert "source_language: Chinese" in stdout
+
+
+def test_cli_rejects_empty_source_language(tmp_path: Path) -> None:
+    code, _stdout, stderr = run_l2l(
+        tmp_path,
+        ["-c", str(write_config(tmp_path)), "--check-config", "--source-language", ""],
+    )
+    assert code == 2
+    assert "--source-language must be a non-empty string" in stderr
+
+
 def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
     code, stdout, stderr = run_l2l(
         tmp_path, ["-c", str(write_config(tmp_path)), "--check-config"]

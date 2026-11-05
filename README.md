@@ -98,6 +98,11 @@ Translation behaviour:
   `target_language` is set in the config file. Drives
   `{target_language}` prompt substitution, cache separation, glossary
   extraction, and target script validation for every pass.
+- `--source-language LANG` - source language; overrides
+  `source_language` in the config file. `auto` (the default, also
+  spelled `guess`, `detect`, or `und`) asks the model to identify the
+  source language, `mixed` (also `mul`) means the document genuinely
+  mixes source languages, and anything else names the source language.
 - `-P`, `--ensure-paragraphs` - check the paragraph count after each
   pass (see `ensure_paragraphs` under `[options]`).
 - `-b`, `--best-effort` - keep the last reply and continue when a unit
@@ -166,11 +171,12 @@ logged. Pass `--print-log-path` to print the log's path at startup.
 
 ## Configuration
 
-Configuration lives in a TOML file with a top-level `target_language`
-and up to three kinds of table:
+Configuration lives in a TOML file with a top-level `target_language`,
+an optional `source_language`, and up to three kinds of table:
 
 ```toml
 target_language = "English"
+source_language = "Chinese"
 
 [api]      # endpoint, key, model, limits, extra request parameters
 [[pass]]   # one or more passes, run in order
@@ -187,6 +193,16 @@ Han; Hangul and Han). Names that CLDR does not know are allowed: they
 disable script checks, fall back to the ASCII-letter heuristic, and
 produce a warning. Script reports use Unicode Script names such as
 `Latin`, `Han`, and `Cyrillic`.
+
+The optional top-level `source_language` (or `--source-language`) names
+the language the input text is written in. `auto` is the default and
+asserts nothing; aliases `guess`, `detect`, and `und` mean the same
+thing. `mixed` (alias `mul`) says the document genuinely mixes source
+languages. Any other value is kept as written, subject to the same
+name resolution as the target language: names CLDR does not know stay
+valid and simply disable language-derived reasoning. Precedence is
+`--source-language`, then the selected config file's
+`source_language`, then the user config file's, then `auto`.
 
 A minimal example:
 
@@ -359,6 +375,14 @@ by glossary extraction:
   `--target-language` cannot reuse a translation made for another
   language. Older cache entries become unreachable after the salt
   version changes.
+- The source language participates the same way: `{source_language}` is
+  substituted in instructions, the resolved value is salted into every
+  cache key beside the target language, and for an explicit recognized
+  source language the source-script heuristic uses its expected scripts
+  instead of the dominant script observed in the source text. `auto`
+  (the default) and `mixed` keep the observed-script fallback. Cache
+  entries written before this change are unreachable: the cache salt
+  version was bumped, which invalidates all existing entries.
 
 ### `[options]` - global toggles
 

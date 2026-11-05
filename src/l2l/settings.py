@@ -9,7 +9,7 @@ from l2l.glossary import (
     GlossaryEntry,
     entries_to_json_text,
 )
-from l2l.languages import normalized_language_name
+from l2l.languages import normalized_language_name, normalized_source_language
 from l2l.text import CACHE_SALT_VERSION
 
 
@@ -93,6 +93,7 @@ class Arguments:
     glossary: tuple[str, ...] = ()
     extract_glossary: str | None = None
     target_language: str | None = None
+    source_language: str | None = None
     no_structured_output: bool = False
 
 
@@ -102,6 +103,7 @@ class Setup:
     passes: tuple[PassDefinition, ...]
     ensure_paragraphs: bool | int
     target_language: str
+    source_language: str
     glossary_paths: tuple[str, ...] = ()
     glossary_entries: tuple[GlossaryEntry, ...] = ()
 
@@ -301,12 +303,14 @@ def pass_salt(
     glossary: tuple[GlossaryEntry, ...] = (),
     retry_attempt: int = 0,
     effective_language: str = "",
+    source_language: str = "",
 ) -> str:
     base = salt(
         CACHE_SALT_VERSION,
         pass_definition.name,
         pass_definition.instruction,
         normalized_language_name(effective_language),
+        normalized_source_language(source_language),
         glossary_salt_component(pass_definition, glossary),
     )
     return salt(base, "retry%d" % retry_attempt) if retry_attempt else base
@@ -316,8 +320,14 @@ def retranslation_salt(
     pass_definition: PassDefinition,
     glossary: tuple[GlossaryEntry, ...] = (),
     effective_language: str = "",
+    source_language: str = "",
 ) -> str:
     return salt(
-        pass_salt(pass_definition, glossary, effective_language=effective_language),
+        pass_salt(
+            pass_definition,
+            glossary,
+            effective_language=effective_language,
+            source_language=source_language,
+        ),
         "retranslate",
     )

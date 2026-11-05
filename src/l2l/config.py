@@ -22,7 +22,11 @@ from l2l.glossary import (
     merge_glossary_entries,
     parse_glossary_document,
 )
-from l2l.languages import expected_target_scripts, scripts_description
+from l2l.languages import (
+    expected_target_scripts,
+    normalized_source_language,
+    scripts_description,
+)
 from l2l.monads import (
     IO,
     Ok,
@@ -63,12 +67,14 @@ def validate_document(
         return Ok(None)
 
     unknown = sorted(
-        set(document) - {"api", "options", "pass", "glossary", "target_language"}
+        set(document)
+        - {"api", "options", "pass", "glossary", "target_language", "source_language"}
     )
     if unknown:
         return fail_config(
             "%s: unknown top-level key(s): %s (expected [api], [options], "
-            "glossary, target_language, [[pass]])" % (path, ", ".join(unknown))
+            "glossary, target_language, source_language, [[pass]])"
+            % (path, ", ".join(unknown))
         )
 
     glossary = document.get("glossary")
@@ -918,6 +924,33 @@ def command_line_target_language(
     return Ok(target_language.strip())
 
 
+def document_source_language(
+    path: str | None, document: dict[str, Any]
+) -> Result[str | None, TranslationError]:
+    source_language = document.get("source_language")
+    if source_language is None:
+        return Ok(None)
+
+    if not isinstance(source_language, str) or not source_language.strip():
+        return fail_config(
+            "%s: source_language must be a non-empty string" % (path or "config")
+        )
+
+    return Ok(source_language.strip())
+
+
+def command_line_source_language(
+    source_language: str | None,
+) -> Result[str | None, TranslationError]:
+    if source_language is None:
+        return Ok(None)
+
+    if not source_language.strip():
+        return fail_config("--source-language must be a non-empty string")
+
+    return Ok(source_language.strip())
+
+
 def require_target_language(
     target_language: str | None,
 ) -> Result[str, TranslationError]:
@@ -971,6 +1004,52 @@ def resolve_target_language(
             ),
         ),
         configured,
+    )
+
+
+def resolve_source_language(
+    command_line_value: str | None,
+    user_path: str,
+    user_document_result: DocumentResult,
+    selected_path: str | None,
+    selected_document_result: DocumentResult,
+) -> Result[str, TranslationError]:
+    def configured(
+        documents: tuple[dict[str, Any], dict[str, Any]],
+    ) -> Result[str | None, TranslationError]:
+        layers = tuple(
+            (path, document)
+            for path, document in (
+                (selected_path, documents[1]),
+                (user_path, documents[0]),
+            )
+            if document
+        )
+        return reduce(
+            lambda found, layer: result_bind(
+                found,
+                lambda value: (
+                    Ok(value)
+                    if value is not None
+                    else document_source_language(layer[0], layer[1])
+                ),
+            ),
+            layers,
+            command_line_source_language(command_line_value),
+        )
+
+    def normalized(value: str | None) -> Result[str, TranslationError]:
+        return Ok(normalized_source_language(value or "auto"))
+
+    return result_bind(
+        result_bind(
+            user_document_result,
+            lambda user_document: result_map(
+                selected_document_result,
+                lambda selected_document: (user_document, selected_document),
+            ),
+        ),
+        lambda documents: result_bind(configured(documents), normalized),
     )
 
 
@@ -1038,6 +1117,7 @@ def build_setup(
     config: Config,
     pair: Result[ResolvedPasses, TranslationError],
     target_language: str,
+    source_language: str,
     ensure_paragraphs_flag: bool = False,
 ) -> Result[Setup, TranslationError]:
     def with_options(resolved: ResolvedPasses) -> Result[Setup, TranslationError]:
@@ -1051,6 +1131,7 @@ def build_setup(
                 ),
                 ensure_paragraphs=effective,
                 target_language=target_language,
+                source_language=source_language,
             )
         )
 
@@ -1106,17 +1187,31 @@ def assemble_setup(
                     selected_document,
                 ),
                 lambda target_language: result_bind(
-                    build_setup(
-                        config,
-                        resolved,
-                        target_language,
-                        arguments.ensure_paragraphs,
+                    resolve_source_language(
+                        arguments.source_language,
+                        user_path,
+                        user_document,
+                        selected_path,
+                        selected_document,
                     ),
-                    lambda setup: result_bind(
-                        glossaries,
-                        lambda resolved_glossaries: require_glossary_for_update_passes(
-                            arguments.glossary,
-                            setup_with_glossary(setup, resolved_glossaries),
+                    lambda source_language: result_bind(
+                        build_setup(
+                            config,
+                            resolved,
+                            target_language,
+                            source_language,
+                            arguments.ensure_paragraphs,
+                        ),
+                        lambda setup: result_bind(
+                            glossaries,
+                            lambda resolved_glossaries: (
+                                require_glossary_for_update_passes(
+                                    arguments.glossary,
+                                    setup_with_glossary(
+                                        setup, resolved_glossaries
+                                    ),
+                                )
+                            ),
                         ),
                     ),
                 ),

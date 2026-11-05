@@ -296,12 +296,34 @@ def test_build_unit_retry_user_keeps_rejected_reply_after_the_source() -> None:
 
 
 def test_script_mismatch_problem() -> None:
-    problem = script_mismatch_problem("你好。", "Hello.", "你好。")
+    problem = script_mismatch_problem("你好。", "Hello.", "你好。", "Chinese")
     assert isinstance(problem, Just)
     assert "source language (Han script)" in problem.value
-    assert script_mismatch_problem("你好。", "Hello.", "World.") == NOTHING
-    assert script_mismatch_problem("你好。", "你好。", "你好。") == NOTHING
-    assert script_mismatch_problem("123", "Hi", "123") == NOTHING
+    assert script_mismatch_problem("你好。", "Hello.", "World.", "Chinese") == NOTHING
+    assert script_mismatch_problem("你好。", "你好。", "你好。", "Chinese") == NOTHING
+    assert script_mismatch_problem("123", "Hi", "123", "Chinese") == NOTHING
+
+
+def test_script_mismatch_problem_uses_expected_source_scripts() -> None:
+    explicit = script_mismatch_problem(
+        "こんにちは。", "Hello.", "こんにちは。", "Japanese"
+    )
+    assert isinstance(explicit, Just)
+    assert "Hiragana script" in explicit.value
+
+    auto = script_mismatch_problem("你好。", "Hello.", "你好。", "auto")
+    assert isinstance(auto, Just)
+    assert auto == script_mismatch_problem("你好。", "Hello.", "你好。", "mixed")
+
+    unknown = script_mismatch_problem("你好。", "Hello.", "你好。", "Zorblaxian")
+    assert unknown == auto
+
+    observed = script_mismatch_problem("你好。", "こんにちは。", "你好。", "Zorblaxian")
+    assert isinstance(observed, Just)
+    assert "Han script" in observed.value
+
+    same_script = script_mismatch_problem("你好。", "你好。", "你好。", "Zorblaxian")
+    assert same_script == NOTHING
 
 
 def test_cache_key_distinguishes_context() -> None:

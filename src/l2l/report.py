@@ -337,6 +337,7 @@ def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
         + (
             "target_language: %s (scripts: %s)"
             % (setup.target_language, scripts_description(global_scripts)),
+            "source_language: %s" % setup.source_language,
         )
         + tuple(
             line

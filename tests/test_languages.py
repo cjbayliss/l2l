@@ -1,7 +1,9 @@
 from l2l.languages import (
+    expected_source_scripts,
     expected_target_scripts,
     instruction_uses_target_language,
     normalized_language_name,
+    normalized_source_language,
     script_description,
     scripts_description,
 )
@@ -113,3 +115,23 @@ def test_instruction_uses_target_language() -> None:
     )
     assert not instruction_uses_target_language("Translate.", "English")
     assert not instruction_uses_target_language("Translate into German.", "English")
+
+
+def test_normalized_source_language_recognizes_aliases_only() -> None:
+    assert normalized_source_language(" Guess ") == "auto"
+    assert normalized_source_language("DETECT") == "auto"
+    assert normalized_source_language("und") == "auto"
+    assert normalized_source_language(" MUL ") == "mixed"
+    assert normalized_source_language("Mul") == "mixed"
+    assert normalized_source_language("Chinese (Simplified)") == "Chinese (Simplified)"
+    assert normalized_source_language(" zh-CN ") == "zh-CN"
+
+
+def test_expected_source_scripts_resolves_explicit_and_empty_specials() -> None:
+    assert expected_source_scripts("Chinese") == ("Hani",)
+    assert expected_source_scripts(" zh ") == ("Hani",)
+    assert expected_source_scripts("Zorblaxian") == ()
+    assert expected_source_scripts("auto") == ()
+    assert expected_source_scripts("guess") == ()
+    assert expected_source_scripts("mixed") == ()
+    assert expected_source_scripts(" MUL ") == ()

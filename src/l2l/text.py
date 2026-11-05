@@ -520,7 +520,7 @@ def cache_path(cache_directory: str, key: str) -> str:
     return os.path.join(cache_directory, key + ".txt")
 
 
-CACHE_SALT_VERSION = "5"
+CACHE_SALT_VERSION = "6"
 
 
 def cache_key(

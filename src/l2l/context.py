@@ -37,6 +37,7 @@ class Context:
     clock: Clock
     sleep: Sleep
     target_language: str
+    source_language: str
     stream: bool | None = None
     best_effort: bool = False
     glossary_entries: tuple[GlossaryEntry, ...] = ()

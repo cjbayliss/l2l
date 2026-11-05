@@ -94,7 +94,7 @@ from l2l.plans import (
     build_pass_user,
     build_unit_retry_user,
     glossary_term_problem,
-    instruction_with_target_language,
+    instruction_with_languages,
     pass_chunk_plans,
     plan_information_message,
     plan_retranslation_calls,
@@ -205,8 +205,9 @@ def run_analysis(
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
-    instruction = instruction_with_target_language(
+    instruction = instruction_with_languages(
         pass_definition.instruction,
+        run_context.source_language,
         effective_target_language(run_context.target_language, pass_definition),
     )
     return io_result_map(
@@ -229,8 +230,9 @@ def analyze_document(
     full_text: str,
     usage: Usage,
 ) -> IO[Result[Translated, TranslationError]]:
-    instruction = instruction_with_target_language(
+    instruction = instruction_with_languages(
         pass_definition.instruction,
+        run_context.source_language,
         effective_target_language(run_context.target_language, pass_definition),
     )
     budget = max(
@@ -276,6 +278,7 @@ def pass_cache_key(
                 effective_language=effective_target_language(
                     run_context.target_language, pass_definition
                 ),
+                source_language=run_context.source_language,
             ),
             overrides=parameters,
         ),
@@ -1114,7 +1117,12 @@ def run_unit(
                 glossary_term_problem(output, unit_glossary_entries),
                 maybe_or(
                     target_script_problem(output, target_language, target_scripts),
-                    script_mismatch_problem(call.source_chunk, call.work_chunk, output),
+                    script_mismatch_problem(
+                        call.source_chunk,
+                        call.work_chunk,
+                        output,
+                        run_context.source_language,
+                    ),
                 ),
             ),
         )
@@ -1160,8 +1168,9 @@ def run_unit(
             call.model,
             call.parameters,
             instruction_with_glossary(
-                instruction_with_target_language(
+                instruction_with_languages(
                     pass_definition.instruction,
+                    run_context.source_language,
                     target_language,
                 ),
                 unit_glossary_entries,

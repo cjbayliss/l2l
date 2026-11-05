@@ -41,6 +41,25 @@ def normalized_language_name(language: str) -> str:
 
 NON_LANGUAGE_CODES = frozenset({"mul", "und", "zxx"})
 
+AUTO_SOURCE_LANGUAGE = "auto"
+MIXED_SOURCE_LANGUAGE = "mixed"
+SOURCE_LANGUAGE_ALIASES: Mapping[str, str] = MappingProxyType(
+    {
+        "auto": AUTO_SOURCE_LANGUAGE,
+        "guess": AUTO_SOURCE_LANGUAGE,
+        "detect": AUTO_SOURCE_LANGUAGE,
+        "und": AUTO_SOURCE_LANGUAGE,
+        "mixed": MIXED_SOURCE_LANGUAGE,
+        "mul": MIXED_SOURCE_LANGUAGE,
+    }
+)
+
+
+def normalized_source_language(value: str) -> str:
+    stripped = value.strip()
+    alias = SOURCE_LANGUAGE_ALIASES.get(stripped.casefold())
+    return alias if alias is not None else stripped
+
 
 def language_from_name_or_tag(language_name_or_tag: str) -> Language | None:
     try:
@@ -57,8 +76,8 @@ def language_from_name_or_tag(language_name_or_tag: str) -> Language | None:
         return None
 
 
-def expected_target_scripts(target_language: str) -> tuple[str, ...]:
-    language = language_from_name_or_tag(target_language)
+def expected_language_scripts(language_name_or_tag: str) -> tuple[str, ...]:
+    language = language_from_name_or_tag(language_name_or_tag)
     if language is None or language.to_tag().split("-")[0] in NON_LANGUAGE_CODES:
         return ()
 
@@ -67,6 +86,31 @@ def expected_target_scripts(target_language: str) -> tuple[str, ...]:
         return ()
 
     return SCRIPT_VARIANT_COMPONENTS.get(script_code, (script_code,))
+
+
+def expected_target_scripts(target_language: str) -> tuple[str, ...]:
+    return expected_language_scripts(target_language)
+
+
+def expected_source_scripts(source_language: str) -> tuple[str, ...]:
+    normalized = normalized_source_language(source_language)
+    if normalized in (AUTO_SOURCE_LANGUAGE, MIXED_SOURCE_LANGUAGE):
+        return ()
+
+    return expected_language_scripts(normalized)
+
+
+def source_language_description(source_language: str) -> str:
+    normalized = normalized_source_language(source_language)
+    match normalized:
+        case "auto":
+            return "the source language (identify it from the text)"
+
+        case "mixed":
+            return "the source languages (identify the language of each passage)"
+
+        case explicit:
+            return explicit
 
 
 def script_description(script_code: str) -> str:

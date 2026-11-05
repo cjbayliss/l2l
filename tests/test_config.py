@@ -8,8 +8,10 @@ from l2l.config import (
     apply_default_options,
     build_config,
     build_setup,
+    command_line_source_language,
     document_api_settings,
     document_passes,
+    document_source_language,
     document_target_language,
     load_instruction_text,
     load_setup,
@@ -21,6 +23,7 @@ from l2l.config import (
     read_document,
     resolve_config_path,
     resolve_passes,
+    resolve_source_language,
     string_api_setting,
     timeout_api_setting,
     validate_ascii_target_language,
@@ -406,7 +409,7 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
                 ),
             )
         )
-        result = build_setup(config, resolved, "English", flag)
+        result = build_setup(config, resolved, "English", "auto", flag)
         assert isinstance(result, Ok)
         return result.value
 
@@ -453,7 +456,9 @@ def test_resolve_call_settings() -> None:
 
 def test_pass_salt_includes_glossary_and_effective_language() -> None:
     pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
-    assert pass_salt(pass_definition) == (CACHE_SALT_VERSION + "\x00p\x00i\x00\x00[]\n")
+    assert pass_salt(pass_definition) == (
+        CACHE_SALT_VERSION + "\x00p\x00i\x00\x00\x00[]\n"
+    )
     entries = (GlossaryEntry("南京", "Nanjing", None, "other"),)
     salted = pass_salt(pass_definition, entries)
     assert salted != pass_salt(pass_definition)
@@ -489,6 +494,52 @@ def test_pass_and_retranslation_salts_normalize_language() -> None:
     assert retranslation_salt(
         pass_definition, effective_language="Chinese"
     ) != retranslation_salt(pass_definition, effective_language="English")
+
+
+def test_pass_salt_distinguishes_source_language_from_target() -> None:
+    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
+    chinese_source = pass_salt(pass_definition, source_language="Chinese")
+    assert chinese_source != pass_salt(pass_definition)
+    assert pass_salt(pass_definition, source_language=" MUL ") == pass_salt(
+        pass_definition, source_language="mixed"
+    )
+    assert pass_salt(pass_definition, source_language="auto") == pass_salt(
+        pass_definition, source_language="guess"
+    )
+    assert pass_salt(pass_definition, source_language="mul") == pass_salt(
+        pass_definition, source_language="mixed"
+    )
+    assert (
+        pass_salt(
+            pass_definition,
+            effective_language="Chinese",
+            source_language="French",
+        )
+        != pass_salt(
+            pass_definition,
+            effective_language="French",
+            source_language="Chinese",
+        )
+    )
+    assert retranslation_salt(
+        pass_definition, source_language="Chinese"
+    ) != retranslation_salt(pass_definition, source_language="French")
+    assert retranslation_salt(
+        pass_definition, source_language="auto"
+    ) == retranslation_salt(pass_definition, source_language="und")
+
+
+def test_cache_salts_follow_the_documented_version_bump() -> None:
+    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
+    current = pass_salt(
+        pass_definition,
+        effective_language="English",
+        source_language="Chinese",
+    )
+    legacy = "5\x00p\x00i\x00english\x00[]\n"
+    assert current != legacy
+    assert current == "6\x00p\x00i\x00english\x00Chinese\x00[]\n"
+    assert cache_key("text", "model", current) != cache_key("text", "model", legacy)
 
 
 def test_effective_target_language_prefers_the_pass_override() -> None:
@@ -602,6 +653,7 @@ def test_setup_report_lists_api_and_passes() -> None:
         ),
         ensure_paragraphs=False,
         target_language="English",
+        source_language="auto",
     )
     report = setup_report(setup, True)
     assert "api.base_url: http://endpoint.test/v1" in report
@@ -791,6 +843,122 @@ def test_document_target_language_validates() -> None:
         result = document_target_language("f", {"target_language": bad_target_language})
         assert isinstance(result, Err)
         assert "target_language must be a non-empty string" in describe(result.error)
+
+
+def test_document_source_language_validates() -> None:
+    assert document_source_language("f", {}) == Ok(None)
+    assert document_source_language("f", {"source_language": " Chinese "}) == Ok(
+        "Chinese"
+    )
+    for bad_source_language in ("", "  ", 3, True):
+        result = document_source_language(
+            "f", {"source_language": bad_source_language}
+        )
+        assert isinstance(result, Err)
+        assert "source_language must be a non-empty string" in describe(result.error)
+
+
+def test_command_line_source_language_validates() -> None:
+    assert command_line_source_language(None) == Ok(None)
+    assert command_line_source_language(" Chinese ") == Ok("Chinese")
+    for bad_source_language in ("", "  "):
+        result = command_line_source_language(bad_source_language)
+        assert isinstance(result, Err)
+        assert "--source-language must be a non-empty string" in describe(result.error)
+
+
+def empty_document() -> Result[dict[str, Any], TranslationError]:
+    return Ok({})
+
+
+def test_resolve_source_language_precedence() -> None:
+    user = Ok({"source_language": "German"})
+    selected = Ok({"source_language": "Spanish"})
+    assert (
+        resolve_source_language("French", "user", user, "selected", selected)
+        == Ok("French")
+    )
+    assert (
+        resolve_source_language(None, "user", user, "selected", selected)
+        == Ok("Spanish")
+    )
+    assert (
+        resolve_source_language(None, "user", user, "selected", empty_document())
+        == Ok("German")
+    )
+    assert (
+        resolve_source_language(
+            None, "user", user, "selected", Ok({"api": {}})
+        )
+        == Ok("German")
+    )
+    assert (
+        resolve_source_language(None, "user", empty_document(), None, empty_document())
+        == Ok("auto")
+    )
+
+
+def test_resolve_source_language_normalizes_final_value_once() -> None:
+    user = Ok({"source_language": "ignored"})
+    assert (
+        resolve_source_language(" MUL ", "user", user, None, empty_document())
+        == Ok("mixed")
+    )
+    assert (
+        resolve_source_language(
+            None, "user", Ok({"source_language": "Guess"}), None, empty_document()
+        )
+        == Ok("auto")
+    )
+
+
+def test_resolve_source_language_fails_on_invalid_higher_layer() -> None:
+    user = Ok({"source_language": "German"})
+    assert isinstance(
+        resolve_source_language("", "user", user, None, empty_document()), Err
+    )
+    invalid_selected = Ok({"source_language": ""})
+    assert isinstance(
+        resolve_source_language(None, "user", user, "selected", invalid_selected),
+        Err,
+    )
+    non_string_selected = Ok({"source_language": 3})
+    result = resolve_source_language(
+        None, "user", user, "selected", non_string_selected
+    )
+    assert isinstance(result, Err)
+    assert "source_language must be a non-empty string" in describe(result.error)
+
+
+def test_load_setup_threads_resolved_source_language(tmp_path: Path) -> None:
+    config_path = tmp_path / "book.toml"
+    config_path.write_text(
+        SELECTED_CONFIG_TEXT.replace(
+            'target_language = "English"\n',
+            'target_language = "English"\nsource_language = " MUL "\n',
+        ).replace('glossary = ["selected-glossary.json"]\n', ""),
+        encoding="utf-8",
+    )
+    result = load_setup(
+        glossary_arguments(config_path),
+        {"XDG_CONFIG_HOME": str(tmp_path / "nouser")},
+    ).run()
+    assert isinstance(result, Ok)
+    assert result.value.source_language == "mixed"
+
+
+def test_load_setup_defaults_source_language_to_auto(tmp_path: Path) -> None:
+    config_path = tmp_path / "book.toml"
+    config_path.write_text(
+        SELECTED_CONFIG_TEXT.replace('glossary = ["selected-glossary.json"]\n', ""),
+        encoding="utf-8",
+    )
+    result = load_setup(
+        glossary_arguments(config_path),
+        {"XDG_CONFIG_HOME": str(tmp_path / "nouser")},
+    ).run()
+    assert isinstance(result, Ok)
+    assert result.value.source_language == "auto"
 
 
 def test_load_setup_requires_target_language(tmp_path: Path) -> None:
@@ -1000,6 +1168,7 @@ def test_setup_report_lists_glossary_when_configured() -> None:
         passes=(PassDefinition("translate", "T.", "chunk", {}, None, True, False),),
         ensure_paragraphs=False,
         target_language="English",
+        source_language="auto",
         glossary_paths=("generic.json", "book.json"),
         glossary_entries=(GlossaryEntry("南京", "Nanjing", None, "other"),),
     )
@@ -1022,6 +1191,7 @@ def test_setup_report_omits_glossary_when_unconfigured() -> None:
         passes=(PassDefinition("translate", "T.", "chunk", {}, None, True, False),),
         ensure_paragraphs=False,
         target_language="English",
+        source_language="auto",
     )
     assert "glossary" not in setup_report(setup, False)
 
@@ -1036,6 +1206,7 @@ def make_setup_for_warnings(
         passes=passes,
         ensure_paragraphs=False,
         target_language=target_language,
+        source_language="auto",
         glossary_entries=glossary_entries,
     )
 

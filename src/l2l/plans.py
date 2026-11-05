@@ -13,7 +13,11 @@ from l2l.glossary import (
     render_glossary_block,
     untranslated_glossary_entries,
 )
-from l2l.languages import scripts_description
+from l2l.languages import (
+    expected_source_scripts,
+    scripts_description,
+    source_language_description,
+)
 from l2l.monads import IO, NOTHING, Err, Just, Maybe, Ok, Result
 from l2l.settings import (
     PassDefinition,
@@ -98,23 +102,37 @@ def glossary_term_problem(
 
 
 def script_mismatch_problem(
-    source_text: str, work_text: str, output: str
+    source_text: str,
+    work_text: str,
+    output: str,
+    source_language: str,
 ) -> Maybe[str]:
-    source_script = dominant_script(source_text)
-    if not source_script or source_script == dominant_script(work_text):
+    observed_source_script = dominant_script(source_text)
+    candidate_scripts = expected_source_scripts(source_language) or (
+        (observed_source_script,) if observed_source_script else ()
+    )
+    if not candidate_scripts:
         return NOTHING
 
-    if dominant_script(output) != source_script:
+    if dominant_script(work_text) in candidate_scripts:
+        return NOTHING
+
+    output_script = dominant_script(output)
+    if output_script not in candidate_scripts:
         return NOTHING
 
     return Just(
         "the reply is in the source language (%s script) instead of the "
-        "draft's language" % scripts_description((source_script,))
+        "draft's language" % scripts_description((output_script,))
     )
 
 
-def instruction_with_target_language(instruction: str, target_language: str) -> str:
-    return instruction.replace("{target_language}", target_language)
+def instruction_with_languages(
+    instruction: str, source_language: str, target_language: str
+) -> str:
+    return instruction.replace(
+        "{source_language}", source_language_description(source_language)
+    ).replace("{target_language}", target_language)
 
 
 def target_script_problem(
@@ -564,6 +582,7 @@ def plan_unit_calls(
         glossary,
         retry_attempt,
         effective_target_language(run_context.target_language, pass_definition),
+        run_context.source_language,
     )
     flat_plan = tuple(chain.from_iterable(plan))
     plan_starts = tuple(accumulate(map(len, plan), initial=0))
@@ -646,6 +665,7 @@ def plan_retranslation_calls(
         pass_definition,
         glossary,
         effective_target_language(run_context.target_language, pass_definition),
+        run_context.source_language,
     )
 
     def neighbour_context(index: int) -> tuple[str, ...]:

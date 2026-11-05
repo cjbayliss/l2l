@@ -198,6 +198,15 @@ def add_translation_arguments(parser: argparse.ArgumentParser) -> None:
         help="target language; required unless target_language is set in a config file",
     )
     group.add_argument(
+        "--source-language",
+        metavar="LANG",
+        dest="source_language",
+        default=None,
+        help="source language; 'auto' (default), 'guess', 'detect', and 'und' "
+        "ask the model to identify it, 'mixed' and 'mul' mean the document "
+        "mixes source languages, anything else names the language",
+    )
+    group.add_argument(
         "-P",
         "--ensure-paragraphs",
         action="store_true",
@@ -310,6 +319,7 @@ def arguments_from_namespace(parsed: argparse.Namespace) -> Arguments:
         glossary=tuple(parsed.glossary),
         extract_glossary=parsed.extract_glossary,
         target_language=parsed.target_language,
+        source_language=parsed.source_language,
         no_structured_output=parsed.no_structured_output,
     )
 
@@ -534,6 +544,7 @@ def build_context(
         glossary_entries=setup.glossary_entries,
         glossary_update_path=parsed.glossary[0] if parsed.glossary else None,
         target_language=setup.target_language,
+        source_language=setup.source_language,
         no_structured_output=parsed.no_structured_output,
     )
 
