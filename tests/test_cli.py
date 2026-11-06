@@ -15,7 +15,8 @@ from fakes import (
     with_usage,
 )
 
-from l2l import __version__, cli, config, effects, pipeline
+from l2l import __version__, cli, effects, pipeline
+from l2l.config import setup as config_setup
 from l2l.errors import FileError, TranslationError, describe, fail_http
 from l2l.monads import Err, Ok, Result, io_pure, io_result
 from l2l.settings import Arguments
@@ -39,7 +40,7 @@ USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 @pytest.fixture(autouse=True)
 def isolate_user_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        config,
+        config_setup,
         "user_config_path",
         lambda _environment: io_pure(str(tmp_path / "absent-config.toml")),
     )
@@ -1363,7 +1364,8 @@ def test_check_config_shows_built_in_prompt_metadata(tmp_path: Path) -> None:
     config_path.write_text(
         CONFIG_TEXT.replace(
             'instruction = "Translate to {target_language}."', ""
-        ).rstrip() + "\n",
+        ).rstrip()
+        + "\n",
     )
     code, stdout, _ = run_l2l(
         tmp_path, ["-c", str(config_path), "--check-config", "-l", "French"]
@@ -1402,7 +1404,7 @@ def test_check_config_shows_prompt_override_origins_and_warnings(
         'style = ""\n'
         "\n[[pass]]\n"
         'name = "review"\n'
-        "mode = \"paragraph\"\n"
+        'mode = "paragraph"\n'
         "\n[pass.prompts]\n"
         'accuracy = { file = "accuracy.txt" }\n',
     )
@@ -1414,10 +1416,7 @@ def test_check_config_shows_prompt_override_origins_and_warnings(
     assert "Only keep the meaning exact." in stdout
     assert "accuracy=pass-file" in stdout
     assert "prompt=built-in role=reviewer" in stdout
-    assert (
-        "the empty prompt override for section style removes nothing"
-        in stdout
-    )
+    assert "the empty prompt override for section style removes nothing" in stdout
 
 
 def test_per_pass_prompts_on_legacy_instruction_fail_config(tmp_path: Path) -> None:

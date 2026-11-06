@@ -4,25 +4,31 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from l2l.config import (
-    ResolvedPasses,
+from l2l.config import load_setup
+from l2l.config.api import (
     api_settings_from_arguments,
     api_settings_from_environment,
-    apply_default_options,
     build_config,
-    build_setup,
-    command_line_source_language,
     document_api_settings,
-    document_passes,
-    document_prompt_overrides,
-    document_source_language,
-    document_style_patch,
-    document_target_language,
-    finalize_pass_draft,
-    load_instruction_text,
-    load_setup,
     maximum_tokens_api_setting,
     merged_api_settings,
+    string_api_setting,
+    timeout_api_setting,
+)
+from l2l.config.documents import read_document, resolve_config_path, validate_document
+from l2l.config.languages import (
+    command_line_source_language,
+    document_source_language,
+    document_target_language,
+    resolve_source_language,
+)
+from l2l.config.models import ResolvedPasses
+from l2l.config.parsing import (
+    apply_default_options,
+    document_passes,
+    document_prompt_overrides,
+    document_style_patch,
+    load_instruction_text,
     parse_options_table,
     parse_output_table,
     parse_pass_table,
@@ -30,16 +36,13 @@ from l2l.config import (
     pass_draft_from,
     pass_output_patch,
     pass_style_patch,
-    read_document,
-    resolve_config_path,
-    resolve_passes,
-    resolve_source_language,
-    resolved_paragraph_tolerances,
-    string_api_setting,
-    timeout_api_setting,
-    validate_ascii_target_language,
-    validate_document,
 )
+from l2l.config.resolution import (
+    finalize_pass_draft,
+    resolve_passes,
+    resolved_paragraph_tolerances,
+)
+from l2l.config.setup import build_setup, validate_ascii_target_language
 from l2l.errors import FileError, TranslationError, describe
 from l2l.glossary import GlossaryEntry
 from l2l.monads import Err, Ok, Result, io_pure
@@ -424,12 +427,12 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
 
     def setup_with(options: OptionDefaults, flag: bool) -> Setup:
         resolved: Result[ResolvedPasses, Any] = Ok(
-            (
-                options,
-                {},
-                StylePolicyPatch(),
-                OutputPolicyPatch(),
-                (
+            ResolvedPasses(
+                option_defaults=options,
+                global_prompts={},
+                global_style_patch=StylePolicyPatch(),
+                global_output_patch=OutputPolicyPatch(),
+                pass_drafts=(
                     PassDraft("unset", "chunk", "i", {}, None, None, None),
                     PassDraft("explicit", "chunk", "i", {}, None, None, False),
                     PassDraft("forced", "chunk", "i", {}, None, None, True),
@@ -653,11 +656,10 @@ def test_resolve_passes_selection_and_options() -> None:
     )
     result = resolve_passes("user", user, None, Ok({})).run()
     assert isinstance(result, Ok)
-    options, global_prompts, global_style_patch, _, passes = result.value
-    assert global_style_patch == StylePolicyPatch()
-    assert options == OptionDefaults(ascii=True)
-    assert dict(global_prompts) == {}
-    assert len(passes) == 1
+    assert result.value.global_style_patch == StylePolicyPatch()
+    assert result.value.option_defaults == OptionDefaults(ascii=True)
+    assert dict(result.value.global_prompts) == {}
+    assert len(result.value.pass_drafts) == 1
 
 
 def test_resolve_config_path_requested_and_environment() -> None:
@@ -1420,7 +1422,7 @@ def test_resolve_passes_merges_global_prompts_selected_over_user() -> None:
     )
     result = resolve_passes("user", user, "selected", selected).run()
     assert isinstance(result, Ok)
-    _, global_prompts, _, _, _ = result.value
+    global_prompts = result.value.global_prompts
     assert global_prompts["accuracy"].text == "FROM SELECTED"
     assert global_prompts["accuracy"].origin == "global-inline"
     assert global_prompts["fluency"].text == "USER FLUENCY"

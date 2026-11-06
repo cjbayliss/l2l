@@ -603,18 +603,14 @@ def generated_guidance_fragments(
         {
             "source_guidance": joined_fragments(
                 source_preset_guidance_text(request.source_language),
-                honorifics_guidance_text(
-                    request.source_language, request.style_policy
-                ),
+                honorifics_guidance_text(request.source_language, request.style_policy),
             ),
             "target_guidance": joined_fragments(
                 target_region_guidance_text(request.target_language),
                 target_scripts_guidance_text(request.target_language),
             ),
             "style": joined_fragments(
-                formality_guidance_text(
-                    request.target_language, request.style_policy
-                ),
+                formality_guidance_text(request.target_language, request.style_policy),
                 register_fidelity_guidance_text(request.style_policy),
             ),
         }

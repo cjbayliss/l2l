@@ -8,7 +8,7 @@ from typing import get_args
 
 import pytest
 
-from l2l.config import (
+from l2l.config.resolution import (
     finalize_pass_draft,
     finalize_passes,
     selected_pass_roles,
@@ -97,53 +97,59 @@ def analyser_request(
 
 TRANSLATOR_GOLDEN = "\n".join(
     (
-    "You are a professional literary translator of fiction.",
-    "",
-    "Translate the supplied source text.",
-    "",
-    "Translate from Chinese into English.",
-    "",
-    "- Chinese often omits the subject: say exactly who acts or speaks.",
-    "- Attach vocatives to the correct line; keep who accuses or rebukes whom exactly "
-    "as in the source.",
-    "- Render idioms by meaning with matching force.",
-    "- Verify romanized names syllable by syllable (pinyin) and keep them consistent.",
-    "- Render tildes and repeated characters naturally instead of copying them.",
-    "",
-    "Write the translation in the Latin script.",
-    "",
-    "- Translate every sentence and keep every detail, however minor: actions, "
-    "temporal markers, and asides. Never summarise, expand, censor, or drop content.",
-    "- Before finalising, check every sentence for who does what to whom: attach "
-    "vocatives to the correct line, keep who accuses or rebukes whom exactly as in the "
-    "source, never shift subjects between clauses, and never invent agents or "
-    "contrasts.",
-    "- Resolve possessives and time references explicitly; never leave them vague.",
-    "- Use one consistent pronoun per character, including non-human speakers; never "
-    "flip who does what in contrastive sentences.",
-    "- Render idioms by meaning with matching force, and use the same rendering for a "
-    "recurring term on every occurrence, including callbacks.",
-    "",
-    "- No doubled words, stiff comma-spliced constructions, opaque literalisms, or "
-    "unnatural lexical choices: choose the natural English word, not the "
-    "closest-looking one.",
-    "- No source punctuation artefacts: render tildes, separating dashes, and similar "
-    "marks naturally in English instead of copying them.",
-    "",
-    "Keep vulgarity, scorn, and sarcasm at their full source force.",
-    "",
-    "Treat briefs, drafts, already-translated context, and source context as reference "
-    "only: do not translate them, do not continue the story from them, and do not "
-    "include them in the output.",
-    "",
-    "Reply with the translated text only: no notes, comments, or source text. If a "
-    "title is present, render it fully at the top; never truncate it or add words it "
-    "does not carry. If the source is ambiguous, pick the most contextually plausible "
-    "reading and continue; never mark uncertainty.",
-    "",
-    "Keep the source's paragraph structure exactly: one output paragraph per source "
-    "paragraph, in the same order, separated by blank lines; do not merge, split, or "
-    "reorder paragraphs.",
+        "You are a professional literary translator of fiction.",
+        "",
+        "Translate the supplied source text.",
+        "",
+        "Translate from Chinese into English.",
+        "",
+        "- Chinese often omits the subject: say exactly who acts or speaks.",
+        "- Attach vocatives to the correct line; keep who accuses or rebukes "
+        "whom exactly as in the source.",
+        "- Render idioms by meaning with matching force.",
+        "- Verify romanized names syllable by syllable (pinyin) and keep them "
+        "consistent.",
+        "- Render tildes and repeated characters naturally instead of copying them.",
+        "",
+        "Write the translation in the Latin script.",
+        "",
+        "- Translate every sentence and keep every detail, however minor: actions, "
+        "temporal markers, and asides. Never summarise, expand, censor, or drop "
+        "content.",
+        "- Before finalising, check every sentence for who does what to whom: attach "
+        "vocatives to the correct line, keep who accuses or rebukes whom exactly "
+        "as in the source, never shift subjects between clauses, and never invent "
+        "agents or "
+        "contrasts.",
+        "- Resolve possessives and time references explicitly; never leave them vague.",
+        "- Use one consistent pronoun per character, including non-human speakers; "
+        "never flip who does what in contrastive sentences.",
+        "- Render idioms by meaning with matching force, and use the same rendering "
+        "for a recurring term on every occurrence, including callbacks.",
+        "",
+        "- No doubled words, stiff comma-spliced constructions, opaque literalisms, or "
+        "unnatural lexical choices: choose the natural English word, not the "
+        "closest-looking one.",
+        "- No source punctuation artefacts: render tildes, separating dashes, and "
+        "similar marks naturally in English instead of copying them.",
+        "",
+        "Keep vulgarity, scorn, and sarcasm at their full source force.",
+        "",
+        "Treat briefs, drafts, already-translated context, and source context as "
+        "reference only: do not translate them, do not continue the story from them, "
+        "and do not "
+        "include them in the output.",
+        "",
+        "Reply with the translated text only: no notes, comments, or source text. If a "
+        "title is present, render it fully at the top; never truncate it or add words "
+        "it does not carry. If the source is ambiguous, pick the most contextually "
+        "plausible "
+        "reading and continue; never mark uncertainty.",
+        "",
+        "Keep the source's paragraph structure exactly: one output paragraph per "
+        "source paragraph, in the same order, separated by blank lines; do not merge, "
+        "split, or "
+        "reorder paragraphs.",
     )
 )
 
@@ -179,8 +185,7 @@ def test_translator_golden_prompt() -> None:
     assert rendered.included_sections == PROMPT_SECTION_NAMES
     assert rendered.omitted_sections == ()
     assert all(
-        rendered.section_origins[name] == "built-in"
-        for name in PROMPT_SECTION_NAMES
+        rendered.section_origins[name] == "built-in" for name in PROMPT_SECTION_NAMES
     )
 
 
@@ -212,9 +217,7 @@ def test_reviewer_and_translator_share_accuracy_and_fluency() -> None:
     assert REVIEWER_SECTIONS["fluency"] is FLUENCY_SECTION_TEXT
     assert REVIEWER_SECTIONS["role"] != TRANSLATOR_SECTIONS["role"]
     assert REVIEWER_SECTIONS["task"] != TRANSLATOR_SECTIONS["task"]
-    assert (
-        REVIEWER_SECTIONS["output_rules"] != TRANSLATOR_SECTIONS["output_rules"]
-    )
+    assert REVIEWER_SECTIONS["output_rules"] != TRANSLATOR_SECTIONS["output_rules"]
 
 
 def test_dedicated_template_bytes_are_unchanged() -> None:
@@ -242,9 +245,7 @@ def test_unknown_braces_are_left_untouched() -> None:
 
 
 def test_effective_per_pass_target_language_appears_in_the_built_in() -> None:
-    rendered = render_pass_prompt(
-        translator_request(target_language="British English")
-    )
+    rendered = render_pass_prompt(translator_request(target_language="British English"))
     assert "Translate from Chinese into British English." in rendered.instruction
 
 
@@ -304,7 +305,6 @@ def legacy_draft() -> PassDraft:
     return PassDraft(
         "translate", "chunk", "Translate to {target_language}.", {}, None, False
     )
-
 
 
 def omitted_draft(mode: PassMode) -> PassDraft:
@@ -392,15 +392,17 @@ def test_later_text_pass_renders_reviewer() -> None:
         None,
     )
     assert isinstance(finalized, Ok)
-    roles = tuple(
-        definition.prompt_role for definition in finalized.value.passes
-    )
+    roles = tuple(definition.prompt_role for definition in finalized.value.passes)
     assert roles == ("translator", "reviewer")
 
 
 def test_analysis_without_instruction_renders_the_analyser() -> None:
     result = finalize_passes(
-        (omitted_draft("analysis"),), "English", "auto", {}, StylePolicyPatch(),
+        (omitted_draft("analysis"),),
+        "English",
+        "auto",
+        {},
+        StylePolicyPatch(),
         OutputPolicyPatch(),
         None,
     )
@@ -450,12 +452,8 @@ def test_target_region_labels_and_bare_or_unknown_regions() -> None:
     assert target_region_guidance_text("en") == ""
     assert target_region_guidance_text("en-XX") == ""
     assert target_region_guidance_text("Zorblaxian") == ""
-    assert target_region_guidance_text("en-AU") == target_region_guidance_text(
-        "en_AU"
-    )
-    assert target_region_guidance_text("en-AU") == target_region_guidance_text(
-        "EN-AU"
-    )
+    assert target_region_guidance_text("en-AU") == target_region_guidance_text("en_AU")
+    assert target_region_guidance_text("en-AU") == target_region_guidance_text("EN-AU")
 
 
 def test_target_scripts_guidance_only_for_known_scripts() -> None:
@@ -478,9 +476,7 @@ def test_source_presets_by_base_language() -> None:
     assert source_preset_guidance_text("French") == GENERIC_SOURCE_GUIDANCE_TEXT
     assert source_preset_guidance_text("Zorblaxian") == ""
     assert source_preset_guidance_text("auto") == ""
-    assert (
-        source_preset_guidance_text("mixed") == MIXED_SOURCE_GUIDANCE_TEXT
-    )
+    assert source_preset_guidance_text("mixed") == MIXED_SOURCE_GUIDANCE_TEXT
     assert "dominant language" in MIXED_SOURCE_GUIDANCE_TEXT
     assert "untranslated" not in MIXED_SOURCE_GUIDANCE_TEXT
 
@@ -488,8 +484,7 @@ def test_source_presets_by_base_language() -> None:
 def test_honorifics_guidance_only_for_japanese_and_korean() -> None:
     keep = StylePolicy()
     assert (
-        honorifics_guidance_text("Japanese", keep)
-        == HONORIFICS_GUIDANCE_TEXTS["keep"]
+        honorifics_guidance_text("Japanese", keep) == HONORIFICS_GUIDANCE_TEXTS["keep"]
     )
     assert honorifics_guidance_text("Korean", keep) != ""
     assert honorifics_guidance_text("Chinese", keep) == ""
@@ -497,9 +492,7 @@ def test_honorifics_guidance_only_for_japanese_and_korean() -> None:
     drop = replace(keep, honorifics="drop")
     titles = replace(keep, honorifics="titles")
     assert honorifics_guidance_text("ja", drop) == HONORIFICS_GUIDANCE_TEXTS["drop"]
-    assert (
-        honorifics_guidance_text("ja", titles) == HONORIFICS_GUIDANCE_TEXTS["titles"]
-    )
+    assert honorifics_guidance_text("ja", titles) == HONORIFICS_GUIDANCE_TEXTS["titles"]
 
 
 def test_formality_guidance_table_and_fallback() -> None:
@@ -593,9 +586,7 @@ def test_generated_guidance_survives_section_overrides() -> None:
     assert "Use Australian English spelling and conventions." in rendered.instruction
     assert "Write the translation in the Latin script." in rendered.instruction
     assert "Address characters with the formal pronoun" not in rendered.instruction
-    assert (
-        REGISTER_FIDELITY_GUIDANCE_TEXTS["preserve"] in rendered.instruction
-    )
+    assert REGISTER_FIDELITY_GUIDANCE_TEXTS["preserve"] in rendered.instruction
     assert rendered.section_origins["source_guidance"] == "pass-inline"
     assert rendered.section_origins["target_guidance"] == "pass-inline"
     assert rendered.section_origins["style"] == "pass-inline"
@@ -607,9 +598,7 @@ def test_generated_output_rules_survive_section_overrides() -> None:
         role="translator",
         source_language="Chinese",
         target_language="English",
-        output_policy=OutputPolicy(
-            paragraphs="approximate", maximum_characters=50
-        ),
+        output_policy=OutputPolicy(paragraphs="approximate", maximum_characters=50),
         overrides={"output_rules": "Reply with the translation only."},
     )
     rendered = render_pass_prompt(request)
@@ -626,9 +615,7 @@ def test_output_policy_golden_prompt() -> None:
             role="translator",
             source_language="Chinese",
             target_language="English",
-            output_policy=OutputPolicy(
-                paragraphs="approximate", maximum_characters=30
-            ),
+            output_policy=OutputPolicy(paragraphs="approximate", maximum_characters=30),
         )
     )
     assert APPROXIMATE_PARAGRAPH_RULE_TEXT in rendered.instruction
