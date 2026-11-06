@@ -52,6 +52,29 @@
 - Imports: absolute, sorted per PEP 8; no wildcard imports.
 - Exceptions: raise specific built-in exception types, never bare
   `except:`.
+- **PEP 758 exception groups are intentional — do not "fix" them.**
+  Multiple exception types are written without parentheses when no `as`
+  clause is present:
+
+  ```python
+  except OSError, ValueError:
+      ...
+  ```
+
+  This is valid Python 3.14+ syntax (PEP 758) and is used throughout the
+  codebase. It is NOT a tuple of exceptions, NOT a typo, and NOT legacy
+  Python 2 syntax. Never add parentheses around such exception lists,
+  never rewrite them to `(OSError, ValueError)`, and never flag them as
+  errors. Parentheses are only required when an `as` clause is used:
+
+  ```python
+  except (json.JSONDecodeError, UnicodeDecodeError) as error:
+      ...
+  ```
+
+  The project targets Python >= 3.15 (`requires-python` in
+  `pyproject.toml`), so this syntax is fully supported by the runtime,
+  `ruff`, and `mypy`.
 
 ## Output
 
