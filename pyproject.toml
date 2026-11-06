@@ -22,7 +22,7 @@ l2l = "l2l.cli:cli"
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
-addopts = "--cov=l2l --cov=tools --cov-report=term-missing --cov-fail-under=99"
+addopts = "--cov=l2l --cov-report=term-missing --cov-fail-under=99"
 
 [tool.coverage.run]
 branch = true
@@ -59,7 +59,7 @@ warn_unreachable = true
 explicit_package_bases = true
 python_version = "3.15"
 mypy_path = ["src", "tests"]
-files = ["src", "tests", "tools"]
+files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
 module = ["unicodedataplus"]

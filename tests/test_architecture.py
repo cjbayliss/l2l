@@ -4,7 +4,7 @@ import tokenize
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIRECTORIES = (ROOT / "src" / "l2l", ROOT / "tests", ROOT / "tools")
+SOURCE_DIRECTORIES = (ROOT / "src" / "l2l", ROOT / "tests")
 MUTABLE_DATACLASS_ALLOWLIST = frozenset({("monads", "Reference")})
 
 

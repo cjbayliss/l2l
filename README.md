@@ -604,20 +604,10 @@ by glossary extraction:
 uv run pytest
 ```
 
-The suite runs with branch coverage for `l2l` and `tools` and fails
-below 99% (see `addopts` in `pyproject.toml`). Lint and types:
+The suite runs with branch coverage for `l2l` and fails below 99% (see
+`addopts` in `pyproject.toml`). Lint and types:
 
 ```sh
 uv run ruff check
 uv run mypy --strict
-```
-
-## Development tools
-
-`tools/optimize` evolves a translation instruction through rounds of
-pairwise judged challenges, or compares two instruction files directly;
-see `tools/README.md`:
-
-```sh
-uv run python3 -m tools.optimize --help
 ```

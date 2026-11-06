@@ -25,7 +25,6 @@ def test_python_dash_m_l2l_prints_help() -> None:
     ("module", "arguments"),
     [
         ("l2l.__main__", ["--version"]),
-        ("tools.optimize.__main__", ["--help"]),
     ],
 )
 def test_module_entrypoints_run_their_programs(

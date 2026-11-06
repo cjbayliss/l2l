@@ -16,6 +16,7 @@ from l2l.config.api import (
     timeout_api_setting,
 )
 from l2l.config.documents import read_document, resolve_config_path, validate_document
+from l2l.config.glossaries import document_glossary_paths
 from l2l.config.languages import (
     command_line_source_language,
     document_source_language,
@@ -615,6 +616,12 @@ def test_parse_pass_table_and_inline_instruction() -> None:
     inline = load_instruction_text("f", "p", {"instruction": " inst "}, ".").run()
     assert isinstance(inline, Ok)
     assert inline.value == "inst"
+    missing_source = load_instruction_text("f", "p", {"mode": "custom"}, ".").run()
+    assert isinstance(missing_source, Err)
+    assert (
+        "exactly one of instruction_file or instruction is required"
+        in describe(missing_source.error)
+    )
     conflicting_load = load_instruction_text(
         "f", "p", {"instruction": "", "instruction_file": "x"}, "."
     ).run()
@@ -1642,6 +1649,37 @@ def test_pass_style_errors_outside_rendered_text_passes() -> None:
         "f", "p", {"style": {"formality": "formal"}}, None, "chunk"
     )
     assert isinstance(rendered, Ok)
+
+
+def test_document_glossary_requires_a_config_file_path() -> None:
+    result = document_glossary_paths(None, {"glossary": ["terms.tsv"]})
+    assert isinstance(result, Err)
+    assert "glossary configured in a config document without a file path" in describe(
+        result.error
+    )
+
+
+def test_style_patch_on_instruction_pass_fails_at_finalization() -> None:
+    draft = pass_draft_from(
+        "f", "p", {}, "inst", style_patch=StylePolicyPatch(formality="formal")
+    )
+    assert isinstance(draft, Ok)
+    result = finalize_pass_draft(
+        draft.value,
+        "translator",
+        "English",
+        "Chinese",
+        {},
+        StylePolicyPatch(),
+        OutputPolicyPatch(),
+        None,
+    )
+    assert isinstance(result, Err)
+    assert (
+        "per-pass prompt, style, or output settings apply "
+        "only to built-in rendered chunk, paragraph, or analysis passes"
+        in describe(result.error)
+    )
 
 
 def test_style_precedence_defaults_user_selected_per_pass() -> None:

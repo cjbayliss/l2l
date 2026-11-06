@@ -1,7 +1,11 @@
 import pytest
 
 from l2l.http import build_chat_payload
-from l2l.messages import unit_no_source_message, usage_line
+from l2l.messages import (
+    unit_no_source_message,
+    unit_passed_through_message,
+    usage_line,
+)
 from l2l.monads import NOTHING, Just
 from l2l.plans import (
     build_ascii_fix_user,
@@ -488,6 +492,12 @@ def test_excerpt_collapses_and_truncates() -> None:
 def test_unit_no_source_message_reports_the_pass_through() -> None:
     assert unit_no_source_message("polish", 2, 5) == (
         "l2l: [polish] unit 2/5 has no matching source; passing it through unchanged"
+    )
+
+
+def test_unit_passed_through_message_reports_the_pass_through() -> None:
+    assert unit_passed_through_message("polish", 2, 5) == (
+        "l2l: [polish] unit 2/5 has no translatable text; passing it through unchanged"
     )
 
 
