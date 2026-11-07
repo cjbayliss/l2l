@@ -441,7 +441,10 @@ the character can be referred to pronominally) and place names. Reply
 with a JSON object {"entries": [...]}: each entry has "original"
 holding the exact source name, "translated" with the rendering in the
 target language (or null when unknown), "pronouns" with the pronouns
-(or null), and "type" which is one of "character", "place", "other".
+(or null), "type" which is one of "character", "place", "other",
+and "notes" with a short note translators need to render the entry
+correctly (who or what it is, how it behaves in the story, or how the
+rendering was chosen), or null when nothing needs explaining.
 Output JSON only: no markdown fences, no commentary. The target
 language is named in the user message.
 """

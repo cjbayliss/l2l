@@ -44,6 +44,7 @@ class GlossaryEntry:
     translated: str | None
     pronouns: str | None
     type: GlossaryEntryType
+    notes: str | None = None
 
 
 GLOSSARY_BLOCK_HEADER: Final = (
@@ -55,11 +56,12 @@ GLOSSARY_BLOCK_HEADER: Final = (
 
 
 def render_glossary_entry_line(entry: GlossaryEntry) -> str:
-    return "- {}{}{}{}".format(
+    return "- {}{}{}{}{}".format(
         entry.original,
         (f' = "{entry.translated}"') if entry.translated is not None else "",
         (f" (pronouns: {entry.pronouns})") if entry.pronouns is not None else "",
         (f" (type: {entry.type})") if entry.type != "other" else "",
+        (f" (notes: {entry.notes})") if entry.notes is not None else "",
     )
 
 
@@ -168,14 +170,14 @@ def glossary_entry_from_json(index: int, item: object) -> Result[GlossaryEntry, 
 
     invalid_keys = tuple(
         key
-        for key in ("translated", "pronouns")
+        for key in ("translated", "pronouns", "notes")
         if key in item and item[key] is not None and not isinstance(item[key], str)
     )
     if invalid_keys:
         return Err(
             f'glossary entry {index} ("{original}") has invalid value(s) for: '
-            f"{', '.join(invalid_keys)}; translated and pronouns must be a string "
-            "or null"
+            f"{', '.join(invalid_keys)}; translated, pronouns, and notes must be "
+            "a string or null"
         )
 
     type_value = item.get("type", "other")
@@ -192,6 +194,7 @@ def glossary_entry_from_json(index: int, item: object) -> Result[GlossaryEntry, 
             translated=text_or_none(item.get("translated")),
             pronouns=text_or_none(item.get("pronouns")),
             type=entry_type,
+            notes=text_or_none(item.get("notes")),
         )
     )
 
@@ -344,6 +347,7 @@ def glossary_response_format(
                                 "original": {"type": "string"},
                                 "translated": {"type": ["string", "null"]},
                                 "pronouns": {"type": ["string", "null"]},
+                                "notes": {"type": ["string", "null"]},
                                 "type": {
                                     "type": "string",
                                     "enum": list(GLOSSARY_ENTRY_TYPES),
@@ -353,6 +357,7 @@ def glossary_response_format(
                                 "original",
                                 "translated",
                                 "pronouns",
+                                "notes",
                                 "type",
                             ],
                             "additionalProperties": False,
@@ -374,6 +379,7 @@ def entries_to_json_text(entries: tuple[GlossaryEntry, ...]) -> str:
                     "original": entry.original,
                     "translated": entry.translated,
                     "pronouns": entry.pronouns,
+                    "notes": entry.notes,
                     "type": entry.type,
                 }
                 for entry in entries

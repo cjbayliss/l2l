@@ -27,12 +27,15 @@ def entry(
     translated: str | None = None,
     pronouns: str | None = None,
     entry_type: str = "other",
+    notes: str | None = None,
 ) -> GlossaryEntry:
     document: dict[str, JsonValue] = {"original": original, "type": entry_type}
     if translated is not None:
         document["translated"] = translated
     if pronouns is not None:
         document["pronouns"] = pronouns
+    if notes is not None:
+        document["notes"] = notes
     result = parse_glossary_document("g.json", [document])
     assert isinstance(result, Ok)
     return result.value[0]
@@ -47,7 +50,7 @@ def test_parse_glossary_document_normalizes_entries() -> None:
                 "translated": "Lin Daiyu",
                 "pronouns": "she/her",
                 "type": "character",
-                "note": "protagonist",
+                "notes": "protagonist of the story",
                 "extra": 3,
             },
             {"original": "金陵", "translated": "Nanjing", "type": "place"},
@@ -67,6 +70,7 @@ def test_parse_glossary_document_normalizes_entries() -> None:
             translated="Lin Daiyu",
             pronouns="she/her",
             type="character",
+            notes="protagonist of the story",
         ),
         GlossaryEntry(
             original="金陵", translated="Nanjing", pronouns=None, type="place"
@@ -87,6 +91,7 @@ def test_parse_glossary_document_normalizes_entries() -> None:
         ([{"original": "x", "type": ""}], "has invalid type ''"),
         ([{"original": "x", "translated": 3}], "invalid value(s) for: translated"),
         ([{"original": "x", "pronouns": 3}], "invalid value(s) for: pronouns"),
+        ([{"original": "x", "notes": 3}], "invalid value(s) for: notes"),
     ],
 )
 def test_parse_glossary_document_rejects_invalid_documents(
@@ -132,13 +137,22 @@ def test_merge_later_entry_replaces_earlier_wholesale() -> None:
 def test_render_glossary_block_and_instruction_integration() -> None:
     block = render_glossary_block(
         (
-            entry("林黛玉", "Lin Daiyu", "she/her", "character"),
+            entry(
+                "林黛玉",
+                "Lin Daiyu",
+                "she/her",
+                "character",
+                "the heroine",
+            ),
             entry("南京", "Nanjing", entry_type="place"),
             entry("100", "one hundred"),
         )
     )
     assert block.startswith("Glossary (mandatory):")
-    assert '- 林黛玉 = "Lin Daiyu" (pronouns: she/her) (type: character)' in block
+    assert (
+        '- 林黛玉 = "Lin Daiyu" (pronouns: she/her) (type: character) '
+        "(notes: the heroine)"
+    ) in block
     assert '- 南京 = "Nanjing" (type: place)' in block
     assert '- 100 = "one hundred"' in block
     assert instruction_with_glossary("Translate.", ()) == "Translate."
@@ -205,6 +219,16 @@ def test_parse_model_glossary_reply_accepts_supported_envelopes(reply: str) -> N
     assert result.value == (entry("南京", "Nanjing", entry_type="place"),)
 
 
+def test_parse_model_glossary_reply_keeps_notes() -> None:
+    result = parse_model_glossary_reply(
+        '[{"original": "拳法", "translated": null, "pronouns": null, '
+        '"notes": "a martial art", "type": "other"}]',
+        "out.json",
+    )
+    assert isinstance(result, Ok)
+    assert result.value == (entry("拳法", notes="a martial art"),)
+
+
 def test_parse_model_glossary_reply_rejects_a_non_array_wrapper() -> None:
     result = parse_model_glossary_reply('{"entries": 3}', "out.json")
     assert isinstance(result, Err)
@@ -245,12 +269,14 @@ def test_reply_errors_are_glossary_reply_errors() -> None:
 
 def test_entries_to_json_text_round_trips() -> None:
     entries = (
-        entry("林黛玉", "Lin Daiyu", "she/her", "character"),
+        entry("林黛玉", "Lin Daiyu", "she/her", "character", "the heroine"),
         entry("南京", "Nanjing", entry_type="place"),
         entry("拳法", pronouns="it"),
     )
     text = entries_to_json_text(entries)
     assert text.endswith("\n")
+    # The round-trip through the real parser fails if any field, notes
+    # included, is dropped or mangled by serialization.
     assert parse_glossary_document("g.json", json.loads(text)) == Ok(entries)
 
 
@@ -325,6 +351,7 @@ def test_glossary_response_format_is_strict_mode_compliant() -> None:
     required = entry_schema["required"]
     assert is_string_array(required)
     assert sorted(required) == [
+        "notes",
         "original",
         "pronouns",
         "translated",
@@ -333,14 +360,11 @@ def test_glossary_response_format_is_strict_mode_compliant() -> None:
     assert schema_at(entry_schema, "properties", "type")["enum"] == list(
         GLOSSARY_ENTRY_TYPES
     )
-    assert schema_at(entry_schema, "properties", "translated")["type"] == [
-        "string",
-        "null",
-    ]
-    assert schema_at(entry_schema, "properties", "pronouns")["type"] == [
-        "string",
-        "null",
-    ]
+    for key in ("translated", "pronouns", "notes"):
+        assert schema_at(entry_schema, "properties", key)["type"] == [
+            "string",
+            "null",
+        ]
 
     response_format = glossary_response_format()
     assert response_format is not None

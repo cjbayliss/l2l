@@ -660,6 +660,7 @@ def test_extract_glossary_ignores_pipeline_passes(tmp_path: Path) -> None:
             "original": "南京",
             "translated": "Nanjing",
             "pronouns": None,
+            "notes": None,
             "type": "other",
         }
     ]

@@ -492,7 +492,10 @@ Modes:
   appends only genuinely new entries to the glossary. The user message
   carries a plain list of the already-known names, so the model replies
   with only the entries it newly found instead of echoing the whole
-  glossary back, which keeps the call cheaper and faster. The request
+  glossary back, which keeps the call cheaper and faster. Each
+  extracted entry carries a short `notes` field explaining who or what
+  the entry is or how its rendering was chosen; the note is shown in
+  the glossary block of every later translation prompt. The request
   uses a JSON-schema response format (`--no-structured-output` opts out
   for endpoints without structured output support). Requires at least
   one `--glossary FILE` on the command line; the first one is rewritten
@@ -520,12 +523,14 @@ A glossary file is a JSON array of entry objects with fixed fields:
     "original": "林黛玉",
     "translated": "Lin Daiyu",
     "pronouns": "she/her",
+    "notes": "heroine; frail and sharp-tongued",
     "type": "character"
   },
   {
     "original": "金陵",
     "translated": "Nanjing",
     "pronouns": null,
+    "notes": null,
     "type": "place"
   }
 ]
@@ -536,6 +541,10 @@ A glossary file is a JSON array of entry objects with fixed fields:
 - `translated` - the mandatory rendering in the target language, or
   `null` when unknown.
 - `pronouns` - the pronouns for characters, or `null`.
+- `notes` - a short note translators need to render the entry correctly
+  (who or what it is, how it behaves in the story, or how the rendering
+  was chosen), or `null`; glossary extraction fills this in, and the
+  note is shown in the glossary block of every translation prompt.
 - `type` (required) - one of `"character"`, `"place"`, `"other"`;
   omitted `type` fields in existing files are read as `"other"`.
 
