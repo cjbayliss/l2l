@@ -204,14 +204,19 @@ def test_dry_run_prints_plan_without_calling_endpoint(tmp_path: Path) -> None:
     assert "cache key" in stdout
 
 
-def test_prune_cache_removes_old_entries(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("days", "pruned_count", "fresh_kept"),
+    [(7, 1, True), (0, 2, False)],
+)
+def test_prune_cache_removes_entries(
+    tmp_path: Path, days: int, pruned_count: int, fresh_kept: bool
+) -> None:
     cache_directory = tmp_path / "cache"
     cache_directory.mkdir()
-    entry = cache_directory / "stale.txt"
-    entry.write_text("old")
-
-    stale = time.time() - 30 * 86400
-    os.utime(entry, (stale, stale))
+    stale = cache_directory / "stale.txt"
+    stale.write_text("old")
+    month_ago = time.time() - 30 * 86400
+    os.utime(stale, (month_ago, month_ago))
     fresh = cache_directory / "fresh.txt"
     fresh.write_text("new")
 
@@ -223,22 +228,30 @@ def test_prune_cache_removes_old_entries(tmp_path: Path) -> None:
             "--cache-directory",
             str(cache_directory),
             "--prune-cache",
-            "7",
+            str(days),
         ],
     )
     assert code == 0
-    assert "pruned 1 cache entry" in stderr
-    assert not entry.exists()
-    assert fresh.exists()
+    # "entr" matches both the singular and plural forms of the message.
+    assert f"pruned {pruned_count} cache entr" in stderr
+    assert not stale.exists()
+    assert fresh.exists() is fresh_kept
 
 
-def test_prune_cache_requires_positive_days(tmp_path: Path) -> None:
+def test_prune_cache_rejects_negative_days(tmp_path: Path) -> None:
     code, _, stderr = run_l2l(
         tmp_path,
-        ["-c", str(tmp_path), "--cache-directory", str(tmp_path), "--prune-cache", "0"],
+        [
+            "-c",
+            str(tmp_path),
+            "--cache-directory",
+            str(tmp_path),
+            "--prune-cache",
+            "-1",
+        ],
     )
     assert code == 2
-    assert "positive number of days" in stderr
+    assert "non-negative" in stderr
 
 
 def test_prune_cache_reports_scan_failure(

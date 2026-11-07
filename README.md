@@ -135,7 +135,7 @@ Modes:
   the reply is merged into the existing entries. Pipeline passes are
   ignored in this mode.
 - `--prune-cache DAYS` - delete cache entries older than DAYS days and
-  exit.
+  exit. Use `0` to delete every cache entry.
 
 The modes `--check-config`, `--prune-cache`, `--extract-glossary`, and
 `--dry-run` are mutually exclusive: combining any two fails with a

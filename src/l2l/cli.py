@@ -23,6 +23,7 @@ from l2l.effects import (
     open_run_log,
     prune_old_logs,
     read_stdin,
+    remove_file,
     remove_file_if_older,
     resolve_cache_directory,
     stream_isatty,
@@ -284,7 +285,8 @@ def add_mode_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="DAYS",
         type=int,
         dest="prune_cache",
-        help="delete cache entries older than DAYS days and exit",
+        help="delete cache entries older than DAYS days and exit; "
+        "0 deletes every entry",
     )
 
 
@@ -617,6 +619,11 @@ def prune_cache_entry(
     count: int,
     path: str,
 ) -> IO[Result[int, TranslationError]]:
+    if days <= 0:
+        return io_map(
+            remove_file(path),
+            lambda removal: count_removed_file(count, removal),
+        )
     return io_bind(
         now(clock),
         lambda now_value: io_map(
@@ -649,10 +656,10 @@ def prune_cache_program(
     days = value_if_set(parsed.prune_cache)
 
     def with_console(console: Console) -> IO[int]:
-        if days is None or days <= 0:
+        if days is None or days < 0:
             return report_message_and_exit(
                 console,
-                "l2l: --prune-cache requires a positive number of days",
+                "l2l: --prune-cache requires a non-negative number of days",
                 2,
             )
 
