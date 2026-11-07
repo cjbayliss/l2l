@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import reduce
 from types import MappingProxyType
+from typing import final
 lazy from collections.abc import Mapping
 
 from l2l.config.models import DocumentResult, ResolvedPasses
@@ -278,6 +279,7 @@ def finalized_pass_definition(
     )
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class FinalizedPasses:
     passes: tuple[PassDefinition, ...]

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from functools import reduce
-from typing import TYPE_CHECKING, Final, Literal, TypeIs, get_args
+from typing import TYPE_CHECKING, Final, Literal, TypeIs, final, get_args
 
 from l2l.errors import (
     ConfigError,
@@ -37,6 +37,7 @@ GlossaryEntryType = Literal["character", "place", "other"]
 GLOSSARY_ENTRY_TYPES: Final[tuple[GlossaryEntryType, ...]] = get_args(GlossaryEntryType)
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class GlossaryEntry:
     original: str

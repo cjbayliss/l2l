@@ -145,6 +145,34 @@ Do not use plain mutable classes, `__init__` boilerplate, or
 `NamedTuple` mutation (`._replace` on a dataclass equivalent is
 `replace`), and never add methods that mutate attributes.
 
+### No class extension - every concrete class is `@final`
+
+Class extension is banned by policy, in `src` and in `tests` alike:
+never write `class Sub(Base)` and never design a class for others to
+extend. Every concrete class therefore carries `@final` (PEP 591), which
+makes both type checkers reject any future subclass at the inheritance
+site (`mypy`: "Cannot inherit from final class"; `pyright`: "Base class
+... is marked final"). Compose instead of inheriting: wrap, delegate, or
+define a `Protocol` and satisfy it structurally - fakes in the test
+suite implement protocols without inheritance.
+
+```python
+from typing import final
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class ConnectionSettings:
+    maximum_allowed_connections: int
+    timeout_in_seconds: float
+```
+
+`Protocol` classes are the one exemption - they are implemented
+duck-typed, and mypy rejects `@final` on protocols with abstract
+members. The narrow framework-mandated exceptions already present
+(`BaseException` subclasses for control flow, `argparse.Action`
+subclasses) do not generalize: do not add new ones without a _why_.
+
 ### PEP 634 - structural pattern matching
 
 Use `match`/`case` statements (PEP 634) instead of chains of `if`/
@@ -164,8 +192,9 @@ match response:
 
 Do not rewrite existing `match` statements into `if`/`elif` chains, and
 do not use `if`/`elif` ladders that test one subject for multiple shapes
+
 - write a `match` instead. Always include a `case _:` arm when the
-subject is not exhaustively matched.
+  subject is not exhaustively matched.
 
 ### PEP 618 - strict zip
 
@@ -225,6 +254,5 @@ uv run pytest -q
 ```
 
 CI (`.github/workflows/ci.yml`) runs exactly these checks - with
-`uv format --check` instead of the format command, and `--locked` on
-the `uv run` invocations - so all five must pass locally before you
-finish.
+`uv format --check` instead of the format command, and `--locked` on the
+`uv run` invocations - so all five must pass locally before you finish.

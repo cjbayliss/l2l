@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from functools import reduce
 from types import MappingProxyType
-from typing import Final, Protocol, assert_never
+from typing import Final, Protocol, assert_never, final
 
 import pycurl
 
@@ -202,13 +202,11 @@ def build_chat_payload(
     model: str, system: str, user: str, parameters: Mapping[str, JsonValue]
 ) -> JsonObject:
     return {
-        **{
-            "model": model,
-            "messages": (
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ),
-        },
+        "model": model,
+        "messages": (
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ),
         **{key: value for key, value in parameters.items() if value is not None},
     }
 
@@ -403,6 +401,7 @@ def choice_delta_text(delta: Mapping[object, object]) -> str:
     return text if isinstance(text, str) else ""
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class ProgressUpdate:
     label: str
@@ -410,6 +409,7 @@ class ProgressUpdate:
     reasoning: str = ""
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class StreamState:
     reasoning: Cons[str] | None = None
@@ -525,6 +525,7 @@ def require_completed_stream(
     return Ok(state)
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ChatReply:
     content: str
@@ -568,11 +569,9 @@ def http_request(
 ) -> HttpRequest:
     headers = MappingProxyType(
         {
-            **{
-                "Content-Type": "application/json",
-                "Authorization": "Bearer " + config.api_key,
-                "User-Agent": "l2l/" + __version__,
-            },
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + config.api_key,
+            "User-Agent": "l2l/" + __version__,
             **({"Accept": accept} if accept else {}),
         }
     )
@@ -665,6 +664,7 @@ def configure_curl(
         curl.setopt(pycurl.NOPROXY, noproxy.value)
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class ResponseTaps:
     chunks: Reference[tuple[bytes, ...]]
@@ -713,6 +713,7 @@ def status_failure(
     )
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class CurlResponse:
     request: HttpRequest
@@ -1217,6 +1218,7 @@ def plain_call(
     )
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class RepairOutcome:
     text: str
@@ -1225,6 +1227,7 @@ class RepairOutcome:
     problem: str | None = None
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class RepairPolicy:
     validate: Callable[[str], Maybe[str]]

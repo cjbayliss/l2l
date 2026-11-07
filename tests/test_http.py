@@ -1,6 +1,6 @@
 import json
 from dataclasses import replace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, cast, final
 lazy from collections.abc import Callable
 
 import pycurl
@@ -326,6 +326,7 @@ def test_chat_stream_setting_precedence() -> None:
         assert json.loads(http.requests[0].body)["stream"] is expected_stream
 
 
+@final
 class DyingPlainResponse:
     def body(self) -> IO[Result[bytes, TranslationError]]:
         def die() -> Result[bytes, TranslationError]:
@@ -353,6 +354,7 @@ def test_chat_reports_a_plain_response_that_dies_mid_body() -> None:
     assert "response read failed" in describe(failure)
 
 
+@final
 class DyingStreamResponse:
     def __init__(self) -> None:
         self._lines: list[bytes] = [
@@ -392,6 +394,7 @@ def test_chat_reports_an_interrupted_stream() -> None:
     assert "connection reset mid-stream" in describe(failure)
 
 
+@final
 class TogglingStreamResponse:
     def __init__(
         self, chunks: list[JsonObject], console: Console, toggle_after_chunks: int
@@ -449,6 +452,7 @@ def test_chat_shows_streamed_reasoning_once_across_a_mid_stream_toggle() -> None
     assert sealed == ["Mostly fine. Second line."]
 
 
+@final
 class UnterminatedStreamResponse:
     def __init__(self, chunks: list[JsonObject]) -> None:
         self._lines = sse_bytes(chunks)[:-1]
@@ -475,6 +479,7 @@ def test_chat_flushes_an_unterminated_final_frame() -> None:
     assert result.value.usage == Usage(5, 6, 0.2)
 
 
+@final
 class GarbagePlainResponse:
     def body(self) -> IO[Result[bytes, TranslationError]]:
         return io_result(Ok(b"{not json at all"))
@@ -496,6 +501,7 @@ def test_chat_reports_invalid_json_body_as_protocol_error() -> None:
     assert "invalid JSON response" in describe(result.error)
 
 
+@final
 class ExplodingPlainResponse:
     def body(self) -> IO[Result[bytes, TranslationError]]:
         def explode() -> Result[bytes, TranslationError]:
@@ -599,6 +605,7 @@ def test_chat_reports_endpoint_error_events_from_a_stream() -> None:
     assert "overloaded" in describe(result.error)
 
 
+@final
 class ExplodingStreamResponse:
     def body(self) -> IO[Result[bytes, TranslationError]]:
         return io_result(fail_http("protocol", "streaming response has no body"))

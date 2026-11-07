@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Final, Literal, get_args
+from typing import Final, Literal, final, get_args
 lazy from collections.abc import Mapping
 
 from l2l.languages import (
@@ -115,12 +115,14 @@ MAXIMUM_CHARACTERS_RULE_TEXT: Final = (
 OutputParagraphs = Literal["exact", "approximate"]
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class OutputPolicy:
     paragraphs: OutputParagraphs = "exact"
     maximum_characters: int | None = None
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class OutputPolicyPatch:
     paragraphs: OutputParagraphs | None = None
@@ -236,6 +238,7 @@ StyleHonorifics = Literal["keep", "drop", "titles"]
 StyleRegisterFidelity = Literal["preserve", "soften"]
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class StylePolicy:
     formality: StyleFormality = "preserve"
@@ -243,6 +246,7 @@ class StylePolicy:
     register_fidelity: StyleRegisterFidelity = "preserve"
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class StylePolicyPatch:
     formality: StyleFormality | None = None
@@ -457,12 +461,14 @@ def paragraph_rule_text(exact_paragraphs: bool) -> str:
     )
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class PromptSectionOverride:
     text: str
     origin: PromptSectionOrigin
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class PromptSections:
     texts: Mapping[PromptSectionName, str]
@@ -471,11 +477,9 @@ class PromptSections:
         missing = frozenset(get_args(PromptSectionName)) - frozenset(self.texts)
         extra = frozenset(self.texts) - frozenset(get_args(PromptSectionName))
         if missing or extra:
-            raise ValueError(
-                "prompt sections must cover exactly {}".format(
-                    ", ".join(PROMPT_SECTION_NAMES)
-                )
-            )
+            section_names = ", ".join(PROMPT_SECTION_NAMES)
+            msg = f"prompt sections must cover exactly {section_names}"
+            raise ValueError(msg)
 
     def assembled(self) -> str:
         stripped = {
@@ -505,6 +509,7 @@ def instruction_with_languages(
     ).replace("{target_language}", target_language)
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class PassPromptRequest:
     role: PromptRole
@@ -518,6 +523,7 @@ class PassPromptRequest:
     )
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class RenderedPassPrompt:
     instruction: str

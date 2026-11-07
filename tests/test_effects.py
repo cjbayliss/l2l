@@ -1,7 +1,7 @@
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import TextIO, cast
+from typing import TextIO, cast, final
 lazy from pathlib import Path
 
 lazy import pytest
@@ -37,6 +37,7 @@ WRITER_COUNT_FOR_RACE_TEST = 16
 
 
 def test_stream_isatty_handles_errors() -> None:
+    @final
     class Raising:
         def isatty(self) -> bool:
             raise OSError("closed")

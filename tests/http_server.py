@@ -5,7 +5,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Self, cast, override
+from typing import Self, cast, final, override
 
 type HttpResponder = Callable[
     [bytes, dict[str, str]], tuple[int, tuple[tuple[str, str], ...], bytes]
@@ -13,6 +13,7 @@ type HttpResponder = Callable[
 type JsonReply = tuple[int, tuple[tuple[str, str], ...], bytes]
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class ReceivedRequest:
     path: str
@@ -31,10 +32,12 @@ def raw_reply(status: int, body: bytes) -> JsonReply:
     return (status, (), body)
 
 
+@final
 class LocalEndpoint:
     def __init__(self, responder: HttpResponder) -> None:
         endpoint = self
 
+        @final
         class RecordingHandler(BaseHTTPRequestHandler):
             @override
             def log_message(self, format: str, *args: object) -> None:

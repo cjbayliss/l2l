@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, assert_never
+from typing import Literal, assert_never, final
 
 from l2l.monads import Err
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class ConfigError:
     message: str
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class MissingSettings:
     fields: tuple[str, ...]
@@ -19,6 +21,7 @@ class MissingSettings:
 HttpKind = Literal["status", "unreachable", "protocol", "stream", "interrupted"]
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class HttpError:
     kind: HttpKind
@@ -27,6 +30,7 @@ class HttpError:
     retry_after: float | None = None
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class BudgetError:
     request_tokens: int
@@ -34,12 +38,14 @@ class BudgetError:
     parts: int = 1
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class PassError:
     pass_name: str
     inner: TranslationError
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class UnitError:
     pass_name: str
@@ -47,12 +53,14 @@ class UnitError:
     inner: TranslationError
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class AsciiError:
     pass_name: str
     inner: TranslationError
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class AsciiCollapseError:
     pass_name: str
@@ -60,6 +68,7 @@ class AsciiCollapseError:
     total: int
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class UntranslatedError:
     pass_name: str
@@ -67,6 +76,7 @@ class UntranslatedError:
     sample: str
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class InvalidOutputError:
     pass_name: str
@@ -74,12 +84,14 @@ class InvalidOutputError:
     problem: str
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class GlossaryReplyError:
     pass_name: str
     problem: str
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class FileError:
     path: str

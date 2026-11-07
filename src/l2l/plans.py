@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from itertools import accumulate, chain, takewhile
-from typing import Final
+from typing import Final, final
 lazy from collections.abc import Mapping
 
 from l2l.errors import TranslationError, fail_budget, fail_pass
@@ -273,6 +273,7 @@ type PassModeSet = frozenset[PassMode]
 EMPTY_PASS_MODE_SET: Final[PassModeSet] = frozenset[PassMode]()
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class PromptAllowance:
     instruction_tokens: int
@@ -291,6 +292,7 @@ class PromptAllowance:
         )
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class PassPlan:
     chunks: ChunkPlan
@@ -512,6 +514,7 @@ def ascii_drop_warning(drop: AsciiDrop) -> str:
     )
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class UnitCall:
     index: int

@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import json
 import time
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, cast, final
 
 import pycurl
 
@@ -106,6 +106,7 @@ def make_sleep_recorder() -> tuple[Sleep, Callable[[], tuple[float, ...]]]:
 DONE_LINES: tuple[bytes, ...] = (b"data: [DONE]\n", b"\n")
 
 
+@final
 class FakeStreamResponse:
     def __init__(self, chunks: list[JsonObject], terminated: bool = True) -> None:
         frames = [
@@ -129,6 +130,7 @@ class FakeStreamResponse:
         return fold_io(self._lines, step, initial)
 
 
+@final
 class FakePlainResponse:
     def __init__(self, body: JsonObject) -> None:
         self._body = body
@@ -144,6 +146,7 @@ class FakePlainResponse:
         return io_result(initial)
 
 
+@final
 class FakeCurl:
     def __init__(
         self,
@@ -189,6 +192,7 @@ class FakeCurl:
         self.closed = True
 
 
+@final
 class FakeCurlHttp:
     def __init__(self, responses: list[FakeCurl]) -> None:
         self.responses = responses
@@ -217,6 +221,7 @@ def sse_bytes(chunks: list[JsonObject]) -> tuple[bytes, ...]:
     )
 
 
+@final
 class FakeHttp:
     def __init__(self, responses: Sequence[HttpResponse]) -> None:
         self.responses = responses

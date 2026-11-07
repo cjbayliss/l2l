@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, final
 
 from l2l.errors import TranslationError
 from l2l.monads import IO, Reference, Result
+from l2l.settings import UNSET, Unset
 lazy from l2l.console import Console
 lazy from l2l.glossary import GlossaryEntry
-lazy from l2l.settings import UNSET, Unset
 
 if TYPE_CHECKING:
     from l2l.effects import Clock, RunLog, Sleep
@@ -27,6 +27,7 @@ class HttpResponse(HttpStreamResponse, Protocol):
     def body(self) -> IO[Result[bytes, TranslationError]]: ...
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class HttpRequest:
     url: str
@@ -37,6 +38,7 @@ class HttpRequest:
 OpenHTTP = Callable[[HttpRequest, float], Result[HttpResponse, TranslationError]]
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class Context:
     config: Config

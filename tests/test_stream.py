@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, final
 lazy from collections.abc import Callable
 
 from fakes import (
@@ -532,6 +532,7 @@ def test_drive_stream_stops_on_error_without_stepping_further() -> None:
         b"data: next\n",
     ]
 
+    @final
     class CountingStreamResponse:
         def consume[S](
             self,

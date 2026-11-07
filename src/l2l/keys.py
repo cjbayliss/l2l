@@ -8,7 +8,7 @@ import termios
 import threading
 import tty
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Final, final
 lazy from collections.abc import Callable
 
 from l2l.monads import (
@@ -86,6 +86,7 @@ def no_op() -> None:
     return None
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class TabListener:
     file_descriptor: int

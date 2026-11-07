@@ -9,7 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from functools import reduce
 from itertools import accumulate, chain
-from typing import Final
+from typing import Final, final
 lazy from collections.abc import Mapping
 
 from unicodedataplus import script_extensions as unicode_script_extensions
@@ -18,6 +18,7 @@ from l2l.json_values import JsonObject, JsonValue, is_json_object
 from l2l.monads import NOTHING, Just, Maybe, maybe_or_else
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Usage:
     prompt_tokens: int = 0
@@ -25,6 +26,7 @@ class Usage:
     cost: float = 0.0
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Translated:
     text: str
@@ -362,6 +364,7 @@ def to_ascii_mechanical(text: str, character_map: Mapping[str, str]) -> str:
     )
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class AsciiDrop:
     index: int
@@ -413,21 +416,25 @@ def strip_think_tag(content: str) -> tuple[str, Maybe[str]]:
     return visible, Just(captured.strip())
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class SseState:
     pending_data: tuple[str, ...] = ()
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class SseDone:
     pass
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class SseEvent:
     payload: JsonObject
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class SseMalformed:
     data: str
@@ -473,6 +480,7 @@ def sse_step(state: SseState, raw_line: bytes) -> tuple[SseState, SseFrame]:
     return state, None
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class ThinkState:
     scanning_opening_tag: bool = True

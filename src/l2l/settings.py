@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, final
 lazy from collections.abc import Mapping
 
 from l2l.glossary import (
@@ -28,6 +28,7 @@ lazy from l2l.json_values import JsonValue
 type ParagraphTriState = bool | int
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Unset:
     pass
@@ -40,6 +41,7 @@ def value_if_set[T](value: T | Unset) -> T | None:
     return None if isinstance(value, Unset) else value
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Config:
     base_url: str
@@ -66,6 +68,7 @@ def parse_pass_mode(value: object) -> PassMode | None:
     return None
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class PassDefinition:
     name: str
@@ -90,6 +93,7 @@ class PassDefinition:
     )
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class PassDraft:
     name: str
@@ -108,6 +112,7 @@ class PassDraft:
     ensure_paragraphs_explicit: ParagraphTriState | Unset = UNSET
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Settings:
     chunk_budget_tokens: int
@@ -126,6 +131,7 @@ class Settings:
     glossary_extraction_instruction: str
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class OptionDefaults:
     ascii: bool = False
@@ -134,6 +140,7 @@ class OptionDefaults:
     ensure_paragraphs_explicit: bool = False
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class Arguments:
     config: str | Unset = UNSET
@@ -160,6 +167,7 @@ class Arguments:
     no_structured_output: bool = False
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Setup:
     config: Config
@@ -273,6 +281,7 @@ DEFAULT_TIMEOUT: Final = 120.0
 DEFAULT_MAXIMUM_TOKENS: Final = 100000
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class PartialApiSettings:
     base_url: str | Unset = UNSET

@@ -8,12 +8,12 @@ dependencies = ["langcodes[data]>=3.5.1", "pycurl>=7.45.7", "unicodedataplus>=16
 
 [dependency-groups]
 dev = [
-    "pytest>=8",
-    "pytest-cov>=5",
-    "ruff>=0.6",
+    "hypothesis>=6",
     "mypy>=1.11",
     "pyright>=1.1.414",
-    "hypothesis>=6",
+    "pytest-cov>=5",
+    "pytest>=8",
+    "ruff>=0.6",
     "types-pycurl>=7.45",
 ]
 
@@ -23,7 +23,9 @@ l2l = "l2l.cli:cli"
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
-addopts = "--cov=l2l --cov-report=term-missing --cov-fail-under=99"
+addopts = "--strict-markers --strict-config --cov=l2l --cov-report=term-missing --cov-fail-under=99"
+filterwarnings = ["error"]
+xfail_strict = true
 
 [tool.coverage.run]
 branch = true
@@ -34,26 +36,43 @@ target-version = "py315"
 
 [tool.ruff.lint]
 select = [
+    "A",
+    "ANN",
+    "B",
+    "BLE",
     "C4",
     "E",
+    "EM",
+    "ERA",
+    "EXE",
     "F",
-    "PERF",
     "FURB",
-    "W",
     "I",
-    "B",
-    "SIM",
-    "RET",
-    "UP",
+    "INP",
     "N",
-    "PT",
-    "RUF",
+    "PERF",
+    "PGH",
+    "PIE",
+    "PLC",
+    "PLE",
     "PLW0602",
     "PLW0603",
-    "TC",
-    "ANN",
-    "PGH",
+    "PT",
     "PYI",
+    "RET",
+    "RSE",
+    "RUF",
+    "S",
+    "SIM",
+    "SLF",
+    "SLOT",
+    "T10",
+    "TC",
+    "TID",
+    "TRY",
+    "UP",
+    "W",
+    "YTT",
 ]
 ignore = [
     # The package translates text; strings legitimately contain fullwidth
@@ -61,28 +80,39 @@ ignore = [
     "RUF001",
 ]
 
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
 # ARG (unused arguments) is deliberately not enabled: argparse actions,
 # protocol handlers, and test fakes deliberately keep signature-complete
 # parameters.
 
 [tool.ruff.lint.per-file-ignores]
-# The run-log handle intentionally outlives `open_run_log`; `close_run_log` closes it.
-"src/l2l/effects.py" = ["SIM115"]
+# asserts and fake secrets are what tests are made of; test modules are not
+# packages (pytest imports them by path).
+"tests/**" = ["S101", "S105", "INP001", "EM101", "TRY003"]
 
 [tool.mypy]
 strict = true
 disallow_any_explicit = true
+disallow_any_decorated = true
 warn_unreachable = true
+warn_unused_configs = true
+strict_bytes = true
 enable_error_code = [
-    "ignore-without-code",
-    "possibly-undefined",
-    "redundant-expr",
-    "truthy-bool",
+    "deprecated",
+    "exhaustive-match",
     "explicit-override",
+    "ignore-without-code",
     "mutable-override",
     "narrowed-type-not-subtype",
+    "possibly-undefined",
+    "redundant-expr",
+    "redundant-self",
+    "truthy-bool",
+    "truthy-iterable",
     "unimported-reveal",
-    "deprecated",
+    "unused-awaitable",
 ]
 explicit_package_bases = true
 python_version = "3.15"
@@ -90,6 +120,12 @@ mypy_path = ["src", "tests", "typings"]
 files = ["src", "tests", "typings"]
 strict_equality = true
 extra_checks = true
+
+# hypothesis's @given decorator is not precisely typed, so the decorated
+# property-test functions unavoidably contain Any.
+[[tool.mypy.overrides]]
+module = ["test_maybe", "test_properties"]
+disallow_any_decorated = false
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]
@@ -104,4 +140,9 @@ typeCheckingMode = "strict"
 reportImplicitOverride = "error"
 reportCallInDefaultInitializer = "error"
 reportUnnecessaryTypeIgnoreComment = "error"
+# Long texts (prompts, config samples) are deliberately written as adjacent
+# string literals across lines for readability; do not flag them.
+reportImplicitStringConcatenation = "none"
+reportUninitializedInstanceVariable = "error"
+reportPropertyTypeMismatch = "error"
 deprecateTypingAliases = true

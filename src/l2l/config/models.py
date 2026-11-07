@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import final
 lazy from collections.abc import Mapping
 
 from l2l.errors import TranslationError
@@ -19,6 +20,7 @@ from l2l.settings import OptionDefaults, PassDraft, Setup
 type DocumentResult = Result[JsonObject, TranslationError]
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ResolvedPasses:
     option_defaults: OptionDefaults

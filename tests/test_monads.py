@@ -1,4 +1,5 @@
 import threading
+from typing import final
 lazy from types import TracebackType
 
 from l2l.monads import (
@@ -123,6 +124,7 @@ def test_io_when_unit_gates_execution() -> None:
 def test_io_atomic_holds_the_lock_around_the_action() -> None:
     events: list[str] = []
 
+    @final
     class RecordingLock:
         def __enter__(self) -> None:
             events.append("acquire")

@@ -3,6 +3,7 @@ import sys
 import termios
 import threading
 import tty
+from typing import final
 lazy from pathlib import Path
 
 import pytest
@@ -55,6 +56,7 @@ def test_open_tty_opens_the_tty_device(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_open_tty_falls_back_to_a_stdin_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    @final
     class FakeStdin:
         def fileno(self) -> int:
             return 7
@@ -72,6 +74,7 @@ def test_open_tty_falls_back_to_a_stdin_tty(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_open_tty_without_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    @final
     class FakeStdin:
         def fileno(self) -> int:
             return 7
@@ -132,6 +135,7 @@ def test_start_and_stop_manage_the_listener_thread(
     joined: list[float | None] = []
     restored: list[tuple[int, int, list[object]]] = []
 
+    @final
     class RecordingThread:
         def __init__(self, target: object, daemon: bool) -> None:
             assert daemon
@@ -195,6 +199,7 @@ def test_start_tab_listener_attaches_to_a_working_tty(
 ) -> None:
     started: list[bool] = []
 
+    @final
     class RecordingThread:
         def __init__(self, target: object, daemon: bool) -> None:
             assert daemon

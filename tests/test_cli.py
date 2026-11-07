@@ -209,7 +209,6 @@ def test_prune_cache_removes_old_entries(tmp_path: Path) -> None:
     cache_directory.mkdir()
     entry = cache_directory / "stale.txt"
     entry.write_text("old")
-    import os
 
     stale = time.time() - 30 * 86400
     os.utime(entry, (stale, stale))

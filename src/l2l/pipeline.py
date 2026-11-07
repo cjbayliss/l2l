@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
-from typing import TextIO
+from typing import TextIO, final
 
 from l2l.ascii import enforce_pass_ascii
 from l2l.cache import (
@@ -136,6 +136,7 @@ lazy from l2l.context import Context
 lazy from l2l.json_values import JsonValue
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class State:
     text: str
@@ -146,6 +147,7 @@ class State:
     glossary: tuple[GlossaryEntry, ...]
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class UnitResult:
     text: str
@@ -154,6 +156,7 @@ class UnitResult:
     problem: str | None = None
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class PassExecution:
     run_context: Context
@@ -165,6 +168,7 @@ class PassExecution:
     paragraph_plan: tuple[tuple[str, ...], ...]
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class CallEnvironment:
     run_context: Context
@@ -455,6 +459,7 @@ def conclude_state(
             )
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class RetranslationCheck:
     has_matching_paragraph_count: bool
@@ -467,6 +472,7 @@ class RetranslationCheck:
     target_scripts_display: str
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class RetranslationRun:
     environment: CallEnvironment
@@ -477,6 +483,7 @@ class RetranslationRun:
     started_at: float
 
 
+@final
 @dataclass(frozen=True, kw_only=True, slots=True)
 class RetranslationEvaluation:
     outcome: Result[Translated, TranslationError]

@@ -6,7 +6,7 @@ import sys
 import time
 from dataclasses import dataclass
 from functools import reduce
-from typing import TYPE_CHECKING, TextIO, override
+from typing import TYPE_CHECKING, TextIO, final, override
 
 from l2l import __version__
 from l2l.config import load_setup
@@ -65,11 +65,13 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class EarlyExitText(BaseException):
     text: str
 
 
+@final
 class HelpExitAction(argparse.Action):
     @override
     def __call__(
@@ -82,6 +84,7 @@ class HelpExitAction(argparse.Action):
         raise EarlyExitText(parser.format_help())
 
 
+@final
 class VersionExitAction(argparse.Action):
     @override
     def __call__(

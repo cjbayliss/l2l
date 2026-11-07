@@ -10,7 +10,7 @@ import time
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, TextIO
+from typing import Final, TextIO, final
 
 from l2l.errors import TranslationError, fail_config, fail_file_error
 from l2l.json_values import JsonObject, JsonValue, is_json_object
@@ -29,8 +29,9 @@ from l2l.monads import (
     io_result,
     result_or_else,
 )
+from l2l.settings import UNSET, Unset
 from l2l.text import cache_path
-lazy from l2l.settings import UNSET, Unset, value_if_set
+lazy from l2l.settings import value_if_set
 
 Clock = Callable[[], float]
 Sleep = Callable[[float], None]
@@ -213,6 +214,7 @@ def _no_close() -> None:
     return None
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class RunLog:
     path: Maybe[str]
@@ -234,7 +236,10 @@ def open_run_log(cache_directory: str, clock: Clock) -> IO[RunLog]:
     def thunk() -> RunLog:
         path = run_log_path(cache_directory, clock(), os.getpid())
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        handle = open(path, "a", encoding="utf-8")
+        # The handle deliberately outlives this function: append writes into it
+        # until close_run_log closes it, so a with-statement cannot express the
+        # lifetime.
+        handle = open(path, "a", encoding="utf-8")  # noqa: SIM115
 
         def append(content: str) -> None:
             with contextlib.suppress(OSError, ValueError):
@@ -438,9 +443,10 @@ def replace_file(source: str, target: str) -> IO[bool]:
     def thunk() -> bool:
         try:
             os.replace(source, target)
-            return True
         except OSError:
             return False
+        else:
+            return True
 
     return IO(thunk)
 
@@ -449,9 +455,10 @@ def copy_file(source: str, target: str) -> IO[bool]:
     def thunk() -> bool:
         try:
             shutil.copyfile(source, target)
-            return True
         except OSError:
             return False
+        else:
+            return True
 
     return IO(thunk)
 
@@ -468,6 +475,7 @@ def entry_paths(directory: str) -> IO[tuple[str, ...]]:
     return IO(thunk)
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class ProcessResult:
     returncode: int
@@ -479,7 +487,9 @@ def run_process(
     command: tuple[str, ...], stdin_text: str, working_directory: str | None
 ) -> IO[ProcessResult]:
     def thunk() -> ProcessResult:
-        completed = subprocess.run(
+        # The command comes from the project's own pass configuration, never
+        # from untrusted input, and shell=False is the injection-safe form.
+        completed = subprocess.run(  # noqa: S603
             command,
             input=stdin_text,
             capture_output=True,

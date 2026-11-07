@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 from functools import reduce
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, final
 lazy from types import TracebackType
 
 if TYPE_CHECKING:
@@ -22,11 +22,13 @@ class Exclusive[T_co](Protocol):
     ) -> None: ...
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Ok[T]:
     value: T
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Err[E]:
     error: E
@@ -85,11 +87,13 @@ def result_sequence[T, E](results: Iterable[Result[T, E]]) -> Result[tuple[T, ..
     return reduce(collect_value, results, collected)
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Just[T]:
     value: T
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Nothing:
     pass
@@ -98,6 +102,7 @@ class Nothing:
 type Maybe[T] = Just[T] | Nothing
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Cons[T]:
     head: T
@@ -159,6 +164,7 @@ def maybe_or[T](first: Maybe[T], second: Maybe[T]) -> Maybe[T]:
     return first if isinstance(first, Just) else second
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class IO[T]:
     run: Callable[[], T]
@@ -227,7 +233,7 @@ def io_catch[T, E](
     def thunk() -> Result[T, E]:
         try:
             return Ok(io_value.run())
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - the boundary must catch every effect failure
             return handler(error)
 
     return IO(thunk)
@@ -239,7 +245,7 @@ def io_catch_result[T, E](
     def thunk() -> Result[T, E]:
         try:
             return io_value.run()
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - the boundary must catch every effect failure
             return handler(error)
 
     return IO(thunk)
@@ -344,6 +350,7 @@ def io_result_bind[T, E, R](
     return io_bind(io_value, lambda outcome: result_bind_io(outcome, transform))
 
 
+@final
 @dataclass
 class Reference[T]:
     value: T
