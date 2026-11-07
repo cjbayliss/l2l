@@ -6,9 +6,9 @@ import sys
 import threading
 import time
 import unicodedata
-from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from typing import TextIO
+from typing import Final, TextIO
+lazy from collections.abc import Callable
 
 from l2l.monads import (
     IO,
@@ -31,7 +31,7 @@ from l2l.monads import (
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StatusView:
     label: str = "Working"
     started: float = 0.0
@@ -154,10 +154,10 @@ def stream_write(stream: TextIO, text: str) -> IO[None]:
     return IO(thunk)
 
 
-TICK_SECONDS = 0.1
+TICK_SECONDS: Final = 0.1
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True, eq=False, slots=True)
 class StatusLine:
     stream: TextIO
     live: bool
@@ -312,7 +312,7 @@ class StatusLine:
         return io_atomic(self.lock, io_join(modify_reference_with(self.view, redraw)))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LogEvent:
     text: str
     verbose_only: bool
@@ -402,7 +402,7 @@ def toggle_verbose(console: Console) -> IO[bool]:
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Console:
     stream: TextIO
     status: StatusLine

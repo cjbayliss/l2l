@@ -1,5 +1,4 @@
 import json
-from typing import Any
 
 import pytest
 
@@ -19,6 +18,7 @@ from l2l.glossary import (
     select_glossary_entries_for_texts,
     untranslated_glossary_entries,
 )
+from l2l.json_values import JsonObject, JsonValue, is_json_object, is_string_array
 from l2l.monads import Err, Ok
 
 
@@ -28,7 +28,7 @@ def entry(
     pronouns: str | None = None,
     entry_type: str = "other",
 ) -> GlossaryEntry:
-    document: dict[str, Any] = {"original": original, "type": entry_type}
+    document: dict[str, JsonValue] = {"original": original, "type": entry_type}
     if translated is not None:
         document["translated"] = translated
     if pronouns is not None:
@@ -207,10 +207,28 @@ def test_parse_model_glossary_reply_accepts_a_bare_array() -> None:
     assert result.value == (entry("南京", "Nanjing", entry_type="place"),)
 
 
+def test_parse_model_glossary_reply_accepts_a_prefixed_array() -> None:
+    result = parse_model_glossary_reply(
+        'Here are the entries: [{"original": "南京", "translated": "Nanjing", '
+        '"type": "place"}]',
+        "out.json",
+    )
+    assert isinstance(result, Ok)
+    assert result.value == (entry("南京", "Nanjing", entry_type="place"),)
+
+
 def test_parse_model_glossary_reply_rejects_a_non_array_wrapper() -> None:
     result = parse_model_glossary_reply('{"entries": 3}', "out.json")
     assert isinstance(result, Err)
     assert "entries" in describe(result.error)
+
+
+def test_parse_model_glossary_reply_rejects_a_reply_without_entries() -> None:
+    result = parse_model_glossary_reply('{"nope": 1}', "out.json")
+    assert isinstance(result, Err)
+    assert 'model reply must be {"entries": [...]} or a bare JSON array' in describe(
+        result.error
+    )
 
 
 @pytest.mark.parametrize(
@@ -290,36 +308,63 @@ def test_integrate_glossary_reply_filters_by_type() -> None:
     )
 
 
-def glossary_entry_schema() -> dict[str, Any]:
+def schema_at(node: object, *path: str) -> JsonObject:
+    current = node
+    for key in path:
+        assert is_json_object(current)
+        current = current[key]
+
+    assert is_json_object(current)
+    return current
+
+
+def glossary_entry_schema() -> JsonObject:
     response_format = glossary_response_format()
-    assert isinstance(response_format, dict)
-    entry_schema = response_format["json_schema"]["schema"]["properties"]["entries"][
-        "items"
-    ]
-    assert isinstance(entry_schema, dict)
-    return entry_schema
+    assert response_format is not None
+    return schema_at(
+        response_format,
+        "json_schema",
+        "schema",
+        "properties",
+        "entries",
+        "items",
+    )
 
 
 def test_glossary_response_format_is_strict_mode_compliant() -> None:
     entry_schema = glossary_entry_schema()
     assert entry_schema["additionalProperties"] is False
-    assert sorted(entry_schema["required"]) == [
+    required = entry_schema["required"]
+    assert is_string_array(required)
+    assert sorted(required) == [
         "original",
         "pronouns",
         "translated",
         "type",
     ]
-    assert entry_schema["properties"]["type"]["enum"] == list(GLOSSARY_ENTRY_TYPES)
-    assert entry_schema["properties"]["translated"]["type"] == ["string", "null"]
-    assert entry_schema["properties"]["pronouns"]["type"] == ["string", "null"]
+    assert schema_at(entry_schema, "properties", "type")["enum"] == list(
+        GLOSSARY_ENTRY_TYPES
+    )
+    assert schema_at(entry_schema, "properties", "translated")["type"] == [
+        "string",
+        "null",
+    ]
+    assert schema_at(entry_schema, "properties", "pronouns")["type"] == [
+        "string",
+        "null",
+    ]
 
     response_format = glossary_response_format()
     assert response_format is not None
     assert response_format["type"] == "json_schema"
-    assert response_format["json_schema"]["name"] == "glossary_entries"
-    assert response_format["json_schema"]["strict"] is True
-    reply_schema = response_format["json_schema"]["schema"]
+    json_schema = schema_at(response_format, "json_schema")
+    assert json_schema["name"] == "glossary_entries"
+    assert json_schema["strict"] is True
+    reply_schema = schema_at(response_format, "json_schema", "schema")
     assert reply_schema["type"] == "object"
     assert reply_schema["required"] == ["entries"]
-    assert reply_schema["properties"]["entries"]["items"] == entry_schema
+    reply_entries_property = schema_at(
+        response_format, "json_schema", "schema", "properties", "entries"
+    )
+    assert reply_entries_property["items"] == entry_schema
     assert glossary_response_format(True) is None

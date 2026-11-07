@@ -1,31 +1,43 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from l2l.console import Console
-from l2l.effects import Clock, RunLog, Sleep
 from l2l.errors import TranslationError
-from l2l.glossary import GlossaryEntry
 from l2l.monads import IO, Reference, Result
-from l2l.settings import Config, Settings
+lazy from l2l.console import Console
+lazy from l2l.glossary import GlossaryEntry
+lazy from l2l.settings import UNSET, Unset
+
+if TYPE_CHECKING:
+    from l2l.effects import Clock, RunLog, Sleep
+    from l2l.settings import Config, Settings
 
 
-class HttpResponse(Protocol):
+class HttpStreamResponse(Protocol):
+    def consume[S](
+        self,
+        step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+        initial: Result[S, TranslationError],
+    ) -> IO[Result[S, TranslationError]]: ...
+
+
+class HttpResponse(HttpStreamResponse, Protocol):
     def body(self) -> IO[Result[bytes, TranslationError]]: ...
 
-    def consume(
-        self,
-        step: Callable[[Any, bytes], IO[Result[Any, TranslationError]]],
-        initial: Result[Any, TranslationError],
-    ) -> IO[Result[Any, TranslationError]]: ...
+
+@dataclass(frozen=True, slots=True)
+class HttpRequest:
+    url: str
+    body: bytes
+    headers: Mapping[str, str]
 
 
-OpenHTTP = Callable[[Any, float], Result[HttpResponse, TranslationError]]
+OpenHTTP = Callable[[HttpRequest, float], Result[HttpResponse, TranslationError]]
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class Context:
     config: Config
     settings: Settings
@@ -38,7 +50,7 @@ class Context:
     sleep: Sleep
     target_language: str
     source_language: str
-    stream: bool | None = None
+    stream: bool | Unset = UNSET
     best_effort: bool = False
     glossary_entries: tuple[GlossaryEntry, ...] = ()
     glossary_update_path: str | None = None

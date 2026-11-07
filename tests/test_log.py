@@ -1,9 +1,9 @@
 import io
 import re
 import time
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
+lazy from collections.abc import Callable
 
 from fakes import (
     FakeHttp,
@@ -27,6 +27,10 @@ from l2l.errors import TranslationError, fail_http
 from l2l.http import chat
 from l2l.monads import NOTHING, Just, Ok, Result
 from l2l.text import Usage
+lazy from l2l.json_values import JsonObject
+
+if TYPE_CHECKING:
+    from l2l.context import HttpRequest, HttpResponse, OpenHTTP
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -53,7 +57,7 @@ def write_config(tmp_path: Path) -> Path:
 def run_l2l(
     config_path: Path,
     tmp_path: Path,
-    open_http: Callable[[Any, float], Result[Any, TranslationError]],
+    open_http: OpenHTTP,
     flags: list[str],
     sleep: Callable[[float], None] | None = None,
 ) -> tuple[int, str, str]:
@@ -95,7 +99,7 @@ def test_run_log_captures_stream_request_and_response(tmp_path: Path) -> None:
 
 def test_run_log_captures_plain_request_and_response(tmp_path: Path) -> None:
     console, _ = make_console()
-    body = {
+    body: JsonObject = {
         "choices": [{"message": {"content": "Plain"}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
@@ -114,7 +118,9 @@ def test_run_log_captures_plain_request_and_response(tmp_path: Path) -> None:
 
 
 def test_run_log_captures_http_error(tmp_path: Path) -> None:
-    def open_fail(request: Any, timeout: float) -> Result[Any, TranslationError]:
+    def open_fail(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         return fail_http("unreachable", "down")
 
     slept: list[float] = []

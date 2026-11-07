@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from functools import reduce
+lazy from collections.abc import Mapping
 
 from l2l.cache import cached_translation
-from l2l.context import Context
 from l2l.effects import now
 from l2l.errors import TranslationError, fail_ascii, fail_ascii_collapse
 from l2l.http import RepairPolicy, repaired_call
@@ -55,6 +54,7 @@ from l2l.text import (
     usage_add,
     usage_delta,
 )
+lazy from l2l.context import Context
 
 
 def ascii_fix_llm(

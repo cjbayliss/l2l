@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING
 
-from l2l.config.models import DocumentResult
 from l2l.effects import (
     current_working_directory,
     load_toml,
@@ -12,6 +10,7 @@ from l2l.effects import (
     user_config_path,
 )
 from l2l.errors import TranslationError, fail_config
+from l2l.json_values import JsonObject, is_non_empty_string_array
 from l2l.monads import (
     IO,
     Ok,
@@ -23,10 +22,15 @@ from l2l.monads import (
     io_result_bind,
     result_map,
 )
+lazy from l2l.config.models import DocumentResult
+lazy from l2l.settings import Unset
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
 
 
 def validate_document(
-    path: str, document: dict[str, Any]
+    path: str, document: JsonObject
 ) -> Result[None, TranslationError]:
     if not document:
         return Ok(None)
@@ -54,10 +58,7 @@ def validate_document(
         )
 
     glossary = document.get("glossary")
-    if glossary is not None and (
-        not isinstance(glossary, list)
-        or not all(isinstance(item, str) and item.strip() for item in glossary)
-    ):
+    if glossary is not None and not is_non_empty_string_array(glossary):
         return fail_config("%s: glossary must be a list of file paths" % path)
 
     return Ok(None)
@@ -65,7 +66,7 @@ def validate_document(
 
 def read_document(
     path: str | None, description: str, exists: bool
-) -> IO[Result[dict[str, Any], TranslationError]]:
+) -> IO[Result[JsonObject, TranslationError]]:
     if not exists:
         return io_result(Ok({}))
 
@@ -78,13 +79,17 @@ def read_document(
 
 
 def resolve_config_path(
-    requested: str | None,
+    requested: str | Unset,
     environment: Mapping[str, str],
     path_exists: Callable[[str], bool] = os.path.exists,
     current_directory: IO[str] | None = None,
 ) -> IO[str | None]:
-    if requested:
-        return io_pure(requested)
+    match requested:
+        case str() as path if path.strip():
+            return io_pure(path)
+
+        case _:
+            pass
 
     configured = environment.get("TRANSLATE_CONFIG", "").strip()
     if configured:

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import reduce
 from types import MappingProxyType
-from typing import Any
+lazy from collections.abc import Mapping
 
-from l2l.config.models import ResolvedPasses
+from l2l.config.models import DocumentResult, ResolvedPasses
 from l2l.config.parsing import (
     document_output_patch,
     document_passes,
@@ -48,17 +47,20 @@ from l2l.settings import (
     OptionDefaults,
     PassDefinition,
     PassDraft,
+    Unset,
     effective_target_language,
     paragraph_tolerance,
+    value_if_set,
 )
+lazy from l2l.json_values import JsonObject
 
 
 def document_layers(
     user_path: str,
-    user_document: dict[str, Any],
+    user_document: JsonObject,
     selected_path: str | None,
-    selected_document: dict[str, Any],
-) -> tuple[tuple[str | None, dict[str, Any]], ...]:
+    selected_document: JsonObject,
+) -> tuple[tuple[str | None, JsonObject], ...]:
     return tuple(
         (path, document)
         for path, document, present in (
@@ -71,12 +73,12 @@ def document_layers(
 
 def resolve_passes(
     user_path: str,
-    user_document_result: Result[dict[str, Any], TranslationError],
+    user_document_result: DocumentResult,
     selected_path: str | None,
-    selected_document_result: Result[dict[str, Any], TranslationError],
+    selected_document_result: DocumentResult,
 ) -> IO[Result[ResolvedPasses, TranslationError]]:
     def resolve(
-        documents: tuple[dict[str, Any], dict[str, Any]],
+        documents: tuple[JsonObject, JsonObject],
     ) -> IO[Result[ResolvedPasses, TranslationError]]:
         layers = document_layers(user_path, documents[0], selected_path, documents[1])
         pass_sources = tuple(layer for layer in layers if "pass" in layer[1])
@@ -217,7 +219,7 @@ def selected_pass_role(
         case "analysis":
             return "analyser"
 
-        case _:
+        case "update_glossary":
             return None
 
 
@@ -258,11 +260,11 @@ def finalized_pass_definition(
         instruction=instruction,
         mode=pass_draft.mode,
         parameters=pass_draft.parameters,
-        model=pass_draft.model,
-        ascii=pass_draft.ascii,
-        ensure_paragraphs=pass_draft.ensure_paragraphs,
-        retranslate_untranslated=pass_draft.retranslate_untranslated,
-        target_language=pass_draft.target_language,
+        model=value_if_set(pass_draft.model),
+        ascii=value_if_set(pass_draft.ascii),
+        ensure_paragraphs=value_if_set(pass_draft.ensure_paragraphs),
+        retranslate_untranslated=value_if_set(pass_draft.retranslate_untranslated),
+        target_language=value_if_set(pass_draft.target_language),
         include_types=pass_draft.include_types,
         style=style_policy,
         output=output_policy,
@@ -275,7 +277,7 @@ def finalized_pass_definition(
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FinalizedPasses:
     passes: tuple[PassDefinition, ...]
     warnings: tuple[str, ...]
@@ -315,7 +317,7 @@ def finalize_pass_draft(
 ) -> Result[tuple[PassDefinition, tuple[str, ...]], TranslationError]:
     explicit = (
         pass_draft.ensure_paragraphs_explicit
-        if pass_draft.ensure_paragraphs_explicit is not None
+        if not isinstance(pass_draft.ensure_paragraphs_explicit, Unset)
         else global_ensure_paragraphs
     )
     if pass_draft.instruction is not None or pass_draft.mode == "update_glossary":
@@ -373,12 +375,14 @@ def finalize_pass_draft(
         **global_prompts,
         **pass_draft.prompts,
     }
-    overrides = MappingProxyType(
-        {name: override.text for name, override in merged_prompts.items()}
-    )
-    origins = MappingProxyType(
-        {name: override.origin for name, override in merged_prompts.items()}
-    )
+    override_texts: dict[PromptSectionName, str] = {
+        name: override.text for name, override in merged_prompts.items()
+    }
+    override_origins: dict[PromptSectionName, PromptSectionOrigin] = {
+        name: override.origin for name, override in merged_prompts.items()
+    }
+    overrides = MappingProxyType(override_texts)
+    origins = MappingProxyType(override_origins)
     style_policy = global_style_patch.merge(pass_draft.style_patch).resolved()
     output_policy = global_output_patch.merge(pass_draft.output_patch).resolved()
     if pass_draft.mode == "analysis":
@@ -398,7 +402,7 @@ def finalize_pass_draft(
             role=role if role is not None else "translator",
             source_language=global_source_language,
             target_language=effective_target_language(
-                global_target_language, pass_draft.target_language
+                global_target_language, value_if_set(pass_draft.target_language)
             ),
             output_policy=effective_output_policy,
             style_policy=style_policy,

@@ -3,8 +3,9 @@ import json
 import os
 import sys
 import time
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, NoReturn
+lazy from collections.abc import Mapping
+lazy from pathlib import Path
 
 import pytest
 from fakes import (
@@ -18,8 +19,12 @@ from fakes import (
 from l2l import __version__, cli, effects, pipeline
 from l2l.config import setup as config_setup
 from l2l.errors import FileError, TranslationError, describe, fail_http
-from l2l.monads import Err, Ok, Result, io_pure, io_result
-from l2l.settings import Arguments
+from l2l.monads import IO, Err, Ok, Result, io_pure, io_result
+from l2l.settings import UNSET, Arguments
+lazy from l2l.json_values import JsonObject
+
+if TYPE_CHECKING:
+    from l2l.context import HttpRequest, HttpResponse
 
 CONFIG_TEXT = (
     'target_language = "English"\n'
@@ -39,11 +44,10 @@ USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
 @pytest.fixture(autouse=True)
 def isolate_user_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(
-        config_setup,
-        "user_config_path",
-        lambda _environment: io_pure(str(tmp_path / "absent-config.toml")),
-    )
+    def absent_user_config_path(_environment: Mapping[str, str]) -> IO[str]:
+        return io_pure(str(tmp_path / "absent-config.toml"))
+
+    monkeypatch.setattr(config_setup, "user_config_path", absent_user_config_path)
 
 
 def write_config(tmp_path: Path) -> Path:
@@ -57,7 +61,9 @@ def run_l2l(
     arguments: list[str],
     stdin: str = "你好。",
 ) -> tuple[int, str, str]:
-    def open_http(request: Any, timeout: float) -> Result[Any, TranslationError]:
+    def open_http(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         raise AssertionError("endpoint must not be contacted")
 
     stdout, stderr = io.StringIO(), io.StringIO()
@@ -242,13 +248,14 @@ def test_prune_cache_reports_scan_failure(
     cache_directory = tmp_path / "cache"
     cache_directory.mkdir()
 
-    monkeypatch.setattr(
-        cli,
-        "cache_entry_paths",
-        lambda directory: io_result(
+    def refusing_cache_entry_paths(
+        directory: str,
+    ) -> IO[Result[tuple[str, ...], TranslationError]]:
+        return io_result(
             Err(FileError(directory, "list entries in", "[Errno 13] Permission denied"))
-        ),
-    )
+        )
+
+    monkeypatch.setattr(cli, "cache_entry_paths", refusing_cache_entry_paths)
 
     code, _, stderr = run_l2l(
         tmp_path,
@@ -273,13 +280,14 @@ def test_prune_cache_reports_age_failure(
     cache_directory.mkdir()
     (cache_directory / "stale.txt").write_text("old", encoding="utf-8")
 
-    monkeypatch.setattr(
-        effects,
-        "file_age",
-        lambda path, now_value: io_result(
+    def failing_file_age(
+        path: str, now_value: float
+    ) -> IO[Result[float, TranslationError]]:
+        return io_result(
             Err(FileError(path, "read the age of", "[Errno 13] Permission denied"))
-        ),
-    )
+        )
+
+    monkeypatch.setattr(effects, "file_age", failing_file_age)
 
     code, _, stderr = run_l2l(
         tmp_path,
@@ -307,13 +315,10 @@ def test_prune_cache_reports_removal_failure(
     stale_time = time.time() - 30 * 86400
     os.utime(stale, (stale_time, stale_time))
 
-    monkeypatch.setattr(
-        effects,
-        "remove_file",
-        lambda path: io_result(
-            Err(FileError(path, "remove", "[Errno 13] Permission denied"))
-        ),
-    )
+    def failing_remove(path: str) -> IO[Result[bool, TranslationError]]:
+        return io_result(Err(FileError(path, "remove", "[Errno 13] Permission denied")))
+
+    monkeypatch.setattr(effects, "remove_file", failing_remove)
 
     code, _, stderr = run_l2l(
         tmp_path,
@@ -332,11 +337,11 @@ def test_prune_cache_reports_removal_failure(
 
 
 def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:
-    body = {
+    body: JsonObject = {
         "choices": [{"message": {"content": "Hello."}}],
         "usage": {"prompt_tokens": 2, "completion_tokens": 2, "cost": 0.01},
     }
-    chunks = [
+    chunks: list[JsonObject] = [
         *stream_chunks("Hello."),
         {"choices": [{"delta": {}}], "usage": body["usage"]},
     ]
@@ -367,7 +372,7 @@ def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:
 
 def test_validation_mode_controls_the_cli_outcome(tmp_path: Path) -> None:
     bad = "One.\n\nTwo."
-    chunks = [
+    chunks: list[JsonObject] = [
         *stream_chunks(bad),
         {"choices": [{"delta": {}}], "usage": USAGE},
     ]
@@ -403,7 +408,7 @@ def test_validation_mode_controls_the_cli_outcome(tmp_path: Path) -> None:
 
 
 def test_plain_call_end_to_end(tmp_path: Path) -> None:
-    body = {
+    body: JsonObject = {
         "choices": [{"message": {"content": "Plain."}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
@@ -431,7 +436,7 @@ def test_plain_call_end_to_end(tmp_path: Path) -> None:
 
 
 def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
-    body = {
+    body: JsonObject = {
         "choices": [{"message": {"content": "Hello."}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
@@ -465,7 +470,9 @@ def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
     assert first == 0
     assert first_stdout.getvalue().strip() == "Hello."
 
-    def refusing_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
+    def refusing_open(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         raise AssertionError("cache should have served the second run")
 
     second_stdout, second_stderr = io.StringIO(), io.StringIO()
@@ -488,7 +495,7 @@ def test_translation_request_carries_glossary_block(tmp_path: Path) -> None:
     glossary.write_text(
         '[{"original": "南京", "translated": "Nanjing"}]', encoding="utf-8"
     )
-    chunks = [
+    chunks: list[JsonObject] = [
         *stream_chunks("Hello."),
         {"choices": [{"delta": {}}], "usage": USAGE},
     ]
@@ -543,8 +550,8 @@ def run_extract_glossary(
     return code, stdout.getvalue(), stderr.getvalue()
 
 
-def glossary_reply(entries: list[dict[str, Any]]) -> FakeStreamResponse:
-    chunks = [
+def glossary_reply(entries: list[JsonObject]) -> FakeStreamResponse:
+    chunks: list[JsonObject] = [
         *stream_chunks("```json\n" + json.dumps(entries, ensure_ascii=False) + "\n```"),
         {"choices": [{"delta": {}}], "usage": USAGE},
     ]
@@ -603,7 +610,7 @@ def test_extract_glossary_target_language_reaches_the_payload(tmp_path: Path) ->
 
 def test_extract_glossary_invalid_reply_exits_one(tmp_path: Path) -> None:
     output = tmp_path / "book-glossary.json"
-    chunks = [
+    chunks: list[JsonObject] = [
         *stream_chunks("not json"),
         {"choices": [{"delta": {}}], "usage": USAGE},
     ]
@@ -778,7 +785,7 @@ def test_update_glossary_pass_writes_only_the_first_glossary_file(
     extraction = glossary_reply(
         [{"original": "大观园", "translated": "Grand View Garden"}]
     )
-    translation_chunks = [
+    translation_chunks: list[JsonObject] = [
         *stream_chunks("Hello."),
         {"choices": [{"delta": {}}], "usage": USAGE},
     ]
@@ -1100,15 +1107,18 @@ def test_main_log_retention_days_prunes_old_logs(tmp_path: Path) -> None:
 
 
 def test_cli_exits_with_program_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_main(*arguments: object) -> IO[int]:
+        return io_pure(3)
+
     exits: list[int] = []
-    monkeypatch.setattr(cli, "main", lambda *arguments: io_pure(3))
+    monkeypatch.setattr(cli, "main", fake_main)
     monkeypatch.setattr(sys, "exit", exits.append)
     cli.cli()
     assert exits == [3]
 
 
 def test_cli_handles_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
-    def interrupted(*arguments: Any, **keyword_arguments: Any) -> Any:
+    def interrupted(*arguments: object) -> NoReturn:
         raise KeyboardInterrupt
 
     exits: list[int] = []
@@ -1119,13 +1129,19 @@ def test_cli_handles_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_cli_handles_broken_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
-    def broken(*arguments: Any, **keyword_arguments: Any) -> Any:
+    def broken(*arguments: object) -> NoReturn:
         raise BrokenPipeError
+
+    def refusing_open(path: object, flags: int) -> int:
+        return -1
+
+    def detached_dup2(file_descriptor: int, target: int) -> None:
+        return None
 
     exits: list[int] = []
     monkeypatch.setattr(cli, "main", broken)
-    monkeypatch.setattr(os, "open", lambda path, flags: -1)
-    monkeypatch.setattr(os, "dup2", lambda fd, target: None)
+    monkeypatch.setattr(os, "open", refusing_open)
+    monkeypatch.setattr(os, "dup2", detached_dup2)
     monkeypatch.setattr(sys, "exit", exits.append)
     cli.cli()
     assert exits == [141]
@@ -1137,9 +1153,9 @@ def test_parse_args_defaults_and_short_flags() -> None:
     assert defaults.no_cache
     assert not defaults.ensure_paragraphs
     assert defaults.verbose
-    assert defaults.cache_directory is None
+    assert defaults.cache_directory is UNSET
     assert defaults.log_retention_days == 30
-    assert defaults.target_language is None
+    assert defaults.target_language is UNSET
     assert cli.parse_args(["-c", "cfg.toml", "--ensure-paragraphs"]).ensure_paragraphs
     assert (
         cli.parse_args(
@@ -1195,7 +1211,7 @@ def test_parse_args_defaults_and_short_flags() -> None:
 def test_update_glossary_pass_with_malformed_reply_exits_one(tmp_path: Path) -> None:
     glossary = tmp_path / "glossary.json"
     glossary.write_text("[]", encoding="utf-8")
-    chunks = [
+    chunks: list[JsonObject] = [
         *stream_chunks("not json at all"),
         {"choices": [{"delta": {}}], "usage": USAGE},
     ]
@@ -1229,9 +1245,11 @@ def test_update_glossary_pass_reports_a_failed_extraction_call(
 ) -> None:
     glossary = tmp_path / "glossary.json"
     glossary.write_text("[]", encoding="utf-8")
-    requests: list[Any] = []
+    requests: list[HttpRequest] = []
 
-    def unreachable_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
+    def unreachable_open(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         requests.append(request)
         return fail_http("unreachable", "down")
 
@@ -1264,10 +1282,11 @@ def test_update_glossary_pass_reports_a_glossary_write_failure(
 ) -> None:
     glossary = tmp_path / "glossary.json"
     glossary.write_text("[]", encoding="utf-8")
-    monkeypatch.setattr(
-        pipeline,
-        "write_text_file",
-        lambda path, content, description: io_result(
+
+    def failing_write(
+        path: str, content: str, description: str
+    ) -> IO[Result[None, TranslationError]]:
+        return io_result(
             Err(
                 FileError(
                     path,
@@ -1275,8 +1294,9 @@ def test_update_glossary_pass_reports_a_glossary_write_failure(
                     "[Errno 13] Permission denied",
                 )
             )
-        ),
-    )
+        )
+
+    monkeypatch.setattr(pipeline, "write_text_file", failing_write)
     http = FakeHttp([glossary_reply([{"original": "大观园", "translated": "G"}])])
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(

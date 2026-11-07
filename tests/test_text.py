@@ -196,7 +196,9 @@ def test_build_chat_payload() -> None:
     assert payload["model"] == "m"
     assert payload["temperature"] == 1
     assert "x" not in payload
-    assert payload["messages"][0] == {"role": "system", "content": "s"}
+    messages = payload["messages"]
+    assert isinstance(messages, tuple)
+    assert messages[0] == {"role": "system", "content": "s"}
 
 
 def test_build_pass_user() -> None:
@@ -211,6 +213,12 @@ def test_build_pass_user() -> None:
 def test_unit_output_problem_accepts_matching_reply() -> None:
     settings = build_settings()
     problem = unit_output_problem("你好。\n\n世界。", "Hello.\n\nWorld.", settings, 0)
+    assert problem == NOTHING
+
+
+def test_unit_output_problem_skips_plausibility_without_source_words() -> None:
+    settings = build_settings()
+    problem = unit_output_problem("！？。—", "Hello there, friend.", settings, 0)
     assert problem == NOTHING
 
 

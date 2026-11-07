@@ -6,13 +6,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from functools import reduce
 from types import MappingProxyType
-from typing import Any, assert_never
+from typing import Final, Protocol, assert_never
 
 import pycurl
 
 from l2l import __version__
-from l2l.console import Console
-from l2l.context import Context
+from l2l.context import Context, HttpRequest, HttpResponse, HttpStreamResponse
 from l2l.effects import log_entry, log_error, log_request, run_log_write
 from l2l.errors import (
     HttpError,
@@ -21,6 +20,15 @@ from l2l.errors import (
     describe,
     fail_budget,
     fail_http,
+)
+from l2l.json_values import (
+    JsonArray,
+    JsonObject,
+    JsonValue,
+    is_json_array,
+    is_json_object,
+    is_object_list,
+    is_object_table,
 )
 from l2l.monads import (
     IO,
@@ -60,7 +68,6 @@ from l2l.monads import (
     reference_write_when,
     result_bind,
 )
-from l2l.settings import Config
 from l2l.text import (
     SseDone,
     SseEvent,
@@ -76,6 +83,8 @@ from l2l.text import (
     strip_think_tag,
     think_step,
 )
+lazy from l2l.console import Console
+lazy from l2l.settings import Config, Unset
 
 
 def transient(error: TranslationError) -> bool:
@@ -107,9 +116,11 @@ def retry_delay(error: TranslationError, planned: float) -> float:
             return planned
 
 
-OPENROUTER_HOST = "openrouter.ai"
+OPENROUTER_HOST: Final = "openrouter.ai"
 
-PROVIDER_NAME_PATTERN = re.compile(r"['\"]provider_name['\"]\s*:\s*['\"]([^'\"]+)['\"]")
+PROVIDER_NAME_PATTERN: Final = re.compile(
+    r"['\"]provider_name['\"]\s*:\s*['\"]([^'\"]+)['\"]"
+)
 
 
 def is_openrouter(config: Config) -> bool:
@@ -127,19 +138,26 @@ def failed_provider_name(error: TranslationError) -> str | None:
 
 
 def with_blocked_providers(
-    config: Config, payload: Mapping[str, Any], blocked_providers: frozenset[str]
-) -> Mapping[str, Any]:
+    config: Config, payload: JsonObject, blocked_providers: frozenset[str]
+) -> JsonObject:
     if not is_openrouter(config) or not blocked_providers:
         return payload
 
     routing = payload.get("provider")
-    existing_routing = routing if isinstance(routing, dict) else {}
-    existing_ignored = existing_routing.get("ignore", ())
+    existing_routing = (
+        routing if is_json_object(routing) else MappingProxyType[str, JsonValue]({})
+    )
+    ignored = existing_routing.get("ignore")
+    existing_ignored: set[str] = (
+        {name for name in ignored if isinstance(name, str)}
+        if is_json_array(ignored)
+        else set()
+    )
     return {
         **payload,
         "provider": {
             **existing_routing,
-            "ignore": sorted(set(existing_ignored) | blocked_providers),
+            "ignore": sorted(existing_ignored | blocked_providers),
         },
     }
 
@@ -181,8 +199,8 @@ ReasoningLogger = Callable[[str], IO[None]]
 
 
 def build_chat_payload(
-    model: str, system: str, user: str, parameters: Mapping[str, Any]
-) -> dict[str, Any]:
+    model: str, system: str, user: str, parameters: Mapping[str, JsonValue]
+) -> JsonObject:
     return {
         **{
             "model": model,
@@ -195,29 +213,32 @@ def build_chat_payload(
     }
 
 
-TRANSPORT_ERRORS = (OSError, TimeoutError)
+TRANSPORT_ERRORS: Final = (OSError, TimeoutError)
 
-CONNECT_ERROR_CODES = frozenset(
+CONNECT_ERROR_CODES: Final = frozenset(
     {1, 3, 5, 6, 7, 35, 51, 58, 60, 61, 64, 66, 77, 83, 90, 96, 200}
 )
 
 
-@dataclass(frozen=True)
-class HttpRequest:
-    url: str
-    body: bytes
-    headers: Mapping[str, str]
+def curl_error_code(error: pycurl.error) -> int:
+    match error.args:
+        case (int(code), _):
+            return code
+
+        case _:
+            return 0
 
 
-def curl_error_code(error: Any) -> int:
-    return int(error.args[0]) if error.args else 0
+def curl_error_detail(error: pycurl.error) -> str:
+    match error.args:
+        case (_, str(detail)):
+            return detail
+
+        case _:
+            return str(error)
 
 
-def curl_error_detail(error: Any) -> str:
-    return str(error.args[1]) if len(error.args) > 1 else str(error)
-
-
-def curl_failure(error: Any, kind: HttpKind) -> Err[TranslationError]:
+def curl_failure(error: pycurl.error, kind: HttpKind) -> Err[TranslationError]:
     resolved = "unreachable" if curl_error_code(error) in CONNECT_ERROR_CODES else kind
     return fail_http(resolved, curl_error_detail(error))
 
@@ -242,37 +263,64 @@ def noproxy_for(environment: Mapping[str, str]) -> Maybe[str]:
     return environment_value(environment, ("no_proxy", "NO_PROXY"))
 
 
+def unexpected_response(body: object) -> Err[TranslationError]:
+    return fail_http("protocol", "unexpected response shape: %s" % str(body)[:500])
+
+
 def extract_message(
-    body: Any,
-) -> Result[tuple[Mapping[str, Any], Any], TranslationError]:
-    try:
-        message = body["choices"][0]["message"]
-        return Ok((message, message["content"]))
-    except KeyError, IndexError, TypeError:
-        return fail_http("protocol", "unexpected response shape: %s" % str(body)[:500])
+    body: object,
+) -> Result[tuple[JsonObject, JsonValue], TranslationError]:
+    if not is_json_object(body):
+        return unexpected_response(body)
+
+    choices = body.get("choices")
+    if not is_json_array(choices) or not choices:
+        return unexpected_response(body)
+
+    first_choice = choices[0]
+    if not is_json_object(first_choice) or "message" not in first_choice:
+        return unexpected_response(body)
+
+    message = first_choice["message"]
+    if not is_json_object(message) or "content" not in message:
+        return unexpected_response(body)
+
+    return Ok((message, message["content"]))
 
 
-def collect_thinking_texts(part: Mapping[str, Any]) -> tuple[str, ...]:
+def thinking_entry_text(entry: object) -> str | None:
+    text = entry.get("text") if is_json_object(entry) else None
+    return text if isinstance(text, str) and text else None
+
+
+def collect_thinking_texts(part: Mapping[str, object]) -> tuple[str, ...]:
+    thinking = part.get("thinking")
+    if not is_json_array(thinking):
+        return ()
+
     return tuple(
-        entry["text"]
-        for entry in (part.get("thinking") or [])
-        if isinstance(entry, dict) and entry.get("text")
+        entry_text
+        for entry_text in (thinking_entry_text(entry) for entry in thinking)
+        if entry_text is not None
     )
 
 
-def collect_content_parts(parts: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def collect_content_parts(
+    parts: JsonArray,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     def step(
-        accumulator: tuple[tuple[str, ...], tuple[str, ...]], part: Any
+        accumulator: tuple[tuple[str, ...], tuple[str, ...]], part: JsonValue
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         texts, thoughts = accumulator
-        if not isinstance(part, dict):
+        if not is_json_object(part):
             return texts + (str(part),), thoughts
 
         if part.get("type") == "thinking":
             return texts, thoughts + collect_thinking_texts(part)
 
-        if part.get("text"):
-            return texts + (part["text"],), thoughts
+        text = part.get("text")
+        if isinstance(text, str) and text:
+            return texts + (text,), thoughts
 
         return accumulator
 
@@ -280,19 +328,21 @@ def collect_content_parts(parts: Any) -> tuple[tuple[str, ...], tuple[str, ...]]
     return reduce(step, parts, initial)
 
 
-def flatten_content_parts(content: Any) -> tuple[Any, tuple[str, ...]]:
-    if not isinstance(content, list):
+def flatten_content_parts(
+    content: JsonValue,
+) -> tuple[JsonValue, tuple[str, ...]]:
+    if not is_json_array(content):
         return content, ()
 
     texts, thoughts = collect_content_parts(content)
     return "".join(texts), thoughts
 
 
-REASONING_KEYS = ("reasoning_content", "reasoning")
+REASONING_KEYS: Final = ("reasoning_content", "reasoning")
 
 
 def reasoning_at(
-    container: Mapping[str, Any], clean: Callable[[str], Maybe[str]]
+    container: Mapping[str, object], clean: Callable[[str], Maybe[str]]
 ) -> Maybe[str]:
     def from_key(key: str) -> Maybe[str]:
         value = container.get(key)
@@ -310,52 +360,61 @@ def keep_trimmed(value: str) -> Maybe[str]:
     return Just(value.rstrip()) if value.strip() else NOTHING
 
 
-def message_reasoning_texts(message: Mapping[str, Any]) -> tuple[str, ...]:
+def message_reasoning_texts(message: Mapping[str, object]) -> tuple[str, ...]:
     found = reasoning_at(message, keep_trimmed)
     return maybe_either(found, lambda text: (text,), tuple)
 
 
-def first_choice_field(payload: Mapping[str, Any], field: str) -> Any:
-    try:
-        choices = payload.get("choices")
-        return choices[0].get(field) if choices else None
-    except AttributeError, IndexError, KeyError, TypeError:
+def first_choice_field(payload: Mapping[str, object], field: str) -> JsonValue | None:
+    choices = payload.get("choices")
+    if not is_json_array(choices) or not choices:
         return None
 
+    first_choice = choices[0]
+    if not is_json_object(first_choice):
+        return None
 
-def parse_chunk_delta(chunk: Mapping[str, Any]) -> dict[str, Any]:
+    return first_choice.get(field)
+
+
+def parse_chunk_delta(chunk: Mapping[str, object]) -> JsonObject:
     delta = first_choice_field(chunk, "delta")
-    return delta if isinstance(delta, dict) else {}
+    return delta if is_json_object(delta) else MappingProxyType({})
 
 
-def completion_finish_reason(payload: Mapping[str, Any]) -> str | None:
+def completion_finish_reason(payload: Mapping[str, object]) -> str | None:
     found = first_choice_field(payload, "finish_reason")
     return found if isinstance(found, str) else None
 
 
-def delta_text(delta: Mapping[str, Any]) -> str:
+def delta_text(delta: Mapping[str, object]) -> str:
     value = delta.get("content")
     if isinstance(value, str):
         return value
 
-    if isinstance(value, list):
-        return "".join(part.get("text", "") for part in value if isinstance(part, dict))
+    if not is_object_list(value):
+        return ""
 
-    return ""
+    return "".join(choice_delta_text(item) for item in value if is_object_table(item))
 
 
-@dataclass(frozen=True)
+def choice_delta_text(delta: Mapping[object, object]) -> str:
+    text = delta.get("text", "")
+    return text if isinstance(text, str) else ""
+
+
+@dataclass(frozen=True, slots=True)
 class ProgressUpdate:
     label: str
     count: int
     reasoning: str = ""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StreamState:
     reasoning: Cons[str] | None = None
     contents: Cons[str] | None = None
-    reported_usage: Mapping[str, Any] | None = None
+    reported_usage: Mapping[str, JsonValue] | None = None
     chunk_count: int = 0
     content_started: bool = False
     think: ThinkState = field(default_factory=ThinkState)
@@ -375,7 +434,7 @@ def stream_text(state: StreamState) -> str:
 
 
 def stream_step(
-    state: StreamState, chunk: Mapping[str, Any]
+    state: StreamState, chunk: JsonObject
 ) -> Result[StreamState, TranslationError]:
     finish_reason = completion_finish_reason(chunk)
     usage_report = chunk.get("usage")
@@ -450,8 +509,8 @@ def ingest_raw_line(
 
             return stream_step(updated, frame.payload)
 
-        case other:
-            assert_never(other)
+        case _:
+            assert_never(frame)
 
 
 def require_completed_stream(
@@ -466,16 +525,19 @@ def require_completed_stream(
     return Ok(state)
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class ChatReply:
     content: str
     reasoning: tuple[str, ...] = ()
-    reported_usage: Mapping[str, Any] | None = None
+    reported_usage: Mapping[str, JsonValue] | None = None
     chunk_count: int = 0
     reasoning_shown: bool = False
 
 
-def plain_reply(body: Any) -> Result[ChatReply, TranslationError]:
+def plain_reply(body: object) -> Result[ChatReply, TranslationError]:
+    if not is_json_object(body):
+        return unexpected_response(body)
+
     message_result = extract_message(body)
     if isinstance(message_result, Err):
         return message_result
@@ -492,7 +554,7 @@ def plain_reply(body: Any) -> Result[ChatReply, TranslationError]:
 
     usage_report = body.get("usage")
     reported_usage = (
-        MappingProxyType(usage_report) if isinstance(usage_report, dict) else None
+        MappingProxyType(usage_report) if is_json_object(usage_report) else None
     )
     return Ok(
         ChatReply(
@@ -504,7 +566,7 @@ def plain_reply(body: Any) -> Result[ChatReply, TranslationError]:
 
 
 def http_request(
-    config: Config, payload: Mapping[str, Any], accept: str | None = None
+    config: Config, payload: JsonObject, accept: str | None = None
 ) -> HttpRequest:
     headers = MappingProxyType(
         {
@@ -562,11 +624,21 @@ def append_bytes(collected: tuple[bytes, ...], item: bytes) -> tuple[bytes, ...]
     return collected + (item,)
 
 
+class CurlHandle(Protocol):
+    def close(self) -> None: ...
+
+    def getinfo(self, info: int) -> int: ...
+
+    def perform(self) -> None: ...
+
+    def setopt(self, option: int, value: object) -> None: ...
+
+
 def configure_curl(
     request: HttpRequest,
     timeout: float,
     environment: Mapping[str, str],
-    curl: Any,
+    curl: CurlHandle,
     on_chunk: Callable[[bytes], None],
     on_header: Callable[[bytes], None],
 ) -> None:
@@ -595,7 +667,7 @@ def configure_curl(
         curl.setopt(pycurl.NOPROXY, noproxy.value)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ResponseTaps:
     chunks: Reference[tuple[bytes, ...]]
     header_lines: Reference[tuple[bytes, ...]]
@@ -617,11 +689,13 @@ def response_taps() -> ResponseTaps:
     return ResponseTaps(chunks=chunks, header_lines=header_lines, on_header=on_header)
 
 
-def curl_transfer(curl: Any, kind: HttpKind) -> IO[Result[int, TranslationError]]:
+def curl_transfer(
+    curl: CurlHandle, kind: HttpKind
+) -> IO[Result[int, TranslationError]]:
     def thunk() -> Result[int, TranslationError]:
         try:
             curl.perform()
-            return Ok(int(curl.getinfo(pycurl.RESPONSE_CODE)))
+            return Ok(curl.getinfo(pycurl.RESPONSE_CODE))
         except pycurl.error as error:
             return curl_failure(error, kind)
         finally:
@@ -641,12 +715,12 @@ def status_failure(
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CurlResponse:
     request: HttpRequest
     timeout: float
     environment: Mapping[str, str]
-    new_curl: Callable[[], Any] = pycurl.Curl
+    new_curl: Callable[[], CurlHandle] = pycurl.Curl
 
     def body(self) -> IO[Result[bytes, TranslationError]]:
         taps = response_taps()
@@ -677,12 +751,12 @@ class CurlResponse:
 
         return io_result_bind(curl_transfer(curl, "unreachable"), finish)
 
-    def consume(
+    def consume[S](
         self,
-        step: Callable[[Any, bytes], IO[Result[Any, TranslationError]]],
-        initial: Result[Any, TranslationError],
-    ) -> IO[Result[Any, TranslationError]]:
-        state: Reference[Result[Any, TranslationError]] = Reference(initial)
+        step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+        initial: Result[S, TranslationError],
+    ) -> IO[Result[S, TranslationError]]:
+        state: Reference[Result[S, TranslationError]] = Reference(initial)
         remainder: Reference[bytes] = Reference(b"")
         error_active: Reference[bool] = Reference(False)
         taps = response_taps()
@@ -713,13 +787,13 @@ class CurlResponse:
             if remaining:
                 gated(remaining)
 
-        def finish(code: int) -> IO[Result[Any, TranslationError]]:
+        def finish(code: int) -> IO[Result[S, TranslationError]]:
             def decide(
                 parts: tuple[
-                    Result[Any, TranslationError],
+                    Result[S, TranslationError],
                     tuple[tuple[bytes, ...], tuple[bytes, ...]],
                 ],
-            ) -> Result[Any, TranslationError]:
+            ) -> Result[S, TranslationError]:
                 outcome, rest = parts
                 collected, headers = rest
                 if code >= 400:
@@ -727,7 +801,7 @@ class CurlResponse:
 
                 return outcome
 
-            def drained(_: None) -> IO[Result[Any, TranslationError]]:
+            def drained(_: None) -> IO[Result[S, TranslationError]]:
                 return io_map(
                     io_pair(
                         read_reference(state),
@@ -747,11 +821,11 @@ class CurlResponse:
 
 
 def curl_open(
-    request: Any,
+    request: HttpRequest,
     timeout: float,
     environment: Mapping[str, str],
-    new_curl: Callable[[], Any] = pycurl.Curl,
-) -> Result[CurlResponse, TranslationError]:
+    new_curl: Callable[[], CurlHandle] = pycurl.Curl,
+) -> Result[HttpResponse, TranslationError]:
     return Ok(CurlResponse(request, timeout, environment, new_curl))
 
 
@@ -820,18 +894,19 @@ def with_retries[T](
 
 def parse_json_body(
     body_result: Result[bytes, TranslationError],
-) -> Result[tuple[str, Any], TranslationError]:
+) -> Result[tuple[str, JsonValue], TranslationError]:
     if isinstance(body_result, Err):
         return body_result
 
     try:
         text = body_result.value.decode("utf-8")
-        return Ok((text, json.loads(text)))
+        loaded: JsonValue = json.loads(text)
+        return Ok((text, loaded))
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         return fail_http("protocol", "invalid JSON response: %s" % error)
 
 
-def read_failure(error: Exception) -> Result[tuple[str, Any], TranslationError]:
+def read_failure(error: Exception) -> Result[tuple[str, JsonValue], TranslationError]:
     if isinstance(error, TRANSPORT_ERRORS):
         return fail_http("unreachable", "response read failed: %s" % error)
 
@@ -850,16 +925,16 @@ def log_failure[T](
 
 
 def http_post_json(
-    run_context: Context, payload: Mapping[str, Any]
-) -> IO[Result[dict[str, Any], TranslationError]]:
-    def opened() -> Result[Any, TranslationError]:
+    run_context: Context, payload: JsonObject
+) -> IO[Result[JsonValue, TranslationError]]:
+    def opened() -> Result[HttpResponse, TranslationError]:
         return run_context.open_http(
             http_request(run_context.config, payload), run_context.config.timeout
         )
 
     def transferred(
-        outcome: Result[Any, TranslationError],
-    ) -> IO[Result[tuple[str, Any], TranslationError]]:
+        outcome: Result[HttpResponse, TranslationError],
+    ) -> IO[Result[tuple[str, JsonValue], TranslationError]]:
         if isinstance(outcome, Err):
             return io_result(outcome)
 
@@ -867,12 +942,12 @@ def http_post_json(
             io_map(outcome.value.body(), parse_json_body), read_failure
         )
 
-    def fetch_response_body() -> IO[Result[tuple[str, Any], TranslationError]]:
+    def fetch_response_body() -> IO[Result[tuple[str, JsonValue], TranslationError]]:
         return io_bind(IO(opened), transferred)
 
     def record(
-        outcome: Result[tuple[str, Any], TranslationError],
-    ) -> IO[Result[dict[str, Any], TranslationError]]:
+        outcome: Result[tuple[str, JsonValue], TranslationError],
+    ) -> IO[Result[JsonValue, TranslationError]]:
         if isinstance(outcome, Err):
             return log_failure(run_context, outcome)
 
@@ -889,12 +964,12 @@ def http_post_json(
 
 def http_stream(
     run_context: Context,
-    payload: Mapping[str, Any],
-    drive: Callable[[Any], IO[Result[StreamState, TranslationError]]],
+    payload: JsonObject,
+    drive: Callable[[HttpResponse], IO[Result[StreamState, TranslationError]]],
 ) -> IO[Result[StreamState, TranslationError]]:
     def open_stream(
-        body: Mapping[str, Any], label: str
-    ) -> IO[Result[Any, TranslationError]]:
+        body: JsonObject, label: str
+    ) -> IO[Result[HttpResponse, TranslationError]]:
         return io_and_then(
             log_request(run_context.log, body, label),
             IO(
@@ -906,12 +981,12 @@ def http_stream(
         )
 
     def logged(
-        opened: Result[Any, TranslationError],
-    ) -> IO[Result[Any, TranslationError]]:
+        opened: Result[HttpResponse, TranslationError],
+    ) -> IO[Result[HttpResponse, TranslationError]]:
         return log_failure(run_context, opened)
 
     def respond(
-        opened: Result[Any, TranslationError],
+        opened: Result[HttpResponse, TranslationError],
     ) -> IO[Result[StreamState, TranslationError]]:
         if isinstance(opened, Err):
             return io_result(opened)
@@ -919,7 +994,7 @@ def http_stream(
         return drive(opened.value)
 
     def open_stream_and_respond(
-        body: Mapping[str, Any], label: str
+        body: JsonObject, label: str
     ) -> IO[Result[StreamState, TranslationError]]:
         return io_bind(io_bind(open_stream(body, label), logged), respond)
 
@@ -943,7 +1018,7 @@ def http_stream(
 
 
 def drive_stream(
-    response: Any,
+    response: HttpStreamResponse,
     on_progress: ProgressCallback,
     on_raw_line: RawLineLogger | None = None,
     on_reasoning: ReasoningLogger | None = None,
@@ -993,7 +1068,7 @@ def drive_stream(
 
 
 def collect_stream(
-    run_context: Context, payload: Mapping[str, Any]
+    run_context: Context, payload: JsonObject
 ) -> IO[Result[StreamState, TranslationError]]:
     def on_reasoning(text: str) -> IO[None]:
         return run_context.console.stream_reasoning(text)
@@ -1028,7 +1103,7 @@ def collect_stream(
 
         return fail_http("protocol", "%s: %s" % (type(error).__name__, error))
 
-    def drive(response: Any) -> IO[Result[StreamState, TranslationError]]:
+    def drive(response: HttpResponse) -> IO[Result[StreamState, TranslationError]]:
         return io_catch_result(
             io_bind(
                 drive_stream(response, note_progress, on_raw_line, on_reasoning),
@@ -1047,13 +1122,13 @@ def log_all(console: Console, messages: tuple[str, ...]) -> IO[None]:
     return io_map(fold_io(messages, step, Ok(())), lambda _: None)
 
 
-def apply_stream_override(
-    run_context: Context, payload: dict[str, Any]
-) -> dict[str, Any]:
-    if run_context.stream is None:
-        return payload
+def apply_stream_override(run_context: Context, payload: JsonObject) -> JsonObject:
+    match run_context.stream:
+        case Unset():
+            return payload
 
-    return {**payload, "stream": run_context.stream}
+        case _:
+            return {**payload, "stream": run_context.stream}
 
 
 def chat(
@@ -1061,10 +1136,10 @@ def chat(
     system: str,
     user: str,
     model: str,
-    parameters: Mapping[str, Any],
+    parameters: Mapping[str, JsonValue],
     usage: Usage,
     *,
-    response_format: Mapping[str, Any] | None = None,
+    response_format: Mapping[str, JsonValue] | None = None,
 ) -> IO[Result[Translated, TranslationError]]:
     estimated = estimate_tokens(system) + estimate_tokens(user)
     if estimated > run_context.config.maximum_tokens:
@@ -1119,7 +1194,7 @@ def to_chat_reply(state: StreamState) -> ChatReply:
 
 
 def streamed_call(
-    run_context: Context, payload: Mapping[str, Any]
+    run_context: Context, payload: JsonObject
 ) -> IO[Result[ChatReply, TranslationError]]:
     full_payload = {
         **payload,
@@ -1136,7 +1211,7 @@ def streamed_call(
 
 def plain_call(
     run_context: Context,
-    payload: Mapping[str, Any],
+    payload: JsonObject,
 ) -> IO[Result[ChatReply, TranslationError]]:
     return io_bind(
         http_post_json(run_context, payload),
@@ -1144,7 +1219,7 @@ def plain_call(
     )
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class RepairOutcome:
     text: str
     usage: Usage
@@ -1152,7 +1227,7 @@ class RepairOutcome:
     problem: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RepairPolicy:
     validate: Callable[[str], Maybe[str]]
     build_retry_user: Callable[[str, str], str]
@@ -1185,7 +1260,7 @@ def exhausted_repair(
 def repaired_call(
     run_context: Context,
     model: str,
-    parameters: Mapping[str, Any],
+    parameters: Mapping[str, JsonValue],
     instruction: str,
     initial_user: str,
     policy: RepairPolicy,

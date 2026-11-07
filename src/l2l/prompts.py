@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Literal, get_args
+from typing import Final, Literal, get_args
+lazy from collections.abc import Mapping
 
 from l2l.languages import (
     AUTO_SOURCE_LANGUAGE,
@@ -29,7 +29,7 @@ PromptSectionName = Literal[
     "output_rules",
 ]
 
-PROMPT_SECTION_NAMES: tuple[PromptSectionName, ...] = (
+PROMPT_SECTION_NAMES: Final[tuple[PromptSectionName, ...]] = (
     "role",
     "task",
     "languages",
@@ -44,19 +44,21 @@ PROMPT_SECTION_NAMES: tuple[PromptSectionName, ...] = (
 
 PromptRole = Literal["translator", "reviewer", "analyser"]
 
-PROMPT_ROLES: tuple[PromptRole, ...] = ("translator", "reviewer", "analyser")
+PROMPT_ROLES: Final[tuple[PromptRole, ...]] = ("translator", "reviewer", "analyser")
 
 PromptSectionOrigin = Literal[
     "built-in", "global-inline", "global-file", "pass-inline", "pass-file"
 ]
 
-TRANSLATOR_ROLE_TEXT = "You are a professional literary translator of fiction."
+TRANSLATOR_ROLE_TEXT: Final = "You are a professional literary translator of fiction."
 
-TRANSLATOR_TASK_TEXT = "Translate the supplied source text."
+TRANSLATOR_TASK_TEXT: Final = "Translate the supplied source text."
 
-LANGUAGES_SECTION_TEXT = "Translate from {source_language} into {target_language}."
+LANGUAGES_SECTION_TEXT: Final = (
+    "Translate from {source_language} into {target_language}."
+)
 
-ACCURACY_SECTION_TEXT = (
+ACCURACY_SECTION_TEXT: Final = (
     "- Translate every sentence and keep every detail, however minor: "
     "actions, temporal markers, and asides. Never summarise, expand, "
     "censor, or drop content.\n"
@@ -73,7 +75,7 @@ ACCURACY_SECTION_TEXT = (
     "callbacks."
 )
 
-FLUENCY_SECTION_TEXT = (
+FLUENCY_SECTION_TEXT: Final = (
     "- No doubled words, stiff comma-spliced constructions, opaque "
     "literalisms, or unnatural lexical choices: choose the natural "
     "{target_language} word, not the closest-looking one.\n"
@@ -82,13 +84,13 @@ FLUENCY_SECTION_TEXT = (
     "them."
 )
 
-CONTEXT_HANDLING_SECTION_TEXT = (
+CONTEXT_HANDLING_SECTION_TEXT: Final = (
     "Treat briefs, drafts, already-translated context, and source context "
     "as reference only: do not translate them, do not continue the story "
     "from them, and do not include them in the output."
 )
 
-OUTPUT_RULES_SECTION_TEXT = (
+OUTPUT_RULES_SECTION_TEXT: Final = (
     "Reply with the translated text only: no notes, comments, or source "
     "text. If a title is present, render it fully at the top; never "
     "truncate it or add words it does not carry. If the source is "
@@ -96,26 +98,30 @@ OUTPUT_RULES_SECTION_TEXT = (
     "continue; never mark uncertainty."
 )
 
-EXACT_PARAGRAPH_RULE_TEXT = (
+EXACT_PARAGRAPH_RULE_TEXT: Final = (
     "Keep the source's paragraph structure exactly: one output paragraph "
     "per source paragraph, in the same order, separated by blank lines; "
     "do not merge, split, or reorder paragraphs."
 )
 
-APPROXIMATE_PARAGRAPH_RULE_TEXT = "Keep the paragraph structure close to the source."
+APPROXIMATE_PARAGRAPH_RULE_TEXT: Final = (
+    "Keep the paragraph structure close to the source."
+)
 
-MAXIMUM_CHARACTERS_RULE_TEXT = "Keep each output paragraph to at most %d characters."
+MAXIMUM_CHARACTERS_RULE_TEXT: Final = (
+    "Keep each output paragraph to at most %d characters."
+)
 
 OutputParagraphs = Literal["exact", "approximate"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class OutputPolicy:
     paragraphs: OutputParagraphs = "exact"
     maximum_characters: int | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class OutputPolicyPatch:
     paragraphs: OutputParagraphs | None = None
     maximum_characters: int | None = None
@@ -139,18 +145,18 @@ class OutputPolicyPatch:
         )
 
 
-REVIEWER_ROLE_TEXT = (
+REVIEWER_ROLE_TEXT: Final = (
     "You are the review stage of a fiction translation pipeline, "
     "repairing a draft produced by an earlier pass."
 )
 
-REVIEWER_TASK_TEXT = (
+REVIEWER_TASK_TEXT: Final = (
     "Produce the final translation: keep what the draft already gets "
     "right and repair the rest. When no draft is present, translate the "
     "source yourself under the same rules."
 )
 
-REVIEWER_OUTPUT_RULES_TEXT = (
+REVIEWER_OUTPUT_RULES_TEXT: Final = (
     "Reply with the corrected translation only: no notes, no change "
     "list, no diff or markup, and none of the source, brief, or draft "
     "echoed back. If a draft paragraph still reads as the source "
@@ -159,9 +165,11 @@ REVIEWER_OUTPUT_RULES_TEXT = (
     "reading and continue; never mark uncertainty."
 )
 
-ANALYSER_ROLE_TEXT = "You are the preparation stage of a fiction translation pipeline."
+ANALYSER_ROLE_TEXT: Final = (
+    "You are the preparation stage of a fiction translation pipeline."
+)
 
-ANALYSER_TASK_TEXT = (
+ANALYSER_TASK_TEXT: Final = (
     "You receive one whole document of source text. Do not translate it: "
     "read it and reply with a compact brief. Later translation passes "
     "see the document only in small pieces and cannot look ahead; your "
@@ -169,11 +177,11 @@ ANALYSER_TASK_TEXT = (
     "everything they would otherwise miss."
 )
 
-ANALYSER_LANGUAGES_SECTION_TEXT = (
+ANALYSER_LANGUAGES_SECTION_TEXT: Final = (
     "The source is {source_language}; write the brief in {target_language}."
 )
 
-ANALYSER_ACCURACY_SECTION_TEXT = (
+ANALYSER_ACCURACY_SECTION_TEXT: Final = (
     "Never invent what the document does not support; ground every "
     "statement in the source. Where the text is ambiguous, commit to "
     "the most contextually plausible reading and state it as fact. "
@@ -182,9 +190,9 @@ ANALYSER_ACCURACY_SECTION_TEXT = (
     "including non-human speakers."
 )
 
-ANALYSER_OPENING_LINE = "Preparation brief (reference only):"
+ANALYSER_OPENING_LINE: Final = "Preparation brief (reference only):"
 
-ANALYSER_HEADINGS: tuple[str, ...] = (
+ANALYSER_HEADINGS: Final[tuple[str, ...]] = (
     "Story",
     "Cast",
     "Terms",
@@ -192,13 +200,13 @@ ANALYSER_HEADINGS: tuple[str, ...] = (
     "Traps",
 )
 
-ANALYSER_WORD_LIMIT = 400
+ANALYSER_WORD_LIMIT: Final = 400
 
-ANALYSER_QUOTATION_RULE_TEXT = (
+ANALYSER_QUOTATION_RULE_TEXT: Final = (
     'Quote the source only in glossary and idiom entries, as original = "rendering".'
 )
 
-ANALYSER_OUTPUT_RULES_TEXT = "\n".join(
+ANALYSER_OUTPUT_RULES_TEXT: Final = "\n".join(
     (
         "Reply with the brief only: no preamble, no closing remarks, no "
         "markdown fences, and none of the document's own prose beyond "
@@ -228,14 +236,14 @@ StyleHonorifics = Literal["keep", "drop", "titles"]
 StyleRegisterFidelity = Literal["preserve", "soften"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StylePolicy:
     formality: StyleFormality = "preserve"
     honorifics: StyleHonorifics = "keep"
     register_fidelity: StyleRegisterFidelity = "preserve"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StylePolicyPatch:
     formality: StyleFormality | None = None
     honorifics: StyleHonorifics | None = None
@@ -264,7 +272,7 @@ class StylePolicyPatch:
         )
 
 
-TARGET_REGION_LABELS: Mapping[tuple[str, str], str] = MappingProxyType(
+TARGET_REGION_LABELS: Final[Mapping[tuple[str, str], str]] = MappingProxyType(
     {
         ("en", "AU"): "Australian English",
         ("en", "GB"): "British English",
@@ -272,7 +280,7 @@ TARGET_REGION_LABELS: Mapping[tuple[str, str], str] = MappingProxyType(
     }
 )
 
-FORMALITY_PRONOUNS: Mapping[tuple[str, str], str] = MappingProxyType(
+FORMALITY_PRONOUNS: Final[Mapping[tuple[str, str], str]] = MappingProxyType(
     {
         ("fr", "formal"): "Address characters with the formal pronoun (vous).",
         ("fr", "informal"): "Address characters with the informal pronoun (tu).",
@@ -285,9 +293,9 @@ FORMALITY_PRONOUNS: Mapping[tuple[str, str], str] = MappingProxyType(
     }
 )
 
-JAPANESE_KOREAN_SOURCE_BASES = frozenset({"ja", "ko"})
+JAPANESE_KOREAN_SOURCE_BASES: Final = frozenset({"ja", "ko"})
 
-CHINESE_SOURCE_GUIDANCE_TEXT = "\n".join(
+CHINESE_SOURCE_GUIDANCE_TEXT: Final = "\n".join(
     (
         "- Chinese often omits the subject: say exactly who acts or speaks.",
         "- Attach vocatives to the correct line; keep who accuses or "
@@ -299,7 +307,7 @@ CHINESE_SOURCE_GUIDANCE_TEXT = "\n".join(
     )
 )
 
-JAPANESE_SOURCE_GUIDANCE_TEXT = "\n".join(
+JAPANESE_SOURCE_GUIDANCE_TEXT: Final = "\n".join(
     (
         "- Romanize personal names in consistent Hepburn.",
         "- Keep Japanese name order (surname first) unless the surrounding "
@@ -309,19 +317,19 @@ JAPANESE_SOURCE_GUIDANCE_TEXT = "\n".join(
     )
 )
 
-GENERIC_SOURCE_GUIDANCE_TEXT = "\n".join(
+GENERIC_SOURCE_GUIDANCE_TEXT: Final = "\n".join(
     (
         "- Render idioms by meaning; avoid literal calques.",
         "- Use consistent renderings for untranslatable terms.",
     )
 )
 
-MIXED_SOURCE_GUIDANCE_TEXT = (
+MIXED_SOURCE_GUIDANCE_TEXT: Final = (
     "- Identify the language of each passage rather than assuming one "
     "dominant language, and translate every passage."
 )
 
-HONORIFICS_GUIDANCE_TEXTS: Mapping[StyleHonorifics, str] = MappingProxyType(
+HONORIFICS_GUIDANCE_TEXTS: Final[Mapping[StyleHonorifics, str]] = MappingProxyType(
     {
         "keep": "- Render honorific suffixes consistently; do not silently "
         "drop them or inflate them into titles.",
@@ -406,7 +414,7 @@ def formality_guidance_text(target_language: str, policy: StylePolicy) -> str:
     )
 
 
-REGISTER_FIDELITY_GUIDANCE_TEXTS: Mapping[StyleRegisterFidelity, str] = (
+REGISTER_FIDELITY_GUIDANCE_TEXTS: Final[Mapping[StyleRegisterFidelity, str]] = (
     MappingProxyType(
         {
             "preserve": "Keep vulgarity, scorn, and sarcasm at their full "
@@ -422,7 +430,7 @@ def register_fidelity_guidance_text(policy: StylePolicy) -> str:
     return REGISTER_FIDELITY_GUIDANCE_TEXTS[policy.register_fidelity]
 
 
-GLOSSARY_EXTRACTION_INSTRUCTION_TEXT = """
+GLOSSARY_EXTRACTION_INSTRUCTION_TEXT: Final = """
 You extract glossary entries from source text. Find named and
 speaking characters (assign pronouns only where they are meaningful and
 the character can be referred to pronominally) and place names. Reply
@@ -434,7 +442,7 @@ Output JSON only: no markdown fences, no commentary. The target
 language is named in the user message.
 """
 
-ASCII_FIX_INSTRUCTION_TEXT = """
+ASCII_FIX_INSTRUCTION_TEXT: Final = """
 This paragraph failed to be fully translated or contains non-ASCII
 characters. Please analyse it and only output a clean translation that
 uses ASCII characters only.
@@ -449,13 +457,13 @@ def paragraph_rule_text(exact_paragraphs: bool) -> str:
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PromptSectionOverride:
     text: str
     origin: PromptSectionOrigin
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PromptSections:
     texts: Mapping[PromptSectionName, str]
 
@@ -496,7 +504,7 @@ def instruction_with_languages(
     ).replace("{target_language}", target_language)
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class PassPromptRequest:
     role: PromptRole
     source_language: str
@@ -509,7 +517,7 @@ class PassPromptRequest:
     )
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class RenderedPassPrompt:
     instruction: str
     role: PromptRole
@@ -518,7 +526,7 @@ class RenderedPassPrompt:
     section_origins: Mapping[PromptSectionName, PromptSectionOrigin]
 
 
-TRANSLATOR_SECTIONS: Mapping[PromptSectionName, str] = MappingProxyType(
+TRANSLATOR_SECTIONS: Final[Mapping[PromptSectionName, str]] = MappingProxyType(
     {
         "role": TRANSLATOR_ROLE_TEXT,
         "task": TRANSLATOR_TASK_TEXT,
@@ -533,7 +541,7 @@ TRANSLATOR_SECTIONS: Mapping[PromptSectionName, str] = MappingProxyType(
     }
 )
 
-REVIEWER_SECTIONS: Mapping[PromptSectionName, str] = MappingProxyType(
+REVIEWER_SECTIONS: Final[Mapping[PromptSectionName, str]] = MappingProxyType(
     {
         "role": REVIEWER_ROLE_TEXT,
         "task": REVIEWER_TASK_TEXT,
@@ -548,7 +556,7 @@ REVIEWER_SECTIONS: Mapping[PromptSectionName, str] = MappingProxyType(
     }
 )
 
-ANALYSER_SECTIONS: Mapping[PromptSectionName, str] = MappingProxyType(
+ANALYSER_SECTIONS: Final[Mapping[PromptSectionName, str]] = MappingProxyType(
     {
         "role": ANALYSER_ROLE_TEXT,
         "task": ANALYSER_TASK_TEXT,
@@ -564,7 +572,7 @@ ANALYSER_SECTIONS: Mapping[PromptSectionName, str] = MappingProxyType(
 )
 
 
-ROLE_SECTIONS_BY_ROLE: Mapping[PromptRole, Mapping[PromptSectionName, str]] = (
+ROLE_SECTIONS_BY_ROLE: Final[Mapping[PromptRole, Mapping[PromptSectionName, str]]] = (
     MappingProxyType(
         {
             "translator": TRANSLATOR_SECTIONS,
@@ -632,7 +640,10 @@ def generated_output_rule_text(request: PassPromptRequest) -> str:
 
 
 def render_pass_prompt(request: PassPromptRequest) -> RenderedPassPrompt:
-    sections = {**role_sections(request.role), **request.overrides}
+    sections: dict[PromptSectionName, str] = {
+        **role_sections(request.role),
+        **request.overrides,
+    }
     generated_rule = generated_output_rule_text(request)
     sections["output_rules"] = merged_output_rules(
         sections["output_rules"], generated_rule

@@ -1,4 +1,5 @@
-from typing import Any
+from typing import TYPE_CHECKING
+lazy from collections.abc import Callable
 
 from fakes import (
     FakeHttp,
@@ -15,7 +16,9 @@ from l2l.http import (
     StreamState,
     chat,
     collect_content_parts,
+    collect_thinking_texts,
     drive_stream,
+    extract_message,
     flatten_content_parts,
     ingest_raw_line,
     parse_chunk_delta,
@@ -49,6 +52,9 @@ from l2l.text import (
     strip_think_tag,
     think_step,
 )
+
+if TYPE_CHECKING:
+    from l2l.json_values import JsonArray, JsonObject
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -315,7 +321,7 @@ def test_strip_think_tag_swallows_unterminated_block() -> None:
 
 
 def test_plain_reply() -> None:
-    body = {
+    body: JsonObject = {
         "choices": [
             {"message": {"role": "assistant", "content": "Hello", "reasoning": " why"}}
         ],
@@ -336,29 +342,61 @@ def test_plain_reply_bad_shape() -> None:
     assert "unexpected response shape" in describe(result.error)
 
 
+def test_plain_reply_rejects_a_non_object_body() -> None:
+    result = plain_reply(["nope"])
+    assert isinstance(result, Err)
+    assert "unexpected response shape" in describe(result.error)
+
+
+def test_extract_message_rejects_non_object_bodies() -> None:
+    result = extract_message("nope")
+    assert isinstance(result, Err)
+    assert "unexpected response shape" in describe(result.error)
+
+
+def test_extract_message_rejects_non_object_choices() -> None:
+    result = extract_message({"choices": [3]})
+    assert isinstance(result, Err)
+    assert "unexpected response shape" in describe(result.error)
+
+
+def test_extract_message_rejects_non_object_messages() -> None:
+    result = extract_message({"choices": [{"message": 3}]})
+    assert isinstance(result, Err)
+    assert "unexpected response shape" in describe(result.error)
+
+
+def test_collect_thinking_texts_ignores_non_array_thinking() -> None:
+    assert collect_thinking_texts({"thinking": "nope"}) == ()
+
+
 def test_plain_reply_rejects_non_string_content() -> None:
-    body = {"choices": [{"message": {"role": "assistant", "content": 42}}]}
+    body: JsonObject = {"choices": [{"message": {"role": "assistant", "content": 42}}]}
     result = plain_reply(body)
     assert isinstance(result, Err)
     assert "unexpected content type" in describe(result.error)
 
 
 def test_plain_reply_rejects_a_response_truncated_by_length() -> None:
-    body = {"choices": [{"message": {"content": "Partial"}, "finish_reason": "length"}]}
+    body: JsonObject = {
+        "choices": [{"message": {"content": "Partial"}, "finish_reason": "length"}]
+    }
     result = plain_reply(body)
     assert isinstance(result, Err)
     assert "finish_reason=length" in describe(result.error)
 
 
 def test_plain_reply_accepts_a_complete_finish_reason() -> None:
-    body = {"choices": [{"message": {"content": "Done"}, "finish_reason": "stop"}]}
+    body: JsonObject = {
+        "choices": [{"message": {"content": "Done"}, "finish_reason": "stop"}]
+    }
     result = plain_reply(body)
     assert isinstance(result, Ok)
     assert result.value.content == "Done"
 
 
 def test_flatten_content_parts_with_thinking() -> None:
-    content = [
+    content: JsonArray = [
         {"type": "thinking", "thinking": [{"text": " t1 "}]},
         {"type": "text", "text": "A"},
         {"type": "image_url", "image_url": {"url": "data:x"}},
@@ -388,7 +426,7 @@ def test_drive_stream_progress_labels() -> None:
 def test_drive_stream_emits_reasoning_text() -> None:
     events: list[tuple[str, int]] = []
     thoughts: list[str] = []
-    chunks = [
+    chunks: list[JsonObject] = [
         {"choices": [{"delta": {"reasoning_content": "Check"}}]},
         {"choices": [{"delta": {"reasoning_content": " details.\n"}}]},
         {"choices": [{"delta": {"content": "Hi"}}]},
@@ -436,7 +474,7 @@ def test_drive_stream_rejects_a_stream_truncated_by_length() -> None:
 
 def test_chat_streams_reasoning_live_when_verbose() -> None:
     console, stderr = make_console()
-    chunks = [
+    chunks: list[JsonObject] = [
         {"choices": [{"delta": {"reasoning_content": "Check details.\n"}}]},
         {"choices": [{"delta": {"reasoning_content": "final thought"}}]},
         {"choices": [{"delta": {"content": "Hi"}}]},
@@ -451,7 +489,7 @@ def test_chat_streams_reasoning_live_when_verbose() -> None:
 
 def test_chat_hides_streamed_reasoning_without_verbose() -> None:
     console, stderr = make_console()
-    chunks = [
+    chunks: list[JsonObject] = [
         {"choices": [{"delta": {"reasoning_content": "secret thoughts\n"}}]},
         {"choices": [{"delta": {"content": "Hi"}}]},
     ]
@@ -494,12 +532,12 @@ def test_drive_stream_stops_on_error_without_stepping_further() -> None:
     ]
 
     class CountingStreamResponse:
-        def consume(
+        def consume[S](
             self,
-            step: Any,
-            initial: Result[Any, TranslationError],
-        ) -> IO[Result[Any, TranslationError]]:
-            def advance(state: Any, line: bytes) -> Any:
+            step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+            initial: Result[S, TranslationError],
+        ) -> IO[Result[S, TranslationError]]:
+            def advance(state: S, line: bytes) -> IO[Result[S, TranslationError]]:
                 delivered.append(line)
                 return step(state, line)
 

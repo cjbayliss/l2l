@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import accumulate, chain, takewhile
-from typing import Any
+from typing import Final
+lazy from collections.abc import Mapping
 
-from l2l.context import Context
 from l2l.errors import TranslationError, fail_budget, fail_pass
 from l2l.glossary import (
     GlossaryEntry,
@@ -37,6 +36,8 @@ from l2l.text import (
     separator_at,
     split_paragraphs,
 )
+lazy from l2l.context import Context
+lazy from l2l.json_values import JsonValue
 
 
 def verbose_log(run_context: Context, message: str) -> IO[None]:
@@ -90,7 +91,7 @@ def unit_output_problem(
     return NOTHING
 
 
-UNTRANSLATED_GLOSSARY_TERM_SAMPLE_COUNT = 3
+UNTRANSLATED_GLOSSARY_TERM_SAMPLE_COUNT: Final = 3
 
 
 def glossary_term_problem(
@@ -249,10 +250,10 @@ def resolve_work_groups(
 
 type ChunkPlan = tuple[tuple[str, ...], ...]
 
-PROMPT_SCAFFOLDING_TOKENS = 16
-TRANSLATED_CONTEXT_PARAGRAPH_COUNT = 2
-TRANSLATED_CONTEXT_TOKEN_BUDGET = 400
-NON_TEXT_PASS_MODES = frozenset[PassMode](("analysis", "update_glossary"))
+PROMPT_SCAFFOLDING_TOKENS: Final = 16
+TRANSLATED_CONTEXT_PARAGRAPH_COUNT: Final = 2
+TRANSLATED_CONTEXT_TOKEN_BUDGET: Final = 400
+NON_TEXT_PASS_MODES: Final = frozenset[PassMode](("analysis", "update_glossary"))
 
 
 def earlier_passes_translated_text(earlier_pass_modes: PassModeSet) -> bool:
@@ -273,8 +274,10 @@ def suffix_within_token_budget(
 
 type PassModeSet = frozenset[PassMode]
 
+EMPTY_PASS_MODE_SET: Final[PassModeSet] = frozenset[PassMode]()
 
-@dataclass(frozen=True, kw_only=True)
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class PromptAllowance:
     instruction_tokens: int
     analysis_tokens: int
@@ -292,21 +295,24 @@ class PromptAllowance:
         )
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class PassPlan:
     chunks: ChunkPlan
     chunk_budget: int
     source_budget: int
 
 
+def merge_mode(modes: PassModeSet, mode: PassMode) -> PassModeSet:
+    return modes | frozenset((mode,))
+
+
 def preceding_modes(
     pass_definitions: tuple[PassDefinition, ...],
 ) -> tuple[PassModeSet, ...]:
-    accumulated_modes = accumulate(
-        (pass_definition.mode for pass_definition in pass_definitions),
-        lambda modes, mode: modes | {mode},
-        initial=frozenset[PassMode](),
+    modes: tuple[PassMode, ...] = tuple(
+        pass_definition.mode for pass_definition in pass_definitions
     )
+    accumulated_modes = accumulate(modes, merge_mode, initial=frozenset[PassMode]())
     return tuple(accumulated_modes)[:-1]
 
 
@@ -383,7 +389,7 @@ def plan_violation(
         case "update_glossary":
             return None
 
-        case _:
+        case "chunk" | "paragraph":
             allowance = prompt_allowance(
                 run_context, pass_definition, earlier_pass_modes
             )
@@ -513,7 +519,7 @@ def ascii_drop_warning(drop: AsciiDrop) -> str:
     )
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class UnitCall:
     index: int
     total: int
@@ -525,12 +531,12 @@ class UnitCall:
     key: str
     trailing_separator: str
     model: str
-    parameters: Mapping[str, Any]
+    parameters: Mapping[str, JsonValue]
 
 
 def build_unit_call(
     model: str,
-    parameters: Mapping[str, Any],
+    parameters: Mapping[str, JsonValue],
     salt: str,
     separators: tuple[str, ...],
     index: int,
@@ -575,7 +581,7 @@ def plan_unit_calls(
     analysis: str | None,
     retry_attempt: int = 0,
     glossary: tuple[GlossaryEntry, ...] = (),
-    earlier_pass_modes: PassModeSet = frozenset[PassMode](),
+    earlier_pass_modes: PassModeSet = EMPTY_PASS_MODE_SET,
 ) -> tuple[UnitCall, ...]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
     call_salt = pass_salt(

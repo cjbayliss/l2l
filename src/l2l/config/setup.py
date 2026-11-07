@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+lazy from collections.abc import Mapping
 
 from l2l.config.api import merged_api_settings
 from l2l.config.documents import read_setup_documents, resolve_config_path

@@ -1,8 +1,7 @@
-from collections.abc import Mapping
 from dataclasses import replace
-from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+lazy from collections.abc import Mapping
+lazy from pathlib import Path
 
 from l2l.config import load_setup
 from l2l.config.api import (
@@ -63,6 +62,7 @@ from l2l.prompts import (
 from l2l.report import mask_api_key, setup_report, setup_warnings
 from l2l.settings import (
     DEFAULT_API_SETTINGS,
+    UNSET,
     Arguments,
     Config,
     OptionDefaults,
@@ -70,6 +70,7 @@ from l2l.settings import (
     PassDefinition,
     PassDraft,
     Setup,
+    Unset,
     effective_target_language,
     output_policy_salt_component,
     pass_salt,
@@ -77,9 +78,10 @@ from l2l.settings import (
     retranslation_salt,
 )
 from l2l.text import CACHE_SALT_VERSION, cache_key
+lazy from l2l.json_values import JsonObject
 
 
-def ok_document(document: dict[str, Any]) -> Result[dict[str, Any], TranslationError]:
+def ok_document(document: JsonObject) -> Result[JsonObject, TranslationError]:
     return Ok(document)
 
 
@@ -155,47 +157,23 @@ def test_api_settings_from_environment_and_arguments() -> None:
     assert parsed_environment.value.base_url == "http://e"
     assert parsed_environment.value.maximum_tokens == 9
 
-    arguments = Arguments(
-        config=None,
-        base_url=None,
-        api_key="k",
-        model=None,
-        timeout=2.0,
-        maximum_tokens=None,
-        no_cache=False,
-        ensure_paragraphs=False,
-        verbose=False,
-        print_log_path=False,
-        cache_directory=None,
-    )
+    arguments = Arguments(api_key="k", timeout=2.0)
     parsed_arguments = api_settings_from_arguments(arguments)
     assert isinstance(parsed_arguments, Ok)
     assert parsed_arguments.value == PartialApiSettings(api_key="k", timeout=2.0)
 
 
 def arguments_with_numeric_flags(
-    timeout: float | None, maximum_tokens: int | None
+    timeout: float | Unset, maximum_tokens: int | Unset
 ) -> Arguments:
-    return Arguments(
-        config=None,
-        base_url=None,
-        api_key=None,
-        model=None,
-        timeout=timeout,
-        maximum_tokens=maximum_tokens,
-        no_cache=False,
-        ensure_paragraphs=False,
-        verbose=False,
-        print_log_path=False,
-        cache_directory=None,
-    )
+    return Arguments(timeout=timeout, maximum_tokens=maximum_tokens)
 
 
 def test_numeric_flags_are_validated() -> None:
-    empty: Result[dict[str, Any], TranslationError] = Ok({})
+    empty: Result[JsonObject, TranslationError] = Ok({})
     for arguments, fragment in (
-        (arguments_with_numeric_flags(-5.0, None), "--timeout must be positive"),
-        (arguments_with_numeric_flags(None, 0), "--maximum-tokens must be positive"),
+        (arguments_with_numeric_flags(-5.0, UNSET), "--timeout must be positive"),
+        (arguments_with_numeric_flags(UNSET, 0), "--maximum-tokens must be positive"),
     ):
         direct = api_settings_from_arguments(arguments)
         assert isinstance(direct, Err)
@@ -206,26 +184,14 @@ def test_numeric_flags_are_validated() -> None:
 
 
 def test_merged_api_settings_precedence() -> None:
-    arguments = Arguments(
-        config=None,
-        base_url=None,
-        api_key=None,
-        model="arg-model",
-        timeout=None,
-        maximum_tokens=None,
-        no_cache=False,
-        ensure_paragraphs=False,
-        verbose=False,
-        print_log_path=False,
-        cache_directory=None,
-    )
+    arguments = Arguments(model="arg-model")
     environment = {
         "TRANSLATE_BASE_URL": "http://env",
         "TRANSLATE_TIMEOUT": "5",
         "TRANSLATE_API_KEY": "env-key",
     }
     user = ok_document({"api": {"timeout": 30, "params": {"a": 1}}})
-    selected: Result[dict[str, Any], TranslationError] = Ok({})
+    selected: Result[JsonObject, TranslationError] = Ok({})
     result = merged_api_settings(arguments, environment, "user", user, None, selected)
     assert isinstance(result, Ok)
     config = result.value
@@ -298,7 +264,7 @@ def test_pass_draft_from() -> None:
     result = pass_draft_from("f", "p", {"mode": "update_glossary"}, "inst")
     assert isinstance(result, Ok)
     assert result.value.mode == "update_glossary"
-    assert result.value.target_language is None
+    assert result.value.target_language is UNSET
 
     result = pass_draft_from(
         "f", "p", {"mode": "update_glossary", "target_language": "Chinese"}, "inst"
@@ -332,10 +298,10 @@ def test_pass_draft_from() -> None:
     result = pass_draft_from("f", "p", {"mode": "chunk", "params": {"t": 1}}, "inst")
     assert isinstance(result, Ok)
     assert result.value.mode == "chunk"
-    assert result.value.model is None
-    assert result.value.ascii is None
-    assert result.value.ensure_paragraphs is None
-    assert result.value.retranslate_untranslated is None
+    assert result.value.model is UNSET
+    assert result.value.ascii is UNSET
+    assert result.value.ensure_paragraphs is UNSET
+    assert result.value.retranslate_untranslated is UNSET
 
     result = pass_draft_from(
         "f", "p", {"mode": "chunk", "retranslate_untranslated": True}, "inst"
@@ -383,8 +349,8 @@ def test_pass_draft_from() -> None:
 
 def test_apply_default_options() -> None:
     passes = (
-        PassDraft("a", "chunk", "i", {}, None, None, None, None),
-        PassDraft("b", "chunk", "i", {}, None, True, False, True),
+        PassDraft("a", "chunk", "i", {}, UNSET, UNSET, UNSET, UNSET),
+        PassDraft("b", "chunk", "i", {}, UNSET, True, False, True),
     )
     applied = apply_default_options(
         passes,
@@ -427,16 +393,16 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
     config = Config("u", "k", "m", 1.0, 100, {})
 
     def setup_with(options: OptionDefaults, flag: bool) -> Setup:
-        resolved: Result[ResolvedPasses, Any] = Ok(
+        resolved: Result[ResolvedPasses, TranslationError] = Ok(
             ResolvedPasses(
                 option_defaults=options,
                 global_prompts={},
                 global_style_patch=StylePolicyPatch(),
                 global_output_patch=OutputPolicyPatch(),
                 pass_drafts=(
-                    PassDraft("unset", "chunk", "i", {}, None, None, None),
-                    PassDraft("explicit", "chunk", "i", {}, None, None, False),
-                    PassDraft("forced", "chunk", "i", {}, None, None, True),
+                    PassDraft("unset", "chunk", "i", {}, UNSET, UNSET, UNSET),
+                    PassDraft("explicit", "chunk", "i", {}, UNSET, UNSET, False),
+                    PassDraft("forced", "chunk", "i", {}, UNSET, UNSET, True),
                 ),
             )
         )
@@ -618,9 +584,8 @@ def test_parse_pass_table_and_inline_instruction() -> None:
     assert inline.value == "inst"
     missing_source = load_instruction_text("f", "p", {"mode": "custom"}, ".").run()
     assert isinstance(missing_source, Err)
-    assert (
-        "exactly one of instruction_file or instruction is required"
-        in describe(missing_source.error)
+    assert "exactly one of instruction_file or instruction is required" in describe(
+        missing_source.error
     )
     conflicting_load = load_instruction_text(
         "f", "p", {"instruction": "", "instruction_file": "x"}, "."
@@ -671,7 +636,7 @@ def test_resolve_passes_selection_and_options() -> None:
 
 def test_resolve_config_path_requested_and_environment() -> None:
     assert resolve_config_path("a.toml", {}).run() == "a.toml"
-    result = resolve_config_path(None, {"TRANSLATE_CONFIG": " b.toml "}).run()
+    result = resolve_config_path(UNSET, {"TRANSLATE_CONFIG": " b.toml "}).run()
     assert result == "b.toml"
 
 
@@ -726,6 +691,26 @@ def test_pass_draft_from_rejects_bad_fields() -> None:
     result = pass_draft_from("f", "p", {"mode": "chunk", "params": 3}, "i")
     assert isinstance(result, Err)
     assert "params must be a table" in describe(result.error)
+
+
+def test_pass_draft_from_accepts_valid_fields() -> None:
+    result = pass_draft_from(
+        "f",
+        "p",
+        {
+            "mode": "chunk",
+            "ascii": True,
+            "model": " m1 ",
+            "target_language": " ja ",
+            "retranslate_untranslated": True,
+        },
+        "i",
+    )
+    assert isinstance(result, Ok)
+    assert result.value.ascii is True
+    assert result.value.model == "m1"
+    assert result.value.target_language == "ja"
+    assert result.value.retranslate_untranslated is True
 
 
 def test_pass_draft_from_validates_include_types() -> None:
@@ -785,6 +770,30 @@ def test_load_instruction_text_rejects_bad_file_settings(
     assert "could not read f: [[pass]] p: instruction file" in describe(result.error)
 
 
+def test_load_instruction_text_reads_a_non_empty_instruction_file(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "instruction.txt"
+    path.write_text("  translate with care \n", encoding="utf-8")
+    result = load_instruction_text(
+        "f", "p", {"instruction_file": "instruction.txt"}, str(tmp_path)
+    ).run()
+    assert isinstance(result, Ok)
+    assert result.value == "translate with care"
+
+
+def test_load_instruction_text_rejects_an_empty_instruction_file(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "instruction.txt"
+    path.write_text("   \n", encoding="utf-8")
+    result = load_instruction_text(
+        "f", "p", {"instruction_file": "instruction.txt"}, str(tmp_path)
+    ).run()
+    assert isinstance(result, Err)
+    assert "instruction file is empty" in describe(result.error)
+
+
 def test_read_document_without_a_file_is_empty() -> None:
     result = read_document("f", "config file", exists=False).run()
     assert isinstance(result, Ok)
@@ -802,7 +811,7 @@ def test_resolve_config_path_discovers_local_then_user(tmp_path: Path) -> None:
 
     assert (
         resolve_config_path(
-            None, {"XDG_CONFIG_HOME": str(empty_root)}, exists_none
+            UNSET, {"XDG_CONFIG_HOME": str(empty_root)}, exists_none
         ).run()
         is None
     )
@@ -811,33 +820,21 @@ def test_resolve_config_path_discovers_local_then_user(tmp_path: Path) -> None:
         return path == str(local)
 
     assert resolve_config_path(
-        None, {}, exists_local, io_pure(str(tmp_path))
+        UNSET, {}, exists_local, io_pure(str(tmp_path))
     ).run() == str(local)
 
     def exists_user(path: str) -> bool:
         return path == str(user_path)
 
     assert resolve_config_path(
-        None, {"XDG_CONFIG_HOME": str(user_root)}, exists_user
+        UNSET, {"XDG_CONFIG_HOME": str(user_root)}, exists_user
     ).run() == str(user_path)
 
 
 def test_load_setup_reports_malformed_toml(tmp_path: Path) -> None:
     config_path = tmp_path / "broken.toml"
     config_path.write_text("[api\nbroken", encoding="utf-8")
-    arguments = Arguments(
-        config=str(config_path),
-        base_url=None,
-        api_key=None,
-        model=None,
-        timeout=None,
-        maximum_tokens=None,
-        no_cache=False,
-        ensure_paragraphs=False,
-        verbose=False,
-        print_log_path=False,
-        cache_directory=None,
-    )
+    arguments = Arguments(config=str(config_path))
     result = load_setup(arguments, {}).run()
     assert isinstance(result, Err)
     assert "cannot parse config file" in describe(result.error)
@@ -864,19 +861,7 @@ SELECTED_CONFIG_TEXT = (
 
 
 def glossary_arguments(config_path: Path) -> Arguments:
-    return Arguments(
-        config=str(config_path),
-        base_url=None,
-        api_key=None,
-        model=None,
-        timeout=None,
-        maximum_tokens=None,
-        no_cache=False,
-        ensure_paragraphs=False,
-        verbose=False,
-        print_log_path=False,
-        cache_directory=None,
-    )
+    return Arguments(config=str(config_path))
 
 
 def test_document_target_language_validates() -> None:
@@ -902,7 +887,7 @@ def test_document_source_language_validates() -> None:
 
 
 def test_command_line_source_language_validates() -> None:
-    assert command_line_source_language(None) == Ok(None)
+    assert command_line_source_language(UNSET) == Ok(None)
     assert command_line_source_language(" Chinese ") == Ok("Chinese")
     for bad_source_language in ("", "  "):
         result = command_line_source_language(bad_source_language)
@@ -910,53 +895,61 @@ def test_command_line_source_language_validates() -> None:
         assert "--source-language must be a non-empty string" in describe(result.error)
 
 
-def empty_document() -> Result[dict[str, Any], TranslationError]:
+def empty_document() -> Result[JsonObject, TranslationError]:
     return Ok({})
 
 
+def document_result(document: JsonObject) -> Result[JsonObject, TranslationError]:
+    return Ok(document)
+
+
 def test_resolve_source_language_precedence() -> None:
-    user = Ok({"source_language": "German"})
-    selected = Ok({"source_language": "Spanish"})
+    user = document_result({"source_language": "German"})
+    selected = document_result({"source_language": "Spanish"})
     assert resolve_source_language("French", "user", user, "selected", selected) == Ok(
         "French"
     )
-    assert resolve_source_language(None, "user", user, "selected", selected) == Ok(
+    assert resolve_source_language(UNSET, "user", user, "selected", selected) == Ok(
         "Spanish"
     )
     assert resolve_source_language(
-        None, "user", user, "selected", empty_document()
+        UNSET, "user", user, "selected", empty_document()
     ) == Ok("German")
     assert resolve_source_language(
-        None, "user", user, "selected", Ok({"api": {}})
+        UNSET, "user", user, "selected", document_result({"api": {}})
     ) == Ok("German")
     assert resolve_source_language(
-        None, "user", empty_document(), None, empty_document()
+        UNSET, "user", empty_document(), None, empty_document()
     ) == Ok("auto")
 
 
 def test_resolve_source_language_normalizes_final_value_once() -> None:
-    user = Ok({"source_language": "ignored"})
+    user = document_result({"source_language": "ignored"})
     assert resolve_source_language(" MUL ", "user", user, None, empty_document()) == Ok(
         "mixed"
     )
     assert resolve_source_language(
-        None, "user", Ok({"source_language": "Guess"}), None, empty_document()
+        UNSET,
+        "user",
+        document_result({"source_language": "Guess"}),
+        None,
+        empty_document(),
     ) == Ok("auto")
 
 
 def test_resolve_source_language_fails_on_invalid_higher_layer() -> None:
-    user = Ok({"source_language": "German"})
+    user = document_result({"source_language": "German"})
     assert isinstance(
         resolve_source_language("", "user", user, None, empty_document()), Err
     )
-    invalid_selected = Ok({"source_language": ""})
+    invalid_selected = document_result({"source_language": ""})
     assert isinstance(
-        resolve_source_language(None, "user", user, "selected", invalid_selected),
+        resolve_source_language(UNSET, "user", user, "selected", invalid_selected),
         Err,
     )
-    non_string_selected = Ok({"source_language": 3})
+    non_string_selected = document_result({"source_language": 3})
     result = resolve_source_language(
-        None, "user", user, "selected", non_string_selected
+        UNSET, "user", user, "selected", non_string_selected
     )
     assert isinstance(result, Err)
     assert "source_language must be a non-empty string" in describe(result.error)
@@ -1390,7 +1383,7 @@ def test_prompt_override_missing_or_empty_file_fails(tmp_path: Path) -> None:
 
 
 def test_prompt_override_shapes_are_validated() -> None:
-    for table, fragment in (
+    invalid_tables: tuple[tuple[object, str], ...] = (
         ({"nope": "x"}, "unknown prompt section(s): nope"),
         ({"accuracy": 3}, "must be inline text or a table"),
         ({"accuracy": "   "}, 'must be empty ("") to remove a section'),
@@ -1399,7 +1392,8 @@ def test_prompt_override_shapes_are_validated() -> None:
         ({"accuracy": {"file": ""}}, "file must be a non-empty path string"),
         ({"accuracy": {"file": 3}}, "file must be a non-empty path string"),
         ("not a table", "[prompts] must be a table"),
-    ):
+    )
+    for table, fragment in invalid_tables:
         result = document_prompt_overrides("f", {"prompts": table}).run()
         assert isinstance(result, Err), table
         assert fragment in describe(result.error)
@@ -1470,7 +1464,7 @@ def test_per_pass_prompts_override_sections_and_keep_unrelated_globals() -> None
         "chunk",
         None,
         {},
-        None,
+        UNSET,
         False,
         prompts=MappingProxyType(
             {
@@ -1488,7 +1482,7 @@ def test_per_pass_prompts_override_sections_and_keep_unrelated_globals() -> None
 
 
 def test_global_prompts_replace_sections_in_rendered_passes() -> None:
-    draft = PassDraft("p", "chunk", None, {}, None, False)
+    draft = PassDraft("p", "chunk", None, {}, UNSET, False)
     result = finalize_pass_draft(
         draft,
         "translator",
@@ -1518,7 +1512,7 @@ def test_empty_override_on_empty_static_section_warns_as_no_op() -> None:
         "chunk",
         None,
         {},
-        None,
+        UNSET,
         False,
         prompts=MappingProxyType({"style": PromptSectionOverride("", "pass-inline")}),
     )
@@ -1533,7 +1527,7 @@ def test_empty_override_on_empty_static_section_warns_as_no_op() -> None:
         "chunk",
         None,
         {},
-        None,
+        UNSET,
         False,
         prompts=MappingProxyType(
             {"accuracy": PromptSectionOverride("", "pass-inline")}
@@ -1545,7 +1539,7 @@ def test_empty_override_on_empty_static_section_warns_as_no_op() -> None:
 
 
 def test_global_prompts_warn_once_per_affected_legacy_pass() -> None:
-    legacy = PassDraft("legacy", "chunk", "Translate.", {}, None, False)
+    legacy = PassDraft("legacy", "chunk", "Translate.", {}, UNSET, False)
     result = finalize_pass_draft(
         legacy,
         None,
@@ -1565,7 +1559,7 @@ def test_global_prompts_warn_once_per_affected_legacy_pass() -> None:
     assert "legacy pass [legacy]" in warnings[0]
     assert "accuracy" in warnings[0]
 
-    glossary = PassDraft("g", "update_glossary", None, {}, None, False)
+    glossary = PassDraft("g", "update_glossary", None, {}, UNSET, False)
     result = finalize_pass_draft(
         glossary,
         None,
@@ -1601,6 +1595,19 @@ def test_parse_style_table_validates_keys_and_values() -> None:
     assert isinstance(parsed, Ok)
     assert parsed.value == StylePolicyPatch(
         formality="formal", honorifics="titles", register_fidelity="soften"
+    )
+    preserved = parse_style_table(
+        "f",
+        {
+            "formality": "preserve",
+            "honorifics": "keep",
+            "register_fidelity": "preserve",
+        },
+        "[style]",
+    )
+    assert isinstance(preserved, Ok)
+    assert preserved.value == StylePolicyPatch(
+        formality="preserve", honorifics="keep", register_fidelity="preserve"
     )
     for table, fragment in (
         ("not a table", "[style] must be a table"),
@@ -1659,6 +1666,12 @@ def test_document_glossary_requires_a_config_file_path() -> None:
     )
 
 
+def test_document_glossary_rejects_invalid_paths() -> None:
+    result = document_glossary_paths("f", {"glossary": "terms.tsv"})
+    assert isinstance(result, Err)
+    assert "glossary must be a list of file paths" in describe(result.error)
+
+
 def test_style_patch_on_instruction_pass_fails_at_finalization() -> None:
     draft = pass_draft_from(
         "f", "p", {}, "inst", style_patch=StylePolicyPatch(formality="formal")
@@ -1702,7 +1715,7 @@ def test_style_policy_flows_into_finalized_passes() -> None:
         "chunk",
         None,
         {},
-        None,
+        UNSET,
         False,
         style_patch=StylePolicyPatch(formality="formal"),
     )
@@ -1723,7 +1736,7 @@ def test_style_policy_flows_into_finalized_passes() -> None:
 
 
 def test_global_style_warns_when_unused_by_roles() -> None:
-    legacy = PassDraft("legacy", "chunk", "Translate.", {}, None, False)
+    legacy = PassDraft("legacy", "chunk", "Translate.", {}, UNSET, False)
     result = finalize_pass_draft(
         legacy,
         None,
@@ -1740,7 +1753,7 @@ def test_global_style_warns_when_unused_by_roles() -> None:
     assert "style settings do not apply" in warnings[0]
     assert "legacy" in warnings[0]
 
-    rendered = PassDraft("p", "chunk", None, {}, None, False)
+    rendered = PassDraft("p", "chunk", None, {}, UNSET, False)
     result = finalize_pass_draft(
         rendered,
         "translator",
@@ -1761,7 +1774,7 @@ def test_honorifics_warns_for_unsupported_sources() -> None:
         "chunk",
         None,
         {},
-        None,
+        UNSET,
         False,
         style_patch=StylePolicyPatch(honorifics="titles"),
     )
@@ -1786,7 +1799,7 @@ def test_honorifics_warns_for_unsupported_sources() -> None:
         "chunk",
         None,
         {},
-        None,
+        UNSET,
         False,
         style_patch=StylePolicyPatch(honorifics="titles"),
     )
@@ -1813,6 +1826,9 @@ def test_parse_output_table_validates_keys_and_values() -> None:
     assert parsed.value == OutputPolicyPatch(
         paragraphs="approximate", maximum_characters=300
     )
+    exact = parse_output_table("f", {"paragraphs": "exact"}, "[output]")
+    assert isinstance(exact, Ok)
+    assert exact.value == OutputPolicyPatch(paragraphs="exact")
     for table, fragment in (
         ("nope", "[output] must be a table"),
         ({"unknown": 1}, "unknown output key(s): unknown"),
@@ -1880,7 +1896,7 @@ def test_explicit_ensure_paragraphs_wins_over_approximate_output() -> None:
         "chunk",
         None,
         {},
-        None,
+        UNSET,
         False,
         output_patch=OutputPolicyPatch(paragraphs="approximate"),
         ensure_paragraphs_explicit=True,
@@ -1909,7 +1925,7 @@ def test_approximate_output_renders_tolerance_one_and_salt_changes() -> None:
         "chunk",
         None,
         {},
-        None,
+        UNSET,
         False,
         output_patch=OutputPolicyPatch(paragraphs="approximate"),
     )
@@ -1940,7 +1956,7 @@ def test_maximum_characters_renders_and_salts() -> None:
         "chunk",
         None,
         {},
-        None,
+        UNSET,
         False,
         output_patch=OutputPolicyPatch(maximum_characters=40),
     )
@@ -1965,7 +1981,7 @@ def test_maximum_characters_renders_and_salts() -> None:
     )
     assert output_policy_salt_component(finalized) != ""
     legacy_result = finalize_pass_draft(
-        PassDraft("legacy", "chunk", "T.", {}, None, False),
+        PassDraft("legacy", "chunk", "T.", {}, UNSET, False),
         None,
         "English",
         "auto",
@@ -1979,7 +1995,7 @@ def test_maximum_characters_renders_and_salts() -> None:
 
 
 def test_global_output_warns_when_unused() -> None:
-    legacy = PassDraft("legacy", "chunk", "Translate.", {}, None, False)
+    legacy = PassDraft("legacy", "chunk", "Translate.", {}, UNSET, False)
     result = finalize_pass_draft(
         legacy,
         None,
@@ -2009,19 +2025,7 @@ def test_analysis_pass_without_instruction_loads_and_renders_analyser(
         'name = "prepare"\n'
         'mode = "analysis"\n'
     )
-    arguments = Arguments(
-        config=str(config_path),
-        base_url=None,
-        api_key=None,
-        model=None,
-        timeout=None,
-        maximum_tokens=None,
-        no_cache=False,
-        ensure_paragraphs=False,
-        verbose=False,
-        print_log_path=False,
-        cache_directory=None,
-    )
+    arguments = Arguments(config=str(config_path))
     result = load_setup(arguments, {}).run()
     assert isinstance(result, Ok)
     prepared = result.value.passes[0]

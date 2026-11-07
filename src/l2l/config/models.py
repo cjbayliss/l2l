@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+lazy from collections.abc import Mapping
 
 from l2l.errors import TranslationError
 from l2l.glossary import GlossaryEntry
+from l2l.json_values import JsonObject
 from l2l.monads import Result
 from l2l.prompts import (
     OutputPolicyPatch,
@@ -16,10 +16,10 @@ from l2l.prompts import (
 )
 from l2l.settings import OptionDefaults, PassDraft, Setup
 
-type DocumentResult = Result[dict[str, Any], TranslationError]
+type DocumentResult = Result[JsonObject, TranslationError]
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class ResolvedPasses:
     option_defaults: OptionDefaults
     global_prompts: Mapping[PromptSectionName, PromptSectionOverride]

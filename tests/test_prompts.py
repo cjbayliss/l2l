@@ -53,7 +53,7 @@ from l2l.prompts import (
     target_region_guidance_text,
     target_scripts_guidance_text,
 )
-from l2l.settings import PassDraft, PassMode, build_settings
+from l2l.settings import UNSET, PassDraft, PassMode, build_settings
 
 PROMPTS_SOURCE = (
     Path(__file__).resolve().parents[1] / "src" / "l2l" / "prompts.py"
@@ -303,20 +303,20 @@ def test_prompts_module_performs_no_io() -> None:
 
 def legacy_draft() -> PassDraft:
     return PassDraft(
-        "translate", "chunk", "Translate to {target_language}.", {}, None, False
+        "translate", "chunk", "Translate to {target_language}.", {}, UNSET, False
     )
 
 
 def omitted_draft(mode: PassMode) -> PassDraft:
-    return PassDraft(mode, mode, None, {}, None, False)
+    return PassDraft(mode, mode, None, {}, UNSET, False)
 
 
 def test_selected_pass_roles_across_modes() -> None:
     drafts = (
-        PassDraft("analyse", "analysis", "Analyse.", {}, None, False),
-        PassDraft("glossary", "update_glossary", None, {}, None, False),
-        PassDraft("first", "chunk", None, {}, None, False),
-        PassDraft("second", "paragraph", None, {}, None, False),
+        PassDraft("analyse", "analysis", "Analyse.", {}, UNSET, False),
+        PassDraft("glossary", "update_glossary", None, {}, UNSET, False),
+        PassDraft("first", "chunk", None, {}, UNSET, False),
+        PassDraft("second", "paragraph", None, {}, UNSET, False),
     )
     assert selected_pass_roles(drafts) == (
         "analyser",
@@ -329,7 +329,7 @@ def test_selected_pass_roles_across_modes() -> None:
 def test_explicit_instruction_bytes_pass_through_unchanged() -> None:
     for draft, expected in (
         (legacy_draft(), "Translate to {target_language}."),
-        (PassDraft("translate", "chunk", "From file.", {}, None, False), "From file."),
+        (PassDraft("translate", "chunk", "From file.", {}, UNSET, False), "From file."),
     ):
         result = finalize_pass_draft(
             draft,

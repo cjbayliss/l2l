@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
+lazy from pathlib import Path
 
 from fakes import (
     FakeHttp,
@@ -21,6 +21,9 @@ from l2l.pipeline import run_pipeline
 from l2l.plans import ascii_drop_warning
 from l2l.settings import build_settings
 from l2l.text import AsciiDrop, Usage
+
+if TYPE_CHECKING:
+    from l2l.context import HttpRequest, HttpResponse
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -49,11 +52,11 @@ def test_stubborn_paragraphs_skip_mechanically_fixable_text() -> None:
 
 def test_ascii_enforcement_reports_a_failing_repair_call() -> None:
     console, stderr = make_console()
-    requests: list[Any] = []
+    requests: list[HttpRequest] = []
 
     def open_once_then_fail(
-        request: Any, timeout: float
-    ) -> Result[Any, TranslationError]:
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         requests.append(request)
         if len(requests) == 1:
             return Ok(FakeStreamResponse(with_usage(stream_chunks("Hi 中"), USAGE)))

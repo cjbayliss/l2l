@@ -1,8 +1,8 @@
 import json
 import socket
-from collections.abc import Callable
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, cast
+lazy from collections.abc import Callable
 
 import pycurl
 from fakes import (
@@ -18,12 +18,14 @@ from fakes import (
     stream_chunks,
     with_usage,
 )
-from http_server import json_reply, local_endpoint, raw_reply
+from http_server import JsonReply, json_reply, local_endpoint, raw_reply
 
-from l2l.console import toggle_verbose
+from l2l.cli import curl_open_http
+from l2l.console import Console, toggle_verbose
 from l2l.errors import ConfigError, HttpError, TranslationError, describe, fail_http
 from l2l.http import (
     CurlResponse,
+    StreamState,
     chat,
     curl_error_code,
     curl_error_detail,
@@ -57,7 +59,12 @@ from l2l.monads import (
     read_reference,
     write_reference,
 )
+from l2l.settings import UNSET
 from l2l.text import Usage
+lazy from l2l.json_values import JsonObject
+
+if TYPE_CHECKING:
+    from l2l.context import Context, HttpRequest, HttpResponse, OpenHTTP
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -68,6 +75,7 @@ def test_curl_open_returns_a_configured_response() -> None:
     request = http_request(run_context.config, {"model": "m"})
     opened = curl_open(request, 10.0, {})
     assert isinstance(opened, Ok)
+    assert isinstance(opened.value, CurlResponse)
     assert opened.value.request == request
     assert opened.value.timeout == 10.0
 
@@ -173,9 +181,11 @@ def test_curl_response_sets_expected_options() -> None:
     assert curl.options[pycurl.FOLLOWLOCATION] == 1
     assert curl.options[pycurl.MAXREDIRS] == 10
     headers = curl.options[pycurl.HTTPHEADER]
-    assert "Authorization: Bearer key" in headers
-    assert "Content-Type: application/json" in headers
-    assert any(header.startswith("User-Agent: l2l/") for header in headers)
+    assert isinstance(headers, list)
+    configured_headers = cast("list[str]", headers)
+    assert "Authorization: Bearer key" in configured_headers
+    assert "Content-Type: application/json" in configured_headers
+    assert any(header.startswith("User-Agent: l2l/") for header in configured_headers)
     assert curl.closed
 
 
@@ -216,9 +226,11 @@ def test_chat_retries_transient_failures_then_succeeds() -> None:
     sleep, sleeps = make_sleep_recorder()
     console, _ = make_console()
     chunks = with_usage(stream_chunks("Hi"), USAGE)
-    calls: list[Any] = []
+    calls: list[HttpRequest] = []
 
-    def flaky_open(request: Any, timeout: float) -> Any:
+    def flaky_open(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         calls.append(request)
         if len(calls) < 3:
             return fail_http("unreachable", "down")
@@ -249,9 +261,11 @@ def test_chat_honours_retry_after_header() -> None:
     sleep, sleeps = make_sleep_recorder()
     console, _ = make_console()
     chunks = with_usage(stream_chunks("Hi"), USAGE)
-    calls: list[Any] = []
+    calls: list[HttpRequest] = []
 
-    def rate_limited_then_ok(request: Any, timeout: float) -> Any:
+    def rate_limited_then_ok(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         calls.append(request)
         if len(calls) == 1:
             return fail_http("status", "slow down", 429, 9.0)
@@ -268,9 +282,11 @@ def test_chat_honours_retry_after_header() -> None:
 def test_chat_gives_up_after_retry_budget() -> None:
     sleep, sleeps = make_sleep_recorder()
     console, _ = make_console()
-    calls: list[Any] = []
+    calls: list[HttpRequest] = []
 
-    def always_down(request: Any, timeout: float) -> Any:
+    def always_down(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         calls.append(request)
         return fail_http("unreachable", "down")
 
@@ -283,7 +299,7 @@ def test_chat_gives_up_after_retry_budget() -> None:
 
 
 def test_chat_stream_setting_precedence() -> None:
-    plain_body = {
+    plain_body: JsonObject = {
         "choices": [{"message": {"content": "Plain"}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
@@ -300,7 +316,11 @@ def test_chat_stream_setting_precedence() -> None:
             else FakePlainResponse(plain_body)
         )
         http = FakeHttp([response])
-        run_context = make_context(console, http.open, stream=context_stream)
+        run_context = make_context(
+            console,
+            http.open,
+            stream=UNSET if context_stream is None else context_stream,
+        )
         result = chat(run_context, "s", "u", "m", parameters, Usage()).run()
         assert isinstance(result, Ok)
         assert result.value.text == expected_text
@@ -313,6 +333,13 @@ class DyingPlainResponse:
             raise OSError("connection reset mid-body")
 
         return IO(die)
+
+    def consume[S](
+        self,
+        step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+        initial: Result[S, TranslationError],
+    ) -> IO[Result[S, TranslationError]]:
+        return io_result(initial)
 
 
 def test_chat_reports_a_plain_response_that_dies_mid_body() -> None:
@@ -334,12 +361,15 @@ class DyingStreamResponse:
             b"\n",
         ]
 
-    def consume(
+    def body(self) -> IO[Result[bytes, TranslationError]]:
+        return io_result(fail_http("protocol", "streaming response has no body"))
+
+    def consume[S](
         self,
-        step: Any,
-        initial: Result[Any, TranslationError],
-    ) -> IO[Result[Any, TranslationError]]:
-        def die() -> Result[Any, TranslationError]:
+        step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+        initial: Result[S, TranslationError],
+    ) -> IO[Result[S, TranslationError]]:
+        def die() -> Result[S, TranslationError]:
             raise OSError("connection reset mid-stream")
 
         return io_and_then(fold_io(self._lines, step, initial), IO(die))
@@ -365,18 +395,23 @@ def test_chat_reports_an_interrupted_stream() -> None:
 
 class TogglingStreamResponse:
     def __init__(
-        self, chunks: list[dict[str, Any]], console: Any, toggle_after_chunks: int
+        self, chunks: list[JsonObject], console: Console, toggle_after_chunks: int
     ) -> None:
         self._lines = list(sse_bytes(chunks))
         self._console = console
         self._toggle_after = toggle_after_chunks * 2
 
-    def consume(
+    def body(self) -> IO[Result[bytes, TranslationError]]:
+        return io_result(fail_http("protocol", "streaming response has no body"))
+
+    def consume[S](
         self,
-        step: Any,
-        initial: Result[Any, TranslationError],
-    ) -> IO[Result[Any, TranslationError]]:
-        def toggling(state: Any, indexed: tuple[int, bytes]) -> Any:
+        step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+        initial: Result[S, TranslationError],
+    ) -> IO[Result[S, TranslationError]]:
+        def toggling(
+            state: S, indexed: tuple[int, bytes]
+        ) -> IO[Result[S, TranslationError]]:
             index, line = indexed
             return io_and_then(
                 io_map(
@@ -395,7 +430,7 @@ class TogglingStreamResponse:
 
 def test_chat_shows_streamed_reasoning_once_across_a_mid_stream_toggle() -> None:
     console, stderr = make_console()
-    chunks = [
+    chunks: list[JsonObject] = [
         {"choices": [{"delta": {"reasoning_content": "Most"}}]},
         {"choices": [{"delta": {"reasoning_content": "ly fine."}}]},
         {"choices": [{"delta": {"reasoning_content": " Second line."}}]},
@@ -416,14 +451,17 @@ def test_chat_shows_streamed_reasoning_once_across_a_mid_stream_toggle() -> None
 
 
 class UnterminatedStreamResponse:
-    def __init__(self, chunks: list[dict[str, Any]]) -> None:
+    def __init__(self, chunks: list[JsonObject]) -> None:
         self._lines = sse_bytes(chunks)[:-1]
 
-    def consume(
+    def body(self) -> IO[Result[bytes, TranslationError]]:
+        return io_result(fail_http("protocol", "streaming response has no body"))
+
+    def consume[S](
         self,
-        step: Any,
-        initial: Result[Any, TranslationError],
-    ) -> IO[Result[Any, TranslationError]]:
+        step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+        initial: Result[S, TranslationError],
+    ) -> IO[Result[S, TranslationError]]:
         return fold_io(self._lines, step, initial)
 
 
@@ -442,6 +480,13 @@ class GarbagePlainResponse:
     def body(self) -> IO[Result[bytes, TranslationError]]:
         return io_result(Ok(b"{not json at all"))
 
+    def consume[S](
+        self,
+        step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+        initial: Result[S, TranslationError],
+    ) -> IO[Result[S, TranslationError]]:
+        return io_result(initial)
+
 
 def test_chat_reports_invalid_json_body_as_protocol_error() -> None:
     console, _ = make_console()
@@ -459,6 +504,13 @@ class ExplodingPlainResponse:
 
         return IO(explode)
 
+    def consume[S](
+        self,
+        step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+        initial: Result[S, TranslationError],
+    ) -> IO[Result[S, TranslationError]]:
+        return io_result(initial)
+
 
 def test_chat_reports_a_plain_read_failure_as_protocol_error() -> None:
     console, _ = make_console()
@@ -475,9 +527,11 @@ def test_chat_reports_a_plain_read_failure_as_protocol_error() -> None:
 def test_chat_reopens_a_stream_without_stream_options() -> None:
     console, _ = make_console()
     chunks = with_usage(stream_chunks("Hi"), USAGE)
-    requests: list[Any] = []
+    requests: list[HttpRequest] = []
 
-    def picky_open(request: Any, timeout: float) -> Result[Any, TranslationError]:
+    def picky_open(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         requests.append(request)
         if "stream_options" in json.loads(request.body):
             return fail_http("status", "stream_options is unsupported", 400)
@@ -518,7 +572,9 @@ def test_http_stream_retries_only_when_the_request_sends_stream_options() -> Non
     guarded = FakeCurlHttp([curl])
     run_context = make_context(console, guarded.open)
 
-    def plain_drive(response: Any) -> Any:
+    def plain_drive(
+        response: HttpResponse,
+    ) -> IO[Result[StreamState, TranslationError]]:
         return drive_stream(response, lambda label, count: io_pure(None))
 
     outcome = http_stream(run_context, {"model": "m"}, plain_drive).run()
@@ -545,12 +601,15 @@ def test_chat_reports_endpoint_error_events_from_a_stream() -> None:
 
 
 class ExplodingStreamResponse:
-    def consume(
+    def body(self) -> IO[Result[bytes, TranslationError]]:
+        return io_result(fail_http("protocol", "streaming response has no body"))
+
+    def consume[S](
         self,
-        step: Any,
-        initial: Result[Any, TranslationError],
-    ) -> IO[Result[Any, TranslationError]]:
-        def explode() -> Result[Any, TranslationError]:
+        step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+        initial: Result[S, TranslationError],
+    ) -> IO[Result[S, TranslationError]]:
+        def explode() -> Result[S, TranslationError]:
             raise ValueError("bad frame")
 
         return IO(explode)
@@ -612,7 +671,9 @@ def test_chat_rejects_a_stream_truncated_by_length() -> None:
 
 def test_chat_rejects_a_plain_response_truncated_by_length() -> None:
     console, _ = make_console()
-    body = {"choices": [{"message": {"content": "Partial"}, "finish_reason": "length"}]}
+    body: JsonObject = {
+        "choices": [{"message": {"content": "Partial"}, "finish_reason": "length"}]
+    }
     http = FakeHttp([FakePlainResponse(body)])
     run_context = make_context(console, http.open, stream=False)
     result = chat(run_context, "s", "u", "m", {}, Usage()).run()
@@ -728,11 +789,13 @@ def test_log_all_writes_each_message_when_verbose() -> None:
 DIRECT_ENVIRONMENT = {"no_proxy": "127.0.0.1,localhost"}
 
 
-def real_open_http(request: Any, timeout: float) -> Result[Any, TranslationError]:
+def real_open_http(
+    request: HttpRequest, timeout: float
+) -> Result[HttpResponse, TranslationError]:
     return curl_open(request, timeout, DIRECT_ENVIRONMENT)
 
 
-def local_context(console: Any, endpoint_url: str) -> Any:
+def local_context(console: Console, endpoint_url: str) -> Context:
     run_context = make_context(console, real_open_http)
     return replace(
         run_context, config=replace(run_context.config, base_url=endpoint_url)
@@ -745,6 +808,17 @@ def closed_local_port() -> int:
     port = int(probe.getsockname()[1])
     probe.close()
     return port
+
+
+def test_curl_open_http_wires_the_environment_into_curl() -> None:
+    console, _ = make_console()
+    with local_endpoint(lambda body, headers: json_reply({"echo": "ok"})) as endpoint:
+        base = make_context(console, curl_open_http(DIRECT_ENVIRONMENT))
+        run_context = replace(base, config=replace(base.config, base_url=endpoint.url))
+        result = http_post_json(run_context, {"model": "m"}).run()
+
+    assert isinstance(result, Ok)
+    assert result.value == {"echo": "ok"}
 
 
 def test_http_post_json_round_trips_a_local_server() -> None:
@@ -765,7 +839,7 @@ def test_http_post_json_round_trips_a_local_server() -> None:
 def test_http_post_json_reports_a_status_failure_from_a_local_server() -> None:
     console, _ = make_console()
 
-    def overloaded(body: bytes, headers: dict[str, str]) -> Any:
+    def overloaded(body: bytes, headers: dict[str, str]) -> JsonReply:
         return (429, (("Retry-After", "7"),), b"slow down")
 
     with local_endpoint(overloaded) as endpoint:
@@ -807,7 +881,7 @@ def test_http_post_json_reports_invalid_json_from_a_local_server() -> None:
 def test_chat_streams_a_completion_from_a_local_server() -> None:
     console, _ = make_console()
 
-    def stream_hello(body: bytes, headers: dict[str, str]) -> Any:
+    def stream_hello(body: bytes, headers: dict[str, str]) -> JsonReply:
         frames = (
             b'data: {"choices": [{"delta": {"content": "Hel"}}]}\n\n',
             b'data: {"choices": [{"delta": {"content": "lo"}}]}\n\n',
@@ -837,7 +911,7 @@ OPENROUTER_429_DETAIL = (
 )
 
 
-def openrouter_context(console: Any, open_http: Any) -> Any:
+def openrouter_context(console: Console, open_http: OpenHTTP) -> Context:
     run_context = make_context(console, open_http)
     return replace(
         run_context,
@@ -861,7 +935,7 @@ def test_failed_provider_name_extracts_the_provider_from_the_detail() -> None:
 def test_with_blocked_providers_adds_an_ignore_list_on_openrouter() -> None:
     console, _ = make_console()
     run_context = openrouter_context(console, FakeHttp([]).open)
-    payload = {"model": "m", "provider": {"order": ["A"]}}
+    payload: JsonObject = {"model": "m", "provider": {"order": ["A"]}}
     scoped = with_blocked_providers(
         run_context.config, payload, frozenset({"Modal", "DeepInfra"})
     )
@@ -876,9 +950,13 @@ def test_with_blocked_providers_adds_an_ignore_list_on_openrouter() -> None:
 
 
 def rate_limited_providers_open(
-    requests: list[Any], chunks: list[dict[str, Any]], providers: tuple[str, ...]
-) -> Callable[[Any, float], Result[Any, TranslationError]]:
-    def open_http(request: Any, timeout: float) -> Result[Any, TranslationError]:
+    requests: list[HttpRequest],
+    chunks: list[JsonObject],
+    providers: tuple[str, ...],
+) -> OpenHTTP:
+    def open_http(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         requests.append(request)
         index = len(requests) - 1
         if index < len(providers):
@@ -892,11 +970,11 @@ def rate_limited_providers_open(
 
 def rate_limited_chat_context(
     providers: tuple[str, ...], provider_block_attempts: int | None = None
-) -> tuple[Any, list[Any], Callable[[], tuple[float, ...]]]:
+) -> tuple[Context, list[HttpRequest], Callable[[], tuple[float, ...]]]:
     sleep, sleeps = make_sleep_recorder()
     console, _ = make_console()
     chunks = with_usage(stream_chunks("Hi"), USAGE)
-    requests: list[Any] = []
+    requests: list[HttpRequest] = []
     run_context = openrouter_context(
         console, rate_limited_providers_open(requests, chunks, providers)
     )
@@ -983,7 +1061,7 @@ def test_chat_does_not_block_providers_off_openrouter() -> None:
     sleep, sleeps = make_sleep_recorder()
     console, _ = make_console()
     chunks = with_usage(stream_chunks("Hi"), USAGE)
-    requests: list[Any] = []
+    requests: list[HttpRequest] = []
     run_context = make_context(
         console, rate_limited_providers_open(requests, chunks, ("Modal",)), sleep=sleep
     )

@@ -6,25 +6,26 @@ import os
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
 from itertools import accumulate, chain
-from typing import Any
+from typing import Final
+lazy from collections.abc import Mapping
 
-import unicodedataplus
+from unicodedataplus import script_extensions as unicode_script_extensions
 
+from l2l.json_values import JsonObject, JsonValue, is_json_object
 from l2l.monads import NOTHING, Just, Maybe, maybe_or_else
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost: float = 0.0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Translated:
     text: str
     usage: Usage
@@ -32,7 +33,7 @@ class Translated:
     problem: str | None = None
 
 
-CJK_RANGES: tuple[tuple[int, int], ...] = (
+CJK_RANGES: Final[tuple[tuple[int, int], ...]] = (
     (0x3000, 0x303F),
     (0x3040, 0x30FF),
     (0x3400, 0x4DBF),
@@ -42,18 +43,18 @@ CJK_RANGES: tuple[tuple[int, int], ...] = (
     (0x20000, 0x2FA1F),
 )
 
-HANGUL_RANGES: tuple[tuple[int, int], ...] = (
+HANGUL_RANGES: Final[tuple[tuple[int, int], ...]] = (
     (0x1100, 0x11FF),
     (0xAC00, 0xD7AF),
 )
 
-THAI_RANGES: tuple[tuple[int, int], ...] = (
+THAI_RANGES: Final[tuple[tuple[int, int], ...]] = (
     (0x0E00, 0x0E7F),
     (0x0E80, 0x0EFF),
 )
 
-ONE_CHAR_PER_TOKEN_RANGES = CJK_RANGES + HANGUL_RANGES
-TWO_CHARS_PER_TOKEN_RANGES = THAI_RANGES
+ONE_CHAR_PER_TOKEN_RANGES: Final = CJK_RANGES + HANGUL_RANGES
+TWO_CHARS_PER_TOKEN_RANGES: Final = THAI_RANGES
 
 
 def in_ranges(char: str, ranges: tuple[tuple[int, int], ...]) -> bool:
@@ -101,7 +102,7 @@ def count_paragraphs(text: str) -> int:
     return len(split_paragraphs(text)[0])
 
 
-NON_PROSE_PARAGRAPH_PATTERN = re.compile(r"^(?:\s|</?[A-Za-z][^<>]*>|\.)+$")
+NON_PROSE_PARAGRAPH_PATTERN: Final = re.compile(r"^(?:\s|</?[A-Za-z][^<>]*>|\.)+$")
 
 
 def paragraph_is_translatable(text: str) -> bool:
@@ -197,10 +198,10 @@ def regroup_by_plan(
     )
 
 
-FLOAT_PATTERN = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+FLOAT_PATTERN: Final = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 
 
-def parse_float(value: Any) -> Maybe[float]:
+def parse_float(value: object) -> Maybe[float]:
     if isinstance(value, bool):
         return NOTHING
 
@@ -213,15 +214,15 @@ def parse_float(value: Any) -> Maybe[float]:
     return NOTHING
 
 
-def parse_cost(value: Any) -> float:
+def parse_cost(value: object) -> float:
     return maybe_or_else(parse_float(value), lambda: 0.0)
 
 
-def parse_tokens(value: Any) -> int:
+def parse_tokens(value: object) -> int:
     return int(maybe_or_else(parse_float(value), lambda: 0.0))
 
 
-def add_usage(usage: Usage, reported: Mapping[str, Any]) -> Usage:
+def add_usage(usage: Usage, reported: Mapping[str, object]) -> Usage:
     return Usage(
         prompt_tokens=usage.prompt_tokens + parse_tokens(reported.get("prompt_tokens")),
         completion_tokens=usage.completion_tokens
@@ -260,14 +261,14 @@ def has_alphanumeric_characters(text: str) -> bool:
     return any(char.isalnum() for char in text)
 
 
-UNKNOWN_SCRIPT = ""
+UNKNOWN_SCRIPT: Final = ""
 
 
 def character_scripts(character: str) -> tuple[str, ...]:
     if not character.isalpha():
         return ()
 
-    return tuple(str(script) for script in unicodedataplus.script_extensions(character))
+    return tuple(str(script) for script in unicode_script_extensions(character))
 
 
 def letter_script(character: str) -> str:
@@ -358,7 +359,7 @@ def to_ascii_mechanical(text: str, character_map: Mapping[str, str]) -> str:
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AsciiDrop:
     index: int
     sample: str
@@ -383,8 +384,8 @@ def drop_non_ascii(
     )
 
 
-THINK_OPEN = "<think>"
-THINK_CLOSE = "</think>"
+THINK_OPEN: Final = "<think>"
+THINK_CLOSE: Final = "</think>"
 
 
 def split_think_close(text: str) -> tuple[str, str] | None:
@@ -409,22 +410,22 @@ def strip_think_tag(content: str) -> tuple[str, Maybe[str]]:
     return visible, Just(captured.strip())
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SseState:
     pending_data: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SseDone:
     pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SseEvent:
-    payload: dict[str, Any]
+    payload: JsonObject
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SseMalformed:
     data: str
 
@@ -444,7 +445,10 @@ def decode_sse_data(data: str) -> SseFrame:
     except json.JSONDecodeError:
         return SseMalformed(data)
 
-    return SseEvent(loaded) if isinstance(loaded, dict) else None
+    if is_json_object(loaded):
+        return SseEvent(loaded)
+
+    return None
 
 
 def sse_step(state: SseState, raw_line: bytes) -> tuple[SseState, SseFrame]:
@@ -466,7 +470,7 @@ def sse_step(state: SseState, raw_line: bytes) -> tuple[SseState, SseFrame]:
     return state, None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ThinkState:
     scanning_opening_tag: bool = True
     inside_reasoning: bool = False
@@ -520,7 +524,7 @@ def cache_path(cache_directory: str, key: str) -> str:
     return os.path.join(cache_directory, key + ".txt")
 
 
-CACHE_SALT_VERSION = "6"
+CACHE_SALT_VERSION: Final = "6"
 
 
 def cache_key(
@@ -528,7 +532,7 @@ def cache_key(
     model: str,
     pass_salt: str = "",
     work_text: str = "",
-    overrides: Mapping[str, Any] | None = None,
+    overrides: Mapping[str, JsonValue] | None = None,
     context: str = "",
     translated_context: str = "",
     analysis: str = "",

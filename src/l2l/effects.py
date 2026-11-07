@@ -10,9 +10,10 @@ import time
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, TextIO
+from typing import Final, TextIO
 
 from l2l.errors import TranslationError, fail_config, fail_file_error
+from l2l.json_values import JsonObject, JsonValue, is_json_object
 from l2l.monads import (
     IO,
     NOTHING,
@@ -29,6 +30,7 @@ from l2l.monads import (
     result_or_else,
 )
 from l2l.text import cache_path
+lazy from l2l.settings import UNSET, Unset, value_if_set
 
 Clock = Callable[[], float]
 Sleep = Callable[[float], None]
@@ -88,11 +90,12 @@ def user_config_path(environment: Mapping[str, str]) -> IO[str]:
 
 
 def resolve_cache_directory(
-    environment: Mapping[str, str], override: str | None = None
+    environment: Mapping[str, str], override: str | Unset = UNSET
 ) -> IO[str]:
     def thunk() -> str:
-        if override:
-            directory = override
+        override_value = value_if_set(override)
+        if override_value:
+            directory = override_value
         else:
             directory = os.path.join(
                 environment.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
@@ -105,30 +108,37 @@ def resolve_cache_directory(
     return IO(thunk)
 
 
-def load_toml(
-    path: str, description: str
-) -> IO[Result[dict[str, Any], TranslationError]]:
-    def thunk() -> Result[dict[str, Any], TranslationError]:
+def load_toml(path: str, description: str) -> IO[Result[JsonObject, TranslationError]]:
+    def thunk() -> Result[JsonObject, TranslationError]:
         try:
             with open(path, "rb") as handle:
-                return Ok(tomllib.load(handle))
+                loaded = tomllib.load(handle)
         except OSError as error:
             return fail_file_error(path, "read " + description, str(error))
         except tomllib.TOMLDecodeError as error:
             return fail_config("cannot parse %s %s: %s" % (description, path, error))
 
+        if not is_json_object(loaded):
+            return fail_config(
+                "%s %s must contain only JSON values" % (description, path)
+            )
+
+        return Ok(loaded)
+
     return IO(thunk)
 
 
-def load_json(path: str, description: str) -> IO[Result[Any, TranslationError]]:
-    def thunk() -> Result[Any, TranslationError]:
+def load_json(path: str, description: str) -> IO[Result[JsonValue, TranslationError]]:
+    def thunk() -> Result[JsonValue, TranslationError]:
         try:
             with open(path, encoding="utf-8") as handle:
-                return Ok(json.loads(handle.read()))
+                loaded: JsonValue = json.loads(handle.read())
         except OSError as error:
             return fail_file_error(path, "read " + description, str(error))
         except json.JSONDecodeError as error:
             return fail_config("cannot parse %s %s: %s" % (description, path, error))
+
+        return Ok(loaded)
 
     return IO(thunk)
 
@@ -155,7 +165,7 @@ def cache_read(cache_directory: str, key: str) -> IO[Maybe[str]]:
     return IO(thunk)
 
 
-CACHE_TEMPORARY_SUFFIX = ".txt.tmp"
+CACHE_TEMPORARY_SUFFIX: Final = ".txt.tmp"
 
 
 def write_file_atomically(
@@ -205,7 +215,7 @@ def _no_close() -> None:
     return None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RunLog:
     path: Maybe[str]
     clock: Clock
@@ -268,7 +278,7 @@ def log_entry(log: RunLog, label: str, body: str) -> IO[None]:
 
 
 def log_request(
-    log: RunLog, payload: Mapping[str, Any], label: str = "REQUEST"
+    log: RunLog, payload: Mapping[str, JsonValue], label: str = "REQUEST"
 ) -> IO[None]:
     return log_entry(log, label, json.dumps(payload, indent=2, ensure_ascii=False))
 
@@ -316,7 +326,7 @@ def log_paths(cache_directory: str) -> IO[tuple[str, ...]]:
     return IO(thunk)
 
 
-LOG_SECONDS_PER_DAY = 86400.0
+LOG_SECONDS_PER_DAY: Final = 86400.0
 
 
 def prune_old_logs(cache_directory: str, keep_days: int, clock: Clock) -> IO[int]:
@@ -462,7 +472,7 @@ def entry_paths(directory: str) -> IO[tuple[str, ...]]:
     return IO(thunk)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ProcessResult:
     returncode: int
     stdout: str

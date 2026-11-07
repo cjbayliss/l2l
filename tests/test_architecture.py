@@ -33,15 +33,21 @@ def decorator_name(decorator: ast.expr) -> str:
     return ""
 
 
-def frozen_dataclass(decorator: ast.expr) -> bool:
-    if decorator_name(decorator) != "dataclass" or not isinstance(decorator, ast.Call):
-        return False
-    return any(
-        keyword.arg == "frozen"
-        and isinstance(keyword.value, ast.Constant)
-        and keyword.value.value is True
-        for keyword in decorator.keywords
+def dataclass_keyword_is_true(decorator: ast.expr, keyword: str) -> bool:
+    return (
+        decorator_name(decorator) == "dataclass"
+        and isinstance(decorator, ast.Call)
+        and any(
+            item.arg == keyword
+            and isinstance(item.value, ast.Constant)
+            and item.value.value is True
+            for item in decorator.keywords
+        )
     )
+
+
+def frozen_dataclass(decorator: ast.expr) -> bool:
+    return dataclass_keyword_is_true(decorator, "frozen")
 
 
 def docstring_nodes(tree: ast.Module) -> list[ast.Expr]:
@@ -114,6 +120,78 @@ def test_no_comments_anywhere() -> None:
         for line in comment_lines(source)
     ]
     assert not problems, "comments are banned: %s" % "; ".join(problems)
+
+
+def any_annotation_nodes(tree: ast.Module) -> list[ast.Name]:
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id == "Any"
+    ]
+
+
+def test_no_any_annotations() -> None:
+    problems = [
+        "%s:%d" % (name, node.lineno)
+        for name, source in source_files()
+        for node in any_annotation_nodes(ast.parse(source))
+    ]
+    assert not problems, "Any annotations: %s" % "; ".join(problems)
+
+
+def cast_nodes(tree: ast.Module) -> list[ast.Call]:
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "cast"
+    ]
+
+
+def test_no_casts_in_sources() -> None:
+    problems = [
+        "%s:%d" % (name, node.lineno)
+        for name, source in source_files()
+        for node in cast_nodes(ast.parse(source))
+    ]
+    assert not problems, "casts are banned in sources: %s" % "; ".join(problems)
+
+
+def test_frozen_dataclasses_define_slots() -> None:
+    problems = [
+        "%s:%d %s" % (name, node.lineno, node.name)
+        for name, source in python_sources()
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ClassDef)
+        and any(frozen_dataclass(item) for item in node.decorator_list)
+        and not any(
+            dataclass_keyword_is_true(item, "slots") for item in node.decorator_list
+        )
+    ]
+    assert not problems, "frozen dataclasses without slots: %s" % "; ".join(problems)
+
+
+def is_final_annotation(annotation: ast.expr) -> bool:
+    if isinstance(annotation, ast.Name):
+        return annotation.id == "Final"
+    if isinstance(annotation, ast.Subscript):
+        return isinstance(annotation.value, ast.Name) and annotation.value.id == "Final"
+    return False
+
+
+def test_module_constants_are_final() -> None:
+    problems: list[str] = []
+    for name, source in source_files():
+        for node in ast.parse(source).body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            target = node.targets[0] if isinstance(node, ast.Assign) else node.target
+            if not isinstance(target, ast.Name) or not target.id.isupper():
+                continue
+            if isinstance(node, ast.Assign) or not is_final_annotation(node.annotation):
+                problems.append("%s:%d %s" % (name, node.lineno, target.id))
+    assert not problems, "module constants without Final: %s" % "; ".join(problems)
 
 
 def test_no_docstrings_anywhere() -> None:

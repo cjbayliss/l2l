@@ -1,17 +1,33 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from functools import reduce
+from typing import TYPE_CHECKING, Final, Protocol
+lazy from types import TracebackType
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 
-@dataclass(frozen=True)
+class Exclusive[T_co](Protocol):
+    def __enter__(self) -> T_co: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
 class Ok[T]:
     value: T
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Err[E]:
     error: E
 
@@ -69,12 +85,12 @@ def result_sequence[T, E](results: Iterable[Result[T, E]]) -> Result[tuple[T, ..
     return reduce(collect_value, results, collected)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Just[T]:
     value: T
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Nothing:
     pass
 
@@ -82,7 +98,7 @@ class Nothing:
 type Maybe[T] = Just[T] | Nothing
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Cons[T]:
     head: T
     tail: Cons[T] | None = None
@@ -106,7 +122,7 @@ def cons_to_tuple[T](items: Cons[T] | None) -> tuple[T, ...]:
     return tuple(reversed(tuple(cons_cells(items))))
 
 
-NOTHING: Nothing = Nothing()
+NOTHING: Final[Nothing] = Nothing()
 
 
 def maybe_map[T, R](maybe: Maybe[T], transform: Callable[[T], R]) -> Maybe[R]:
@@ -143,7 +159,7 @@ def maybe_or[T](first: Maybe[T], second: Maybe[T]) -> Maybe[T]:
     return first if isinstance(first, Just) else second
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class IO[T]:
     run: Callable[[], T]
 
@@ -187,7 +203,7 @@ def io_when_unit(condition: bool, action: IO[None]) -> IO[None]:
     return IO(thunk)
 
 
-def io_atomic[T](lock: threading.Lock, action: IO[T]) -> IO[T]:
+def io_atomic[T](lock: Exclusive[object], action: IO[T]) -> IO[T]:
     def thunk() -> T:
         with lock:
             return action.run()

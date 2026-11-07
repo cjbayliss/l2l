@@ -3,7 +3,7 @@ import sys
 import termios
 import threading
 import tty
-from pathlib import Path
+lazy from pathlib import Path
 
 import pytest
 from fakes import make_console
@@ -12,6 +12,7 @@ from l2l import keys
 from l2l.console import Console, toggle_verbose
 from l2l.keys import (
     TabListener,
+    TermiosState,
     enter_cbreak,
     is_toggle_key,
     open_tty,
@@ -29,7 +30,7 @@ def toggler(console: Console) -> None:
 def listener_for(
     file_descriptor: int,
     console: Console,
-    saved: tuple[object, ...] = (),
+    saved: TermiosState = (),
 ) -> TabListener:
     return TabListener(
         file_descriptor=file_descriptor,
@@ -46,7 +47,10 @@ def test_is_toggle_key_matches_only_tab() -> None:
 
 
 def test_open_tty_opens_the_tty_device(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(os, "open", lambda path, flags: 42)
+    def granting_open(path: str, flags: int) -> int:
+        return 42
+
+    monkeypatch.setattr(os, "open", granting_open)
     assert open_tty().run() == Just(42)
 
 
@@ -58,8 +62,11 @@ def test_open_tty_falls_back_to_a_stdin_tty(monkeypatch: pytest.MonkeyPatch) -> 
     def refuse(path: str, flags: int) -> int:
         raise OSError("no /dev/tty")
 
+    def confirming_isatty(file_descriptor: int) -> bool:
+        return True
+
     monkeypatch.setattr(os, "open", refuse)
-    monkeypatch.setattr(os, "isatty", lambda file_descriptor: True)
+    monkeypatch.setattr(os, "isatty", confirming_isatty)
     monkeypatch.setattr(sys, "stdin", FakeStdin())
     assert open_tty().run() == Just(7)
 
@@ -72,8 +79,11 @@ def test_open_tty_without_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(path: str, flags: int) -> int:
         raise OSError("no /dev/tty")
 
+    def denying_isatty(file_descriptor: int) -> bool:
+        return False
+
     monkeypatch.setattr(os, "open", refuse)
-    monkeypatch.setattr(os, "isatty", lambda file_descriptor: False)
+    monkeypatch.setattr(os, "isatty", denying_isatty)
     monkeypatch.setattr(sys, "stdin", FakeStdin())
     assert open_tty().run() is NOTHING
 
@@ -137,14 +147,13 @@ def test_start_and_stop_manage_the_listener_thread(
             self.alive = False
             joined.append(timeout)
 
+    def recording_tcsetattr(
+        file_descriptor: int, when: int, attributes: list[object]
+    ) -> None:
+        restored.append((file_descriptor, when, attributes))
+
     monkeypatch.setattr(threading, "Thread", RecordingThread)
-    monkeypatch.setattr(
-        termios,
-        "tcsetattr",
-        lambda file_descriptor, when, attributes: restored.append(
-            (file_descriptor, when, attributes)
-        ),
-    )
+    monkeypatch.setattr(termios, "tcsetattr", recording_tcsetattr)
     console, _ = make_console(live=True)
     listener = listener_for(0, console, saved=(1, 2, 3))
     listener.start().run()
@@ -169,8 +178,11 @@ def test_start_tab_listener_without_cbreak_stays_detached(
     def refuse(file_descriptor: int) -> None:
         raise termios.error("cannot enter cbreak mode")
 
+    def fixed_tcgetattr(file_descriptor: int) -> tuple[int, int, int]:
+        return (1, 2, 3)
+
     monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(0)))
-    monkeypatch.setattr(termios, "tcgetattr", lambda file_descriptor: (1, 2, 3))
+    monkeypatch.setattr(termios, "tcgetattr", fixed_tcgetattr)
     monkeypatch.setattr(tty, "setcbreak", refuse)
     console, _ = make_console(live=True)
     stop = start_tab_listener(console, lambda: toggler(console)).run()
@@ -197,10 +209,20 @@ def test_start_tab_listener_attaches_to_a_working_tty(
             return None
 
     monkeypatch.setattr(threading, "Thread", RecordingThread)
+
+    def fixed_tcgetattr(file_descriptor: int) -> tuple[int, int, int]:
+        return (1, 2, 3)
+
+    def dropping_tcsetattr(*arguments: object) -> None:
+        return None
+
+    def dropping_setcbreak(file_descriptor: int) -> None:
+        return None
+
     monkeypatch.setattr(keys, "open_tty", lambda: IO(lambda: Just(0)))
-    monkeypatch.setattr(termios, "tcgetattr", lambda file_descriptor: (1, 2, 3))
-    monkeypatch.setattr(termios, "tcsetattr", lambda *arguments: None)
-    monkeypatch.setattr(tty, "setcbreak", lambda file_descriptor: None)
+    monkeypatch.setattr(termios, "tcgetattr", fixed_tcgetattr)
+    monkeypatch.setattr(termios, "tcsetattr", dropping_tcsetattr)
+    monkeypatch.setattr(tty, "setcbreak", dropping_setcbreak)
     console, _ = make_console(live=True)
     stop = start_tab_listener(console, lambda: toggler(console)).run()
     stop.run()
@@ -211,11 +233,13 @@ def test_stop_restores_terminal_attributes_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     restored: list[int] = []
-    monkeypatch.setattr(
-        termios,
-        "tcsetattr",
-        lambda file_descriptor, when, attributes: restored.append(file_descriptor),
-    )
+
+    def restoring_tcsetattr(
+        file_descriptor: int, when: int, attributes: object
+    ) -> None:
+        restored.append(file_descriptor)
+
+    monkeypatch.setattr(termios, "tcsetattr", restoring_tcsetattr)
     listener = TabListener(
         file_descriptor=0,
         saved=(),

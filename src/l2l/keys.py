@@ -7,11 +7,10 @@ import sys
 import termios
 import threading
 import tty
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Final
+lazy from collections.abc import Callable
 
-from l2l.console import Console
 from l2l.monads import (
     IO,
     NOTHING,
@@ -30,11 +29,13 @@ from l2l.monads import (
     repeat_until,
     write_reference,
 )
+lazy from l2l.console import Console
 
-POLL_SECONDS = 0.1
+POLL_SECONDS: Final = 0.1
 
 
-type TermiosState = tuple[Any, ...]
+type TermiosAttr = int | list[int | bytes]
+type TermiosState = tuple[TermiosAttr, ...]
 
 
 def is_toggle_key(data: bytes) -> bool:
@@ -85,7 +86,7 @@ def no_op() -> None:
     return None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TabListener:
     file_descriptor: int
     saved: TermiosState

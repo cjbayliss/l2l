@@ -1,7 +1,7 @@
 import io
 import json
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
+lazy from pathlib import Path
 
 from fakes import (
     FakeHttp,
@@ -24,6 +24,7 @@ from l2l.errors import (
 )
 from l2l.glossary import GlossaryEntry
 from l2l.http import chat
+from l2l.json_values import JsonArray, JsonObject, JsonValue, is_json_object
 from l2l.monads import (
     IO,
     Err,
@@ -43,6 +44,9 @@ from l2l.pipeline import (
 )
 from l2l.settings import PassDefinition
 from l2l.text import THINK_OPEN, Usage
+
+if TYPE_CHECKING:
+    from l2l.context import HttpRequest, HttpResponse
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -85,7 +89,7 @@ def test_chat_streamed_filters_think_prefix() -> None:
 
 def test_chat_plain_when_stream_disabled() -> None:
     console, _stderr = make_console()
-    body = {
+    body: JsonObject = {
         "choices": [{"message": {"content": "Plain"}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
@@ -100,7 +104,7 @@ def test_chat_plain_when_stream_disabled() -> None:
 
 def test_chat_plain_swallows_unterminated_think_prefix() -> None:
     console, _stderr = make_console()
-    body = {
+    body: JsonObject = {
         "choices": [{"message": {"content": THINK_OPEN + "reasoning without close"}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
@@ -141,7 +145,9 @@ def test_run_pipeline_runs_analysis_before_translation() -> None:
 def test_run_pipeline_wraps_analysis_failure() -> None:
     console, stderr = make_console()
 
-    def open_fail(request: Any, timeout: float) -> Result[Any, TranslationError]:
+    def open_fail(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         return fail_http("unreachable", "down")
 
     run_context = make_context(console, open_fail)
@@ -918,7 +924,9 @@ def test_run_pipeline_translates_and_logs_verbose_progress() -> None:
 def test_run_pipeline_reports_unit_failure() -> None:
     console, stderr = make_console()
 
-    def open_fail(request: Any, timeout: float) -> Result[Any, TranslationError]:
+    def open_fail(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         return fail_http("unreachable", "down")
 
     run_context = make_context(console, open_fail)
@@ -934,7 +942,9 @@ def test_run_pipeline_reports_unit_failure() -> None:
 def test_ensure_paragraphs_propagates_a_failed_first_attempt() -> None:
     console, stderr = make_console()
 
-    def open_fail(request: Any, timeout: float) -> Result[Any, TranslationError]:
+    def open_fail(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         return fail_http("unreachable", "down")
 
     run_context = make_context(console, open_fail)
@@ -948,11 +958,11 @@ def test_ensure_paragraphs_propagates_a_failed_first_attempt() -> None:
 def test_ensure_paragraphs_reports_a_failed_retry_attempt() -> None:
     console, stderr = make_console()
     stubborn = "One.\n\nTwo.\n\nThree."
-    requests: list[Any] = []
+    requests: list[HttpRequest] = []
 
     def open_thrice_then_fail(
-        request: Any, timeout: float
-    ) -> Result[Any, TranslationError]:
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         requests.append(request)
         if len(requests) <= 3:
             return Ok(FakeStreamResponse(with_usage(stream_chunks(stubborn), USAGE)))
@@ -1544,8 +1554,14 @@ def test_later_pass_with_draft_splits_to_request_budget() -> None:
     assert "budget" not in stderr.getvalue()
 
 
-def glossary_pairs(document: Any) -> list[tuple[str, str | None]]:
-    return [(item["original"], item.get("translated")) for item in document]
+def glossary_pairs(
+    document: JsonArray,
+) -> list[tuple[JsonValue, JsonValue | None]]:
+    return [
+        (item["original"], item.get("translated"))
+        for item in document
+        if is_json_object(item)
+    ]
 
 
 def test_run_pipeline_updates_glossary_mid_run(tmp_path: Path) -> None:

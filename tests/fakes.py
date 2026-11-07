@@ -3,36 +3,37 @@ from __future__ import annotations
 import io
 import json
 import time
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 import pycurl
 
 from l2l.console import Console, StatusLine
-from l2l.context import Context
+from l2l.context import Context, HttpRequest, HttpResponse, OpenHTTP
 from l2l.effects import RunLog, Sleep
-from l2l.errors import TranslationError
-from l2l.glossary import GlossaryEntry
+from l2l.errors import TranslationError, fail_http
 from l2l.http import CurlResponse
 from l2l.monads import (
     IO,
     NOTHING,
     Ok,
-    Reference,
     Result,
     fold_io,
     io_result,
-    modify_reference,
-    new_reference,
-    read_reference,
     write_reference,
 )
 from l2l.settings import (
+    UNSET,
     Config,
     PassDefinition,
+    Unset,
     build_settings,
     paragraph_tolerance,
 )
+lazy from l2l.glossary import GlossaryEntry
+lazy from l2l.json_values import JsonObject
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 
 def chunk_pass(
@@ -91,14 +92,13 @@ def no_sleep(seconds: float) -> None:
 
 
 def make_sleep_recorder() -> tuple[Sleep, Callable[[], tuple[float, ...]]]:
-    initial: tuple[float, ...] = ()
-    recorded: Reference[tuple[float, ...]] = new_reference(initial).run()
+    recorded: list[float] = []
 
     def sleep(seconds: float) -> None:
-        modify_reference(recorded, lambda current: current + (seconds,)).run()
+        recorded.append(seconds)
 
     def sleeps() -> tuple[float, ...]:
-        return read_reference(recorded).run()
+        return tuple(recorded)
 
     return sleep, sleeps
 
@@ -107,7 +107,7 @@ DONE_LINES: tuple[bytes, ...] = (b"data: [DONE]\n", b"\n")
 
 
 class FakeStreamResponse:
-    def __init__(self, chunks: list[dict[str, Any]], terminated: bool = True) -> None:
+    def __init__(self, chunks: list[JsonObject], terminated: bool = True) -> None:
         frames = [
             line
             for chunk in chunks
@@ -118,20 +118,30 @@ class FakeStreamResponse:
         ]
         self._lines = frames + (list(DONE_LINES) if terminated else [])
 
-    def consume(
+    def body(self) -> IO[Result[bytes, TranslationError]]:
+        return io_result(fail_http("protocol", "streaming response has no body"))
+
+    def consume[S](
         self,
-        step: Callable[[Any, bytes], IO[Result[Any, TranslationError]]],
-        initial: Result[Any, TranslationError],
-    ) -> IO[Result[Any, TranslationError]]:
+        step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+        initial: Result[S, TranslationError],
+    ) -> IO[Result[S, TranslationError]]:
         return fold_io(self._lines, step, initial)
 
 
 class FakePlainResponse:
-    def __init__(self, body: dict[str, Any]) -> None:
+    def __init__(self, body: JsonObject) -> None:
         self._body = body
 
     def body(self) -> IO[Result[bytes, TranslationError]]:
         return io_result(Ok(json.dumps(self._body).encode("utf-8")))
+
+    def consume[S](
+        self,
+        step: Callable[[S, bytes], IO[Result[S, TranslationError]]],
+        initial: Result[S, TranslationError],
+    ) -> IO[Result[S, TranslationError]]:
+        return io_result(initial)
 
 
 class FakeCurl:
@@ -148,17 +158,17 @@ class FakeCurl:
         self.chunks = chunks
         self.error = error
         self.stages = stages
-        self.options: dict[int, Any] = {}
+        self.options: dict[int, object] = {}
         self.performed = 0
         self.closed = False
 
-    def setopt(self, option: int, value: Any) -> None:
+    def setopt(self, option: int, value: object) -> None:
         self.options[option] = value
 
     def perform(self) -> None:
         self.performed += 1
-        on_header = self.options[pycurl.HEADERFUNCTION]
-        on_chunk = self.options[pycurl.WRITEFUNCTION]
+        on_header = cast("Callable[[bytes], None]", self.options[pycurl.HEADERFUNCTION])
+        on_chunk = cast("Callable[[bytes], None]", self.options[pycurl.WRITEFUNCTION])
         responses = self.stages or ((self.status, self.headers, self.chunks),)
         for stage_status, stage_headers, stage_chunks in responses:
             for line in stage_headers:
@@ -182,16 +192,18 @@ class FakeCurl:
 class FakeCurlHttp:
     def __init__(self, responses: list[FakeCurl]) -> None:
         self.responses = responses
-        self.requests: list[Any] = []
+        self.requests: list[HttpRequest] = []
 
-    def open(self, request: Any, timeout: float) -> Result[Any, TranslationError]:
+    def open(
+        self, request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         self.requests.append(request)
         index = min(len(self.requests) - 1, len(self.responses) - 1)
         curl = self.responses[index]
         return Ok(CurlResponse(request, timeout, {}, lambda: curl))
 
 
-def sse_bytes(chunks: list[dict[str, Any]]) -> tuple[bytes, ...]:
+def sse_bytes(chunks: list[JsonObject]) -> tuple[bytes, ...]:
     return (
         tuple(
             line
@@ -206,11 +218,13 @@ def sse_bytes(chunks: list[dict[str, Any]]) -> tuple[bytes, ...]:
 
 
 class FakeHttp:
-    def __init__(self, responses: list[Any]) -> None:
+    def __init__(self, responses: Sequence[HttpResponse]) -> None:
         self.responses = responses
-        self.requests: list[Any] = []
+        self.requests: list[HttpRequest] = []
 
-    def open(self, request: Any, timeout: float) -> Result[Any, TranslationError]:
+    def open(
+        self, request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
         self.requests.append(request)
         index = min(len(self.requests) - 1, len(self.responses) - 1)
         return Ok(self.responses[index])
@@ -236,12 +250,12 @@ def make_console(
 
 def make_context(
     console: Console,
-    open_http: Callable[[Any, float], Result[Any, TranslationError]],
+    open_http: OpenHTTP,
     cache_directory: str = "",
     use_cache: bool = False,
     maximum_tokens: int = 100000,
     log: RunLog | None = None,
-    stream: bool | None = None,
+    stream: bool | Unset = UNSET,
     verbose: bool = False,
     clock: Callable[[], float] = time.time,
     sleep: Sleep = no_sleep,
@@ -279,11 +293,9 @@ def make_context(
     )
 
 
-def stream_chunks(*texts: str) -> list[dict[str, Any]]:
+def stream_chunks(*texts: str) -> list[JsonObject]:
     return [{"choices": [{"delta": {"content": text}}]} for text in texts]
 
 
-def with_usage(
-    chunks: list[dict[str, Any]], usage: dict[str, Any]
-) -> list[dict[str, Any]]:
+def with_usage(chunks: list[JsonObject], usage: JsonObject) -> list[JsonObject]:
     return chunks + [{"choices": [{"delta": {}}], "usage": usage}]

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
-from typing import Any, TextIO
+from typing import TextIO
 
 from l2l.ascii import enforce_pass_ascii
 from l2l.cache import (
@@ -13,8 +13,6 @@ from l2l.cache import (
     non_empty,
     store_translation,
 )
-from l2l.console import Console
-from l2l.context import Context
 from l2l.effects import now, write_stdout, write_text_file
 from l2l.errors import (
     TranslationError,
@@ -88,6 +86,7 @@ from l2l.monads import (
     result_map,
 )
 from l2l.plans import (
+    EMPTY_PASS_MODE_SET,
     PassModeSet,
     PassPlan,
     UnitCall,
@@ -108,7 +107,6 @@ from l2l.plans import (
 from l2l.prompts import instruction_with_languages
 from l2l.settings import (
     PassDefinition,
-    PassMode,
     effective_target_language,
     pass_salt,
     resolve_call_settings,
@@ -133,9 +131,12 @@ from l2l.text import (
     usage_add,
     usage_delta,
 )
+lazy from l2l.console import Console
+lazy from l2l.context import Context
+lazy from l2l.json_values import JsonValue
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class State:
     text: str
     analysis: str | None
@@ -145,7 +146,7 @@ class State:
     glossary: tuple[GlossaryEntry, ...]
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class UnitResult:
     text: str
     validated: bool
@@ -153,7 +154,7 @@ class UnitResult:
     problem: str | None = None
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class PassExecution:
     run_context: Context
     pass_definition: PassDefinition
@@ -164,7 +165,7 @@ class PassExecution:
     paragraph_plan: tuple[tuple[str, ...], ...]
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class CallEnvironment:
     run_context: Context
     pass_definition: PassDefinition
@@ -269,7 +270,7 @@ def pass_cache_key(
     pass_definition: PassDefinition,
     text: str,
     glossary: tuple[GlossaryEntry, ...] = (),
-) -> tuple[str, str, Mapping[str, Any]]:
+) -> tuple[str, str, Mapping[str, JsonValue]]:
     model, parameters = resolve_call_settings(run_context.config, pass_definition)
     return (
         cache_key(
@@ -439,18 +440,22 @@ def conclude_state(
         case "analysis" | "update_glossary":
             return io_result(Ok(state))
 
-        case _:
-            pass
+        case "chunk" | "paragraph":
+            if pass_definition.retranslate_untranslated:
+                return retranslate_state(
+                    run_context,
+                    pass_definition,
+                    state,
+                    source_paragraphs,
+                    retry_same_mode,
+                )
 
-    if pass_definition.retranslate_untranslated:
-        return retranslate_state(
-            run_context, pass_definition, state, source_paragraphs, retry_same_mode
-        )
-
-    return enforce_ascii_state(run_context, pass_definition, state, source_paragraphs)
+            return enforce_ascii_state(
+                run_context, pass_definition, state, source_paragraphs
+            )
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class RetranslationCheck:
     has_matching_paragraph_count: bool
     work_paragraphs: tuple[str, ...]
@@ -462,7 +467,7 @@ class RetranslationCheck:
     target_scripts_display: str
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class RetranslationRun:
     environment: CallEnvironment
     check: RetranslationCheck
@@ -472,7 +477,7 @@ class RetranslationRun:
     started_at: float
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class RetranslationEvaluation:
     outcome: Result[Translated, TranslationError]
     target_script_kept: tuple[tuple[int, str], ...]
@@ -1285,7 +1290,7 @@ def run_units(
     analysis: str | None,
     usage: Usage,
     retry_attempt: int = 0,
-    earlier_pass_modes: PassModeSet = frozenset[PassMode](),
+    earlier_pass_modes: PassModeSet = EMPTY_PASS_MODE_SET,
 ) -> IO[Result[tuple[UnitResult, ...], TranslationError]]:
     run_context = environment.run_context
     pass_definition = environment.pass_definition
@@ -1439,13 +1444,15 @@ def run_pass_attempt(
     if retry_attempt == 0 and pass_definition.mode == "chunk":
         retry_state = state
 
-        def retry(accumulated: Usage, retry_started: float) -> IO[StateResult]:
+        def retry_once(accumulated: Usage, retry_started: float) -> IO[StateResult]:
             return run_pass_attempt(
                 execution,
                 replace(retry_state, usage=accumulated),
                 retry_started,
                 retry_attempt=1,
             )
+
+        retry = retry_once
 
     return run_text_pass_once(
         execution,
@@ -1565,7 +1572,7 @@ def run_pass(
         case "update_glossary":
             return run_update_glossary_pass(execution, state, started_at)
 
-        case _:
+        case "chunk" | "paragraph":
             return run_text_pass(execution, state, started_at)
 
 

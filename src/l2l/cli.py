@@ -4,15 +4,14 @@ import argparse
 import os
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
-from typing import Any, TextIO
+from typing import TYPE_CHECKING, TextIO, override
 
 from l2l import __version__
 from l2l.config import load_setup
 from l2l.console import Console, StatusLine, toggle_verbose
-from l2l.context import Context, OpenHTTP
+from l2l.context import Context, HttpRequest, HttpResponse, OpenHTTP
 from l2l.effects import (
     LOG_SECONDS_PER_DAY,
     RunLog,
@@ -59,32 +58,37 @@ from l2l.monads import (
 )
 from l2l.pipeline import run_pipeline
 from l2l.report import plan_report, setup_report, setup_warnings
-from l2l.settings import Arguments, Setup, build_settings
+from l2l.settings import UNSET, Arguments, Setup, Unset, build_settings, value_if_set
 from l2l.text import Translated, Usage
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping, Sequence
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class EarlyExitText(BaseException):
     text: str
 
 
 class HelpExitAction(argparse.Action):
+    @override
     def __call__(
         self,
         parser: argparse.ArgumentParser,
         namespace: argparse.Namespace,
-        values: str | Sequence[Any] | None,
+        values: object,
         option_string: str | None = None,
     ) -> None:
         raise EarlyExitText(parser.format_help())
 
 
 class VersionExitAction(argparse.Action):
+    @override
     def __call__(
         self,
         parser: argparse.ArgumentParser,
         namespace: argparse.Namespace,
-        values: str | Sequence[Any] | None,
+        values: object,
         option_string: str | None = None,
     ) -> None:
         raise EarlyExitText("l2l " + __version__)
@@ -298,28 +302,31 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def arguments_from_namespace(parsed: argparse.Namespace) -> Arguments:
+    def provided[T](value: T | None) -> T | Unset:
+        return UNSET if value is None else value
+
     return Arguments(
-        config=parsed.config,
-        base_url=parsed.base_url,
-        api_key=parsed.api_key,
-        model=parsed.model,
-        timeout=parsed.timeout,
-        maximum_tokens=parsed.maximum_tokens,
+        config=provided(parsed.config),
+        base_url=provided(parsed.base_url),
+        api_key=provided(parsed.api_key),
+        model=provided(parsed.model),
+        timeout=provided(parsed.timeout),
+        maximum_tokens=provided(parsed.maximum_tokens),
         no_cache=parsed.no_cache,
         ensure_paragraphs=parsed.ensure_paragraphs,
         verbose=parsed.verbose,
         print_log_path=parsed.print_log_path,
-        cache_directory=parsed.cache_directory,
+        cache_directory=provided(parsed.cache_directory),
         check_config=parsed.check_config,
         dry_run=parsed.dry_run,
-        stream=parsed.stream,
-        prune_cache=parsed.prune_cache,
+        stream=provided(parsed.stream),
+        prune_cache=provided(parsed.prune_cache),
         log_retention_days=parsed.log_retention_days,
         best_effort=parsed.best_effort,
         glossary=tuple(parsed.glossary),
-        extract_glossary=parsed.extract_glossary,
-        target_language=parsed.target_language,
-        source_language=parsed.source_language,
+        extract_glossary=provided(parsed.extract_glossary),
+        target_language=provided(parsed.target_language),
+        source_language=provided(parsed.source_language),
         no_structured_output=parsed.no_structured_output,
     )
 
@@ -336,8 +343,8 @@ def active_mode_flags(parsed: Arguments) -> tuple[str, ...]:
         flag_name
         for flag_name, is_active in (
             ("--check-config", parsed.check_config),
-            ("--prune-cache", parsed.prune_cache is not None),
-            ("--extract-glossary", parsed.extract_glossary is not None),
+            ("--prune-cache", not isinstance(parsed.prune_cache, Unset)),
+            ("--extract-glossary", not isinstance(parsed.extract_glossary, Unset)),
             ("--dry-run", parsed.dry_run),
         )
         if is_active
@@ -368,7 +375,12 @@ def parse_arguments(
 
 
 def curl_open_http(environment: Mapping[str, str]) -> OpenHTTP:
-    return lambda request, timeout: curl_open(request, timeout, environment)
+    def open_with_environment(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
+        return curl_open(request, timeout, environment)
+
+    return open_with_environment
 
 
 def report_message_and_exit(console: Console, message: str, exit_code: int) -> IO[int]:
@@ -401,7 +413,7 @@ def with_loaded_setup(
 
 def with_cache_directory(
     environment: Mapping[str, str],
-    requested: str | None,
+    requested: str | Unset,
     program: Callable[[str], IO[int]],
 ) -> IO[int]:
     return io_bind(resolve_cache_directory(environment, requested), program)
@@ -476,10 +488,10 @@ def main(
         if parsed.check_config:
             return check_config_program(parsed, environment, stdout, stderr, clock)
 
-        if parsed.prune_cache is not None:
+        if not isinstance(parsed.prune_cache, Unset):
             return prune_cache_program(parsed, environment, stderr, clock)
 
-        if parsed.extract_glossary is not None:
+        if not isinstance(parsed.extract_glossary, Unset):
             glossary_output_path = parsed.extract_glossary
             return io_bind(
                 read_stdin(stdin),
@@ -633,7 +645,7 @@ def prune_cache_program(
     stderr: TextIO,
     clock: Callable[[], float],
 ) -> IO[int]:
-    days = parsed.prune_cache
+    days = value_if_set(parsed.prune_cache)
 
     def with_console(console: Console) -> IO[int]:
         if days is None or days <= 0:
@@ -642,6 +654,8 @@ def prune_cache_program(
                 "l2l: --prune-cache requires a positive number of days",
                 2,
             )
+
+        retention_days = days
 
         def prune(directory: str) -> IO[int]:
             def with_entry_paths(
@@ -655,7 +669,7 @@ def prune_cache_program(
                         return fold_io(
                             paths,
                             lambda count, path: prune_cache_entry(
-                                clock, days, count, path
+                                clock, retention_days, count, path
                             ),
                             Ok(0),
                         )

@@ -12,6 +12,7 @@ dev = [
     "pytest-cov>=5",
     "ruff>=0.6",
     "mypy>=1.11",
+    "pyright>=1.1.414",
     "hypothesis>=6",
     "types-pycurl>=7.45",
 ]
@@ -32,7 +33,28 @@ line-length = 88
 target-version = "py315"
 
 [tool.ruff.lint]
-select = ["C4", "E", "F", "PERF", "FURB", "W", "I", "B", "SIM", "RET", "UP", "N", "PT", "RUF", "PLW0602", "PLW0603"]
+select = [
+    "C4",
+    "E",
+    "F",
+    "PERF",
+    "FURB",
+    "W",
+    "I",
+    "B",
+    "SIM",
+    "RET",
+    "UP",
+    "N",
+    "PT",
+    "RUF",
+    "PLW0602",
+    "PLW0603",
+    "TC",
+    "ANN",
+    "PGH",
+    "PYI",
+]
 ignore = [
     # The package standardises on printf-style formatting.
     "UP031",
@@ -55,16 +77,41 @@ ignore = [
 
 [tool.mypy]
 strict = true
+disallow_any_explicit = true
 warn_unreachable = true
+enable_error_code = [
+    "ignore-without-code",
+    "possibly-undefined",
+    "redundant-expr",
+    "truthy-bool",
+    "explicit-override",
+    "mutable-override",
+    "narrowed-type-not-subtype",
+    "unimported-reveal",
+    "deprecated",
+]
 explicit_package_bases = true
 python_version = "3.15"
-mypy_path = ["src", "tests"]
-files = ["src", "tests"]
-
-[[tool.mypy.overrides]]
-module = ["unicodedataplus"]
-ignore_missing_imports = true
+mypy_path = ["src", "tests", "typings"]
+files = ["src", "tests", "typings"]
+strict_equality = true
+extra_checks = true
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.pyright]
+include = ["src", "tests", "typings"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.15"
+typeCheckingMode = "strict"
+reportImplicitOverride = "error"
+reportCallInDefaultInitializer = "error"
+reportUnnecessaryTypeIgnoreComment = "error"
+deprecateTypingAliases = true
+# `reportImplicitStringConcatenation` is deliberately not enabled: the package
+# standardises on multi-line implicit string concatenation for long message
+# literals (20 files, 116 sites), and explicit `+` or joining would be churn
+# with no type-safety benefit.

@@ -6,12 +6,12 @@ from typing import Literal, assert_never
 from l2l.monads import Err
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ConfigError:
     message: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class MissingSettings:
     fields: tuple[str, ...]
 
@@ -19,7 +19,7 @@ class MissingSettings:
 HttpKind = Literal["status", "unreachable", "protocol", "stream", "interrupted"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class HttpError:
     kind: HttpKind
     detail: str
@@ -27,60 +27,60 @@ class HttpError:
     retry_after: float | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class BudgetError:
     request_tokens: int
     budget: int
     parts: int = 1
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PassError:
     pass_name: str
     inner: TranslationError
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class UnitError:
     pass_name: str
     unit_index: int
     inner: TranslationError
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AsciiError:
     pass_name: str
     inner: TranslationError
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AsciiCollapseError:
     pass_name: str
     stubborn: int
     total: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class UntranslatedError:
     pass_name: str
     index: int
     sample: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class InvalidOutputError:
     pass_name: str
     attempts: int
     problem: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GlossaryReplyError:
     pass_name: str
     problem: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FileError:
     path: str
     operation: str
@@ -177,8 +177,8 @@ def describe_http(error: HttpError) -> str:
         case "protocol":
             return error.detail
 
-        case other:
-            assert_never(other)
+        case _:
+            assert_never(error.kind)
 
 
 def describe_budget(error: BudgetError) -> str:
@@ -260,5 +260,5 @@ def describe(error: TranslationError) -> str:
                 error.detail,
             )
 
-        case other:
-            assert_never(other)
+        case _:
+            assert_never(error)

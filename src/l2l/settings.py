@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Final, Literal
+lazy from collections.abc import Mapping
 
 from l2l.glossary import (
     GlossaryEntry,
@@ -23,20 +23,35 @@ from l2l.prompts import (
     StylePolicyPatch,
 )
 from l2l.text import CACHE_SALT_VERSION
+lazy from l2l.json_values import JsonValue
+
+type ParagraphTriState = bool | int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
+class Unset:
+    pass
+
+
+UNSET: Final = Unset()
+
+
+def value_if_set[T](value: T | Unset) -> T | None:
+    return None if isinstance(value, Unset) else value
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     base_url: str
     api_key: str
     model: str
     timeout: float
     maximum_tokens: int
-    parameters: Mapping[str, Any]
+    parameters: Mapping[str, JsonValue]
 
 
-PassMode = Literal["analysis", "chunk", "paragraph", "update_glossary"]
-PASS_MODES: tuple[PassMode, ...] = (
+type PassMode = Literal["analysis", "chunk", "paragraph", "update_glossary"]
+PASS_MODES: Final[tuple[PassMode, ...]] = (
     "analysis",
     "chunk",
     "paragraph",
@@ -44,15 +59,22 @@ PASS_MODES: tuple[PassMode, ...] = (
 )
 
 
-@dataclass(frozen=True)
+def parse_pass_mode(value: object) -> PassMode | None:
+    if isinstance(value, str) and value in PASS_MODES:
+        return value
+
+    return None
+
+
+@dataclass(frozen=True, slots=True)
 class PassDefinition:
     name: str
     instruction: str
     mode: PassMode
-    parameters: Mapping[str, Any]
+    parameters: Mapping[str, JsonValue]
     model: str | None
     ascii: bool | None
-    ensure_paragraphs: bool | int | None = None
+    ensure_paragraphs: ParagraphTriState | None = None
     retranslate_untranslated: bool | None = None
     target_language: str | None = None
     include_types: tuple[str, ...] = ()
@@ -68,25 +90,25 @@ class PassDefinition:
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PassDraft:
     name: str
     mode: PassMode
     instruction: str | None
-    parameters: Mapping[str, Any]
-    model: str | None
-    ascii: bool | None
-    ensure_paragraphs: bool | int | None = None
-    retranslate_untranslated: bool | None = None
-    target_language: str | None = None
+    parameters: Mapping[str, JsonValue]
+    model: str | Unset = UNSET
+    ascii: bool | Unset = UNSET
+    ensure_paragraphs: ParagraphTriState | Unset = UNSET
+    retranslate_untranslated: bool | Unset = UNSET
+    target_language: str | Unset = UNSET
     include_types: tuple[str, ...] = ()
     prompts: Mapping[PromptSectionName, PromptSectionOverride] = MappingProxyType({})
     style_patch: StylePolicyPatch = field(default_factory=StylePolicyPatch)
     output_patch: OutputPolicyPatch = field(default_factory=OutputPolicyPatch)
-    ensure_paragraphs_explicit: bool | int | None = None
+    ensure_paragraphs_explicit: ParagraphTriState | Unset = UNSET
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Settings:
     chunk_budget_tokens: int
     analysis_reserve_tokens: int
@@ -104,45 +126,45 @@ class Settings:
     glossary_extraction_instruction: str
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class OptionDefaults:
     ascii: bool = False
-    ensure_paragraphs: bool | int = False
+    ensure_paragraphs: ParagraphTriState = False
     retranslate_untranslated: bool = False
     ensure_paragraphs_explicit: bool = False
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class Arguments:
-    config: str | None
-    base_url: str | None
-    api_key: str | None
-    model: str | None
-    timeout: float | None
-    maximum_tokens: int | None
-    no_cache: bool
-    ensure_paragraphs: bool
-    verbose: bool
-    print_log_path: bool
-    cache_directory: str | None
+    config: str | Unset = UNSET
+    base_url: str | Unset = UNSET
+    api_key: str | Unset = UNSET
+    model: str | Unset = UNSET
+    timeout: float | Unset = UNSET
+    maximum_tokens: int | Unset = UNSET
+    no_cache: bool = False
+    ensure_paragraphs: bool = False
+    verbose: bool = False
+    print_log_path: bool = False
+    cache_directory: str | Unset = UNSET
     check_config: bool = False
     dry_run: bool = False
-    stream: bool | None = None
-    prune_cache: int | None = None
+    stream: bool | Unset = UNSET
+    prune_cache: int | Unset = UNSET
     log_retention_days: int = 30
     best_effort: bool = False
     glossary: tuple[str, ...] = ()
-    extract_glossary: str | None = None
-    target_language: str | None = None
-    source_language: str | None = None
+    extract_glossary: str | Unset = UNSET
+    target_language: str | Unset = UNSET
+    source_language: str | Unset = UNSET
     no_structured_output: bool = False
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Setup:
     config: Config
     passes: tuple[PassDefinition, ...]
-    ensure_paragraphs: bool | int
+    ensure_paragraphs: ParagraphTriState
     target_language: str
     source_language: str
     config_warnings: tuple[str, ...] = ()
@@ -222,8 +244,15 @@ def build_settings() -> Settings:
     )
 
 
-API_SETTING_KEYS = ("base_url", "api_key", "model", "timeout", "max_tokens", "params")
-PASS_KEYS = (
+API_SETTING_KEYS: Final = (
+    "base_url",
+    "api_key",
+    "model",
+    "timeout",
+    "max_tokens",
+    "params",
+)
+PASS_KEYS: Final = (
     "name",
     "instruction",
     "instruction_file",
@@ -240,41 +269,51 @@ PASS_KEYS = (
 )
 
 
-DEFAULT_TIMEOUT = 120.0
-DEFAULT_MAXIMUM_TOKENS = 100000
+DEFAULT_TIMEOUT: Final = 120.0
+DEFAULT_MAXIMUM_TOKENS: Final = 100000
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PartialApiSettings:
-    base_url: str | None = None
-    api_key: str | None = None
-    model: str | None = None
-    timeout: float | None = None
-    maximum_tokens: int | None = None
-    parameters: Mapping[str, Any] | None = None
+    base_url: str | Unset = UNSET
+    api_key: str | Unset = UNSET
+    model: str | Unset = UNSET
+    timeout: float | Unset = UNSET
+    maximum_tokens: int | Unset = UNSET
+    parameters: Mapping[str, JsonValue] | Unset = UNSET
 
     def merge(self, extra: PartialApiSettings) -> PartialApiSettings:
-        parameters = (
-            MappingProxyType({**(self.parameters or {}), **(extra.parameters or {})})
-            if self.parameters is not None or extra.parameters is not None
-            else None
-        )
+        def higher_layer_wins[L](lower: L | Unset, higher: L | Unset) -> L | Unset:
+            match higher:
+                case Unset():
+                    return lower
+
+                case _:
+                    return higher
+
+        match (self.parameters, extra.parameters):
+            case (Unset(), Unset()):
+                parameters: Mapping[str, JsonValue] | Unset = UNSET
+
+            case _:
+                parameters = MappingProxyType(
+                    {
+                        **(value_if_set(self.parameters) or {}),
+                        **(value_if_set(extra.parameters) or {}),
+                    }
+                )
 
         return PartialApiSettings(
-            base_url=extra.base_url if extra.base_url is not None else self.base_url,
-            api_key=extra.api_key if extra.api_key is not None else self.api_key,
-            model=extra.model if extra.model is not None else self.model,
-            timeout=extra.timeout if extra.timeout is not None else self.timeout,
-            maximum_tokens=(
-                extra.maximum_tokens
-                if extra.maximum_tokens is not None
-                else self.maximum_tokens
-            ),
+            base_url=higher_layer_wins(self.base_url, extra.base_url),
+            api_key=higher_layer_wins(self.api_key, extra.api_key),
+            model=higher_layer_wins(self.model, extra.model),
+            timeout=higher_layer_wins(self.timeout, extra.timeout),
+            maximum_tokens=higher_layer_wins(self.maximum_tokens, extra.maximum_tokens),
             parameters=parameters,
         )
 
 
-DEFAULT_API_SETTINGS = PartialApiSettings(
+DEFAULT_API_SETTINGS: Final = PartialApiSettings(
     base_url="",
     api_key="",
     model="",
@@ -286,7 +325,7 @@ DEFAULT_API_SETTINGS = PartialApiSettings(
 
 def resolve_call_settings(
     config: Config, pass_definition: PassDefinition
-) -> tuple[str, Mapping[str, Any]]:
+) -> tuple[str, Mapping[str, JsonValue]]:
     return (pass_definition.model or config.model), MappingProxyType(
         {**config.parameters, **pass_definition.parameters}
     )

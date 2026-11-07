@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from typing import Any
+lazy from collections.abc import Mapping
 
-from l2l.context import Context
 from l2l.languages import (
     expected_target_scripts,
     instruction_uses_target_language,
@@ -33,6 +31,8 @@ from l2l.text import (
     split_paragraphs,
     unit_separators,
 )
+lazy from l2l.context import Context
+lazy from l2l.json_values import JsonValue
 
 
 def source_report_line(text: str, source_paragraphs: tuple[str, ...]) -> str:
@@ -226,7 +226,7 @@ def mask_api_key(api_key: str) -> str:
     return api_key[:4] + "..." + api_key[-2:]
 
 
-def parameters_text(parameters: Mapping[str, Any]) -> str:
+def parameters_text(parameters: Mapping[str, JsonValue]) -> str:
     return json.dumps(dict(parameters), sort_keys=True, ensure_ascii=False, default=str)
 
 

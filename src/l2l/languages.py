@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from types import MappingProxyType
+from typing import Final
+lazy from collections.abc import Mapping
 
-import unicodedataplus
 from langcodes import Language
 from langcodes.tag_parser import LanguageTagError
+from unicodedataplus import property_value_aliases as script_property_value_aliases
 
-SCRIPT_VARIANT_COMPONENTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+SCRIPT_VARIANT_COMPONENTS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "Hanb": ("Hani", "Bopo"),
         "Hrkt": ("Hira", "Kana"),
@@ -19,12 +20,10 @@ SCRIPT_VARIANT_COMPONENTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     }
 )
 
-UNICODE_SCRIPT_NAMES: Mapping[str, str] = MappingProxyType(
+UNICODE_SCRIPT_NAMES: Final[Mapping[str, str]] = MappingProxyType(
     {
         str(aliases[0]): str(script_name).replace("_", " ")
-        for script_name, aliases in unicodedataplus.property_value_aliases[
-            "script"
-        ].items()
+        for script_name, aliases in script_property_value_aliases["script"].items()
         if aliases
     }
 )
@@ -39,11 +38,11 @@ def normalized_language_name(language: str) -> str:
     )
 
 
-NON_LANGUAGE_CODES = frozenset({"mul", "und", "zxx"})
+NON_LANGUAGE_CODES: Final = frozenset({"mul", "und", "zxx"})
 
-AUTO_SOURCE_LANGUAGE = "auto"
-MIXED_SOURCE_LANGUAGE = "mixed"
-SOURCE_LANGUAGE_ALIASES: Mapping[str, str] = MappingProxyType(
+AUTO_SOURCE_LANGUAGE: Final = "auto"
+MIXED_SOURCE_LANGUAGE: Final = "mixed"
+SOURCE_LANGUAGE_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "auto": AUTO_SOURCE_LANGUAGE,
         "guess": AUTO_SOURCE_LANGUAGE,

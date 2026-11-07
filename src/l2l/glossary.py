@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from dataclasses import dataclass
 from functools import reduce
-from typing import Any, Literal, get_args
+from typing import TYPE_CHECKING, Final, Literal, TypeIs, get_args
 
 from l2l.errors import (
     ConfigError,
     GlossaryReplyError,
     TranslationError,
+)
+from l2l.json_values import (
+    JsonValue,
+    is_json_array,
+    is_json_object,
+    is_non_empty_string,
+    is_object_list,
+    is_string_keyed_table,
 )
 from l2l.monads import (
     Err,
@@ -22,12 +29,15 @@ from l2l.monads import (
 )
 from l2l.text import strip_think_tag
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
 GlossaryEntryType = Literal["character", "place", "other"]
 
-GLOSSARY_ENTRY_TYPES: tuple[GlossaryEntryType, ...] = get_args(GlossaryEntryType)
+GLOSSARY_ENTRY_TYPES: Final[tuple[GlossaryEntryType, ...]] = get_args(GlossaryEntryType)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GlossaryEntry:
     original: str
     translated: str | None
@@ -35,7 +45,7 @@ class GlossaryEntry:
     type: GlossaryEntryType
 
 
-GLOSSARY_BLOCK_HEADER = (
+GLOSSARY_BLOCK_HEADER: Final = (
     "Glossary (mandatory): use the exact renderings and attributes below on "
     "every occurrence; never vary a rendering, never assign pronouns to "
     "entries that carry none, and keep each character's pronouns consistent "
@@ -132,17 +142,26 @@ def untranslated_glossary_entries(
     )
 
 
-def text_or_none(value: Any) -> str | None:
+def text_or_none(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def glossary_entry_from_json(index: int, item: Any) -> Result[GlossaryEntry, str]:
-    if not isinstance(item, dict):
+def glossary_entry_type_from_value(value: object) -> GlossaryEntryType | None:
+    return next(
+        (entry_type for entry_type in GLOSSARY_ENTRY_TYPES if entry_type == value),
+        None,
+    )
+
+
+def glossary_entry_from_json(index: int, item: object) -> Result[GlossaryEntry, str]:
+    if not is_json_object(item):
         return Err("glossary entry %d must be an object" % index)
 
-    original = item.get("original")
-    if not isinstance(original, str) or not original.strip():
+    original_value = item.get("original")
+    if not is_non_empty_string(original_value):
         return Err('glossary entry %d needs a non-empty "original" string' % index)
+
+    original = original_value
 
     invalid_keys = tuple(
         key
@@ -156,14 +175,15 @@ def glossary_entry_from_json(index: int, item: Any) -> Result[GlossaryEntry, str
             % (index, original, ", ".join(invalid_keys))
         )
 
-    entry_type = item.get("type", "other")
-    if entry_type not in GLOSSARY_ENTRY_TYPES:
+    type_value = item.get("type", "other")
+    entry_type = glossary_entry_type_from_value(type_value)
+    if entry_type is None:
         return Err(
             'glossary entry %d ("%s") has invalid type %r; allowed types are %s'
             % (
                 index,
                 original,
-                entry_type,
+                type_value,
                 ", ".join(GLOSSARY_ENTRY_TYPES),
             )
         )
@@ -189,10 +209,10 @@ def drop_later_duplicate_entries(
 
 
 def parse_entries_document(
-    document: Any,
-    parse_entry: Callable[[int, Any], Result[GlossaryEntry, str]],
+    document: object,
+    parse_entry: Callable[[int, object], Result[GlossaryEntry, str]],
 ) -> Result[tuple[GlossaryEntry, ...], str]:
-    if not isinstance(document, list):
+    if not is_json_array(document):
         return Err("glossary must be a JSON array of entries")
 
     return result_map(
@@ -204,7 +224,7 @@ def parse_entries_document(
 
 
 def parse_glossary_document(
-    path: str, document: Any
+    path: str, document: object
 ) -> Result[tuple[GlossaryEntry, ...], TranslationError]:
     return result_map_error(
         parse_entries_document(document, glossary_entry_from_json),
@@ -212,16 +232,25 @@ def parse_glossary_document(
     )
 
 
-def reply_entries_document(document: Any) -> Result[list[Any], str]:
-    match document:
-        case {"entries": list(entries)}:
-            return Ok(entries)
+def reply_entries_document(document: object) -> Result[list[object], str]:
+    if is_object_list(document):
+        return Ok(document)
 
-        case list(entries):
-            return Ok(entries)
+    if not is_entries_table(document):
+        return Err('model reply must be {"entries": [...]} or a bare JSON array')
 
-        case _:
-            return Err('model reply must be {"entries": [...]} or a bare JSON array')
+    entries_value = document["entries"]
+    if not is_object_list(entries_value):
+        return Err('model reply must be {"entries": [...]} or a bare JSON array')
+
+    return Ok(entries_value)
+
+
+def is_entries_table(value: object) -> TypeIs[Mapping[str, object]]:
+    if not is_string_keyed_table(value):
+        return False
+
+    return "entries" in value
 
 
 def parse_model_glossary_reply(
@@ -278,9 +307,10 @@ def strip_markdown_fence(content: str) -> str:
     return "\n".join(body).strip()
 
 
-def decode_json_document(content: str) -> Result[Any, json.JSONDecodeError]:
+def decode_json_document(content: str) -> Result[JsonValue, json.JSONDecodeError]:
     try:
-        return Ok(json.loads(content))
+        decoded: JsonValue = json.loads(content)
+        return Ok(decoded)
     except json.JSONDecodeError as strict_error:
         array_start_index = content.find("[")
         if array_start_index < 0:
@@ -296,7 +326,7 @@ def decode_json_document(content: str) -> Result[Any, json.JSONDecodeError]:
 
 def glossary_response_format(
     no_structured_output: bool = False,
-) -> dict[str, Any] | None:
+) -> dict[str, JsonValue] | None:
     if no_structured_output:
         return None
 

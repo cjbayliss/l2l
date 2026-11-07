@@ -1,10 +1,10 @@
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import TextIO, cast
+lazy from pathlib import Path
 
-import pytest
+lazy import pytest
 
 from l2l.effects import (
     append_text_file,
@@ -41,7 +41,7 @@ def test_stream_isatty_handles_errors() -> None:
         def isatty(self) -> bool:
             raise OSError("closed")
 
-    assert stream_isatty(cast(TextIO, Raising())).run() is False
+    assert stream_isatty(cast("TextIO", Raising())).run() is False
 
 
 def test_file_readers_report_directory_failures(tmp_path: Path) -> None:
@@ -54,6 +54,14 @@ def test_file_readers_report_directory_failures(tmp_path: Path) -> None:
         assert isinstance(outcome, Err)
         assert isinstance(outcome.error, FileError)
         assert message in describe(outcome.error)
+
+
+def test_load_toml_rejects_non_json_values(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("created = 2024-01-01T00:00:00Z\n", encoding="utf-8")
+    outcome = load_toml(str(path), "config file").run()
+    assert isinstance(outcome, Err)
+    assert "must contain only JSON values" in describe(outcome.error)
 
 
 def test_load_json_reads_and_reports_errors(tmp_path: Path) -> None:

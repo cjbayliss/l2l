@@ -1,14 +1,29 @@
 import json
 from itertools import chain, zip_longest
-from typing import Any
 
 from fakes import DONE_LINES
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
+from l2l.config.values import is_paragraph_tri_state
+from l2l.glossary import is_entries_table
 from l2l.http import StreamState, ingest_raw_line, plan_backoff
+from l2l.json_values import (
+    JsonObject,
+    JsonValue,
+    is_json_array,
+    is_json_object,
+    is_json_value,
+    is_non_empty_string,
+    is_non_empty_string_array,
+    is_non_empty_table_array,
+    is_object_list,
+    is_object_table,
+    is_string_array,
+    is_string_keyed_table,
+)
 from l2l.monads import Ok, cons_to_tuple
-from l2l.settings import PartialApiSettings
+from l2l.settings import UNSET, PartialApiSettings, Unset
 from l2l.text import (
     ThinkState,
     cache_key,
@@ -155,17 +170,18 @@ def test_ensure_blank_line_separators_preserves_paragraph_count(
     assert count_paragraphs(joined) == len(expected)
 
 
-PLAIN_TEXT = st.text(
+STREAM_TEXT = st.text(
     alphabet=st.characters(min_codepoint=32, max_codepoint=0x10FFFF).filter(
         lambda char: char != "<"
     ),
     max_size=12,
 ).filter(lambda text: not text.isspace())
+EMPTY_CHUNK: JsonObject = {}
 CONTENT_CHUNKS = st.fixed_dictionaries(
     {
         "choices": st.lists(
             st.fixed_dictionaries(
-                {"delta": st.fixed_dictionaries({"content": PLAIN_TEXT})}
+                {"delta": st.fixed_dictionaries({"content": STREAM_TEXT})}
             ),
             min_size=1,
             max_size=1,
@@ -183,12 +199,12 @@ USAGE_CHUNKS = st.fixed_dictionaries(
     }
 )
 STREAM_CHUNKS = st.lists(
-    st.one_of(CONTENT_CHUNKS, USAGE_CHUNKS, st.just({})),
+    st.one_of(CONTENT_CHUNKS, USAGE_CHUNKS, st.just(EMPTY_CHUNK)),
     max_size=15,
 )
 
 
-def sse_bytes(chunks: list[dict[str, Any]]) -> list[bytes]:
+def sse_bytes(chunks: list[JsonObject]) -> list[bytes]:
     lines: list[bytes] = []
     for chunk in chunks:
         lines.append(b"data: " + json.dumps(chunk).encode("utf-8") + b"\n")
@@ -197,9 +213,29 @@ def sse_bytes(chunks: list[dict[str, Any]]) -> list[bytes]:
     return lines
 
 
+def chunk_content(chunk: object) -> str:
+    if not is_json_object(chunk):
+        return ""
+
+    choices = chunk.get("choices")
+    if not is_json_array(choices) or not choices:
+        return ""
+
+    first_choice = choices[0]
+    if not is_json_object(first_choice):
+        return ""
+
+    delta = first_choice.get("delta")
+    if not is_json_object(delta):
+        return ""
+
+    content = delta.get("content")
+    return content if isinstance(content, str) else ""
+
+
 @given(STREAM_CHUNKS)
 def test_stream_fold_concatenates_deltas_and_keeps_last_usage(
-    chunks: list[dict[str, Any]],
+    chunks: list[JsonObject],
 ) -> None:
     state: StreamState = StreamState()
     for line in sse_bytes(chunks):
@@ -207,11 +243,7 @@ def test_stream_fold_concatenates_deltas_and_keeps_last_usage(
         assert isinstance(outcome, Ok)
         state = outcome.value
 
-    expected = "".join(
-        chunk["choices"][0]["delta"]["content"]
-        for chunk in chunks
-        if "choices" in chunk
-    )
+    expected = "".join(chunk_content(chunk) for chunk in chunks)
     assert "".join(cons_to_tuple(state.contents)) == expected
 
     usages = [chunk["usage"] for chunk in chunks if "usage" in chunk]
@@ -222,9 +254,9 @@ def test_stream_fold_concatenates_deltas_and_keeps_last_usage(
         assert state.reported_usage is None
 
 
-OPTIONAL_TEXT = st.one_of(st.none(), st.text(min_size=1, max_size=4))
+OPTIONAL_TEXT = st.one_of(st.just(UNSET), st.text(min_size=1, max_size=4))
 OPTIONAL_NUMBER = st.one_of(
-    st.none(), st.integers(min_value=1, max_value=99).map(float)
+    st.just(UNSET), st.integers(min_value=1, max_value=99).map(float)
 )
 
 
@@ -236,11 +268,11 @@ def partial_settings(draw: st.DrawFn) -> PartialApiSettings:
         model=draw(OPTIONAL_TEXT),
         timeout=draw(OPTIONAL_NUMBER),
         maximum_tokens=draw(
-            st.one_of(st.none(), st.integers(min_value=1, max_value=99))
+            st.one_of(st.just(UNSET), st.integers(min_value=1, max_value=99))
         ),
         parameters=draw(
             st.one_of(
-                st.none(),
+                st.just(UNSET),
                 st.dictionaries(
                     st.text(min_size=1, max_size=2, alphabet="xyz"),
                     st.integers(min_value=0, max_value=9),
@@ -269,7 +301,9 @@ def test_partial_merge_params_deep_merges(
     base: PartialApiSettings, extra: PartialApiSettings
 ) -> None:
     merged = base.merge(extra)
-    if base.parameters is not None and extra.parameters is not None:
+    if not isinstance(base.parameters, Unset) and not isinstance(
+        extra.parameters, Unset
+    ):
         assert merged.parameters == {**base.parameters, **extra.parameters}
 
 
@@ -286,3 +320,220 @@ def test_plan_backoff_is_monotone_and_capped(
     assert tuple(delays) == tuple(sorted(delays))
     assert all(delay <= cap for delay in delays)
 
+
+JSON_SCALARS: st.SearchStrategy[JsonValue] = st.one_of(
+    st.none(),
+    st.booleans(),
+    st.integers(),
+    st.floats(allow_nan=False),
+    st.text(),
+)
+
+
+def json_containers(
+    children: st.SearchStrategy[JsonValue],
+) -> st.SearchStrategy[JsonValue]:
+    return st.lists(children) | st.dictionaries(st.text(), children)
+
+
+JSON_VALUES: st.SearchStrategy[JsonValue] = st.recursive(
+    JSON_SCALARS,
+    json_containers,
+    max_leaves=20,
+)
+
+NON_JSON_VALUES: st.SearchStrategy[object] = st.one_of(
+    st.binary(),
+    st.complex_numbers(),
+    st.sets(st.integers()),
+    st.tuples(st.integers()),
+)
+
+WHITESPACE_TEXT: st.SearchStrategy[str] = st.text(
+    alphabet=" \t\n\r\x0b\x0c", min_size=1
+)
+
+NON_STRING_JSON_VALUES: st.SearchStrategy[object] = st.one_of(
+    st.none(),
+    st.booleans(),
+    st.integers(),
+    st.floats(allow_nan=False),
+    st.lists(JSON_VALUES),
+    st.dictionaries(st.text(), JSON_VALUES),
+)
+
+
+@given(JSON_VALUES)
+def test_json_value_guard_accepts_every_decodable_value(value: JsonValue) -> None:
+    decoded: JsonValue = json.loads(json.dumps(value))
+    assert is_json_value(value)
+    assert is_json_value(decoded)
+
+
+@given(JSON_VALUES)
+def test_table_and_array_guards_track_decoded_structure(value: JsonValue) -> None:
+    decoded: JsonValue = json.loads(json.dumps(value))
+    if isinstance(decoded, dict):
+        assert is_object_table(decoded)
+        assert is_string_keyed_table(decoded)
+        assert is_json_object(decoded)
+
+    if isinstance(decoded, list):
+        assert is_object_list(decoded)
+        assert is_json_array(decoded)
+
+
+@given(NON_JSON_VALUES)
+def test_json_guards_reject_values_outside_json(value: object) -> None:
+    assert not is_json_value(value)
+    assert not is_json_object(value)
+    assert not is_json_array(value)
+
+
+@given(
+    st.one_of(
+        JSON_SCALARS,
+        st.lists(JSON_VALUES),
+        st.dictionaries(st.integers(), JSON_VALUES, min_size=1),
+        st.dictionaries(st.text(), NON_JSON_VALUES, min_size=1),
+    )
+)
+def test_json_object_guard_rejects_impure_and_non_string_keyed_tables(
+    value: object,
+) -> None:
+    assert not is_json_object(value)
+
+
+@given(
+    st.one_of(
+        JSON_SCALARS,
+        st.dictionaries(st.text(), JSON_VALUES),
+        st.lists(NON_JSON_VALUES, min_size=1),
+    )
+)
+def test_json_array_guard_rejects_non_arrays_and_impure_arrays(
+    value: object,
+) -> None:
+    assert not is_json_array(value)
+
+
+@given(
+    st.one_of(
+        JSON_SCALARS,
+        st.lists(JSON_VALUES),
+        st.dictionaries(st.integers(), JSON_VALUES, min_size=1),
+    )
+)
+def test_string_keyed_table_guard_rejects_non_string_keys(value: object) -> None:
+    assert not is_string_keyed_table(value)
+
+
+@given(st.one_of(JSON_SCALARS, st.lists(JSON_VALUES)))
+def test_object_table_guard_rejects_non_mappings(value: object) -> None:
+    assert not is_object_table(value)
+
+
+@given(st.one_of(JSON_SCALARS, st.dictionaries(st.text(), JSON_VALUES)))
+def test_object_list_guard_rejects_non_lists(value: object) -> None:
+    assert not is_object_list(value)
+
+
+@given(st.text())
+def test_non_empty_string_guard_matches_stripped_content(value: str) -> None:
+    assert is_non_empty_string(value) == bool(value.strip())
+
+
+@given(
+    st.one_of(
+        NON_STRING_JSON_VALUES,
+        WHITESPACE_TEXT,
+    )
+)
+def test_non_empty_string_guard_rejects_non_strings_and_blanks(
+    value: object,
+) -> None:
+    assert not is_non_empty_string(value)
+
+
+@given(st.lists(st.text()))
+def test_string_array_guards_match_their_elements(values: list[str]) -> None:
+    assert is_string_array(values)
+    assert is_non_empty_string_array(values) == all(
+        bool(value.strip()) for value in values
+    )
+
+
+@given(
+    st.one_of(
+        JSON_SCALARS,
+        st.dictionaries(st.text(), JSON_VALUES),
+        st.lists(st.one_of(st.integers(), st.none()), min_size=1),
+    )
+)
+def test_string_array_guards_reject_non_string_elements(value: object) -> None:
+    assert not is_string_array(value)
+    assert not is_non_empty_string_array(value)
+
+
+@given(st.lists(WHITESPACE_TEXT, min_size=1))
+def test_non_empty_string_array_guard_rejects_blank_elements(
+    values: list[str],
+) -> None:
+    assert is_string_array(values)
+    assert not is_non_empty_string_array(values)
+
+
+@given(st.lists(st.dictionaries(st.text(), JSON_VALUES)))
+def test_table_array_guard_accepts_exactly_the_non_empty_tables(
+    tables: list[dict[str, JsonValue]],
+) -> None:
+    assert is_non_empty_table_array(tables) == bool(tables)
+
+
+@given(st.lists(JSON_SCALARS, min_size=1))
+def test_table_array_guard_rejects_non_table_elements(tables: list[JsonValue]) -> None:
+    assert not is_non_empty_table_array(tables)
+
+
+@given(st.one_of(st.booleans(), st.integers(min_value=1)))
+def test_paragraph_tri_state_guard_accepts_flags_and_positive_counts(
+    value: bool | int,
+) -> None:
+    assert is_paragraph_tri_state(value)
+
+
+@given(
+    st.one_of(
+        st.integers(max_value=0),
+        st.floats(allow_nan=False),
+        st.text(),
+        st.none(),
+        st.lists(st.integers()),
+    )
+)
+def test_paragraph_tri_state_guard_rejects_everything_else(value: object) -> None:
+    assert not is_paragraph_tri_state(value)
+
+
+@given(st.dictionaries(st.text(), JSON_VALUES), JSON_VALUES)
+def test_entries_table_guard_accepts_tables_with_entries(
+    table: dict[str, JsonValue], entries: JsonValue
+) -> None:
+    assert is_entries_table({**table, "entries": entries})
+
+
+@given(
+    st.one_of(
+        JSON_SCALARS,
+        st.lists(JSON_VALUES),
+        st.dictionaries(
+            st.text().filter(lambda key: key != "entries"),
+            JSON_VALUES,
+            min_size=1,
+        ),
+    )
+)
+def test_entries_table_guard_rejects_tables_without_entries(
+    value: object,
+) -> None:
+    assert not is_entries_table(value)

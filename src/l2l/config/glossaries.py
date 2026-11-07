@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING
 
-from l2l.config.models import Glossaries
 from l2l.effects import load_json
 from l2l.errors import TranslationError, fail_config
 from l2l.glossary import (
     merge_glossary_entries,
     parse_glossary_document,
 )
+from l2l.json_values import JsonObject, JsonValue, is_non_empty_string_array
 from l2l.monads import (
     IO,
     Ok,
@@ -22,11 +22,14 @@ from l2l.monads import (
     result_map,
     result_sequence,
 )
-from l2l.settings import Setup
+lazy from l2l.settings import Setup
+
+if TYPE_CHECKING:
+    from l2l.config.models import DocumentResult, Glossaries
 
 
 def document_glossary_paths(
-    path: str | None, document: dict[str, Any]
+    path: str | None, document: JsonObject
 ) -> Result[tuple[str, ...], TranslationError]:
     value = document.get("glossary")
     if value is None:
@@ -37,15 +40,18 @@ def document_glossary_paths(
             "glossary configured in a config document without a file path"
         )
 
+    if not is_non_empty_string_array(value):
+        return fail_config("%s: glossary must be a list of file paths" % path)
+
     base_directory = os.path.dirname(os.path.abspath(path))
     return Ok(tuple(os.path.join(base_directory, item) for item in value))
 
 
 def glossary_paths(
     user_path: str,
-    user_document: dict[str, Any],
+    user_document: JsonObject,
     selected_path: str | None,
-    selected_document: dict[str, Any],
+    selected_document: JsonObject,
     command_line_paths: tuple[str, ...],
 ) -> Result[tuple[str, ...], TranslationError]:
     return result_map(
@@ -68,7 +74,7 @@ def load_glossaries(
     paths: tuple[str, ...],
 ) -> IO[Result[Glossaries, TranslationError]]:
     def parsed(
-        loaded_result: Result[tuple[Any, ...], TranslationError],
+        loaded_result: Result[tuple[JsonValue, ...], TranslationError],
     ) -> Result[Glossaries, TranslationError]:
         return result_bind(
             loaded_result,
@@ -89,13 +95,13 @@ def load_glossaries(
 
 def resolve_glossaries(
     user_path: str,
-    user_document_result: Result[dict[str, Any], TranslationError],
+    user_document_result: DocumentResult,
     selected_path: str | None,
-    selected_document_result: Result[dict[str, Any], TranslationError],
+    selected_document_result: DocumentResult,
     command_line_paths: tuple[str, ...],
 ) -> IO[Result[Glossaries, TranslationError]]:
     def with_documents(
-        documents: tuple[dict[str, Any], dict[str, Any]],
+        documents: tuple[JsonObject, JsonObject],
     ) -> IO[Result[Glossaries, TranslationError]]:
         return result_bind_io(
             glossary_paths(

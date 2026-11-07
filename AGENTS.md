@@ -86,5 +86,6 @@
 uv format --preview-features format-command
 uv run ruff check
 uv run mypy --strict
+uv run pyright
 uv run pytest -q
 ```

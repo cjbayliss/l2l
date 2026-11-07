@@ -38,6 +38,7 @@ jobs:
       - run: uv format --check
       - run: uv run --locked ruff check
       - run: uv run --locked mypy --strict
+      - run: uv run --locked pyright
       - run: uv run --locked pytest -q
 
   smoke:

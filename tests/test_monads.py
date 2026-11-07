@@ -1,10 +1,11 @@
 import threading
-from typing import Any, cast
+lazy from types import TracebackType
 
 from l2l.monads import (
     IO,
     Cons,
     Err,
+    IOResult,
     Ok,
     Reference,
     Result,
@@ -45,13 +46,19 @@ from l2l.monads import (
 
 
 def test_result_map_transforms_ok_only() -> None:
-    assert result_map(Ok(2), lambda value: value + 1) == Ok(3)
-    assert result_map(Err("boom"), lambda value: value + 1) == Err("boom")
+    def increment(value: int) -> int:
+        return value + 1
+
+    assert result_map(Ok(2), increment) == Ok(3)
+    assert result_map(Err("boom"), increment) == Err("boom")
 
 
 def test_result_bind_short_circuits() -> None:
-    assert result_bind(Ok(2), lambda value: Ok(value * 3)) == Ok(6)
-    assert result_bind(Err("boom"), lambda value: Ok(value * 3)) == Err("boom")
+    def triple(value: int) -> Result[int, str]:
+        return Ok(value * 3)
+
+    assert result_bind(Ok(2), triple) == Ok(6)
+    assert result_bind(Err("boom"), triple) == Err("boom")
 
 
 def test_result_map_error_transforms_err_only() -> None:
@@ -120,7 +127,12 @@ def test_io_atomic_holds_the_lock_around_the_action() -> None:
         def __enter__(self) -> None:
             events.append("acquire")
 
-        def __exit__(self, *arguments: object) -> None:
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_value: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
             events.append("release")
 
     def action() -> IO[str]:
@@ -130,7 +142,7 @@ def test_io_atomic_holds_the_lock_around_the_action() -> None:
 
         return IO(thunk)
 
-    assert io_atomic(cast(Any, RecordingLock()), action()).run() == "value"
+    assert io_atomic(RecordingLock(), action()).run() == "value"
     assert events == ["acquire", "run", "release"]
 
 
@@ -199,16 +211,19 @@ def test_io_pair_runs_both_and_pairs_results() -> None:
 
 
 def test_io_result_map_lifts_over_io() -> None:
-    assert io_result_map(io_result(Ok(2)), lambda value: value + 1).run() == Ok(3)
-    assert io_result_map(io_result(Err("e")), lambda value: value + 1).run() == Err("e")
+    first: IOResult[int, str] = io_result(Ok(2))
+    second: IOResult[int, str] = io_result(Err("e"))
+    assert io_result_map(first, lambda value: value + 1).run() == Ok(3)
+    assert io_result_map(second, lambda value: value + 1).run() == Err("e")
 
 
 def test_io_result_bind_chains_io_results() -> None:
     def step(value: int) -> IO[Result[int, str]]:
         return io_result(Ok(value + 1))
 
+    err_result: IOResult[int, str] = io_result(Err("e"))
     assert io_result_bind(io_result(Ok(2)), step).run() == Ok(3)
-    assert io_result_bind(io_result(Err("e")), step).run() == Err("e")
+    assert io_result_bind(err_result, step).run() == Err("e")
 
 
 def test_fold_io_push_threads_state_and_stops_on_error() -> None:

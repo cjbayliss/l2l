@@ -2,25 +2,26 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import reduce
-from typing import Any
 
-from l2l.config.models import DocumentResult
 from l2l.errors import TranslationError, fail_config
+from l2l.json_values import JsonObject, is_non_empty_string
 from l2l.languages import normalized_source_language
 from l2l.monads import Ok, Result, result_bind, result_map
+from l2l.settings import Unset
+lazy from l2l.config.models import DocumentResult
 
 LanguageResult = Result[str | None, TranslationError]
-DocumentLanguageParser = Callable[[str | None, dict[str, Any]], LanguageResult]
+DocumentLanguageParser = Callable[[str | None, JsonObject], LanguageResult]
 
 
 def document_language(
-    path: str | None, document: dict[str, Any], key: str
+    path: str | None, document: JsonObject, key: str
 ) -> LanguageResult:
     language = document.get(key)
     if language is None:
         return Ok(None)
 
-    if not isinstance(language, str) or not language.strip():
+    if not is_non_empty_string(language):
         return fail_config(
             "%s: %s must be a non-empty string" % (path or "config", key)
         )
@@ -28,33 +29,31 @@ def document_language(
     return Ok(language.strip())
 
 
-def document_target_language(
-    path: str | None, document: dict[str, Any]
-) -> LanguageResult:
+def document_target_language(path: str | None, document: JsonObject) -> LanguageResult:
     return document_language(path, document, "target_language")
 
 
-def command_line_language(value: str | None, option: str) -> LanguageResult:
-    if value is None:
-        return Ok(None)
+def command_line_language(value: str | Unset, option: str) -> LanguageResult:
+    match value:
+        case Unset():
+            return Ok(None)
 
-    if not value.strip():
-        return fail_config("%s must be a non-empty string" % option)
+        case str() as provided if not provided.strip():
+            return fail_config("%s must be a non-empty string" % option)
 
-    return Ok(value.strip())
+        case str() as provided:
+            return Ok(provided.strip())
 
 
-def command_line_target_language(target_language: str | None) -> LanguageResult:
+def command_line_target_language(target_language: str | Unset) -> LanguageResult:
     return command_line_language(target_language, "--target-language")
 
 
-def document_source_language(
-    path: str | None, document: dict[str, Any]
-) -> LanguageResult:
+def document_source_language(path: str | None, document: JsonObject) -> LanguageResult:
     return document_language(path, document, "source_language")
 
 
-def command_line_source_language(source_language: str | None) -> LanguageResult:
+def command_line_source_language(source_language: str | Unset) -> LanguageResult:
     return command_line_language(source_language, "--source-language")
 
 
@@ -79,7 +78,7 @@ def layered_language(
     parse_document_language: DocumentLanguageParser,
 ) -> LanguageResult:
     def configured(
-        documents: tuple[dict[str, Any], dict[str, Any]],
+        documents: tuple[JsonObject, JsonObject],
     ) -> LanguageResult:
         layers = tuple(
             (path, document)
@@ -115,7 +114,7 @@ def layered_language(
 
 
 def resolve_target_language(
-    command_line_value: str | None,
+    command_line_value: str | Unset,
     user_path: str,
     user_document_result: DocumentResult,
     selected_path: str | None,
@@ -135,7 +134,7 @@ def resolve_target_language(
 
 
 def resolve_source_language(
-    command_line_value: str | None,
+    command_line_value: str | Unset,
     user_path: str,
     user_document_result: DocumentResult,
     selected_path: str | None,

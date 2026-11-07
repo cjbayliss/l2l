@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+lazy from collections.abc import Callable
 
-from l2l.context import Context
 from l2l.effects import cache_read, cache_write
-from l2l.errors import TranslationError
 from l2l.monads import (
     IO,
     NOTHING,
@@ -18,6 +16,8 @@ from l2l.monads import (
     io_result,
 )
 from l2l.text import Translated, Usage
+lazy from l2l.context import Context
+lazy from l2l.errors import TranslationError
 
 
 def always_acceptable(_: str) -> bool:
