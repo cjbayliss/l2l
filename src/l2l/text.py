@@ -188,6 +188,9 @@ def regroup_by_plan(
     if len(paragraphs) != sum(map(len, plan)):
         return NOTHING
 
+    # `accumulate` yields one boundary more than there are plan chunks (the
+    # trailing end of the last unit); that extra boundary pairs with no
+    # chunk, so the zip deliberately truncates it instead of failing.
     return Just(
         tuple(
             tuple(paragraphs[start : start + len(chunk)])
