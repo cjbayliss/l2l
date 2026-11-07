@@ -63,31 +63,31 @@ def parse_options_table(
     path: str, table: object
 ) -> Result[OptionDefaults, TranslationError]:
     if not is_string_keyed_table(table):
-        return fail_config("%s: [options] must be a table" % path)
+        return fail_config(f"{path}: [options] must be a table")
 
     unknown = sorted(
         set(table) - {"ascii", "ensure_paragraphs", "retranslate_untranslated"}
     )
     if unknown:
         return fail_config(
-            "%s: [options]: unknown key(s): %s" % (path, ", ".join(unknown))
+            "{}: [options]: unknown key(s): {}".format(path, ", ".join(unknown))
         )
 
     ascii_value = table.get("ascii", False)
     if not isinstance(ascii_value, bool):
-        return fail_config("%s: [options] ascii must be true or false" % path)
+        return fail_config(f"{path}: [options] ascii must be true or false")
 
     ensure_paragraphs = table.get("ensure_paragraphs", False)
     if not is_paragraph_tri_state(ensure_paragraphs):
         return fail_config(
-            "%s: [options] ensure_paragraphs must be true, false, "
-            "or a positive integer" % path
+            f"{path}: [options] ensure_paragraphs must be true, false, "
+            "or a positive integer"
         )
 
     retranslate_untranslated = table.get("retranslate_untranslated", False)
     if not isinstance(retranslate_untranslated, bool):
         return fail_config(
-            "%s: [options] retranslate_untranslated must be true or false" % path
+            f"{path}: [options] retranslate_untranslated must be true or false"
         )
 
     return Ok(
@@ -114,14 +114,14 @@ def pass_draft_from(
     mode = parse_pass_mode(table.get("mode", "chunk"))
     if mode is None:
         return fail_config(
-            "%s: [[pass]] %s: mode must be analysis, chunk, paragraph, or "
-            "update_glossary" % (path, name)
+            f"{path}: [[pass]] {name}: mode must be analysis, chunk, paragraph, or "
+            "update_glossary"
         )
 
     if prompts and (instruction is not None or mode == "update_glossary"):
         return fail_config(
-            "%s: [[pass]] %s: per-pass prompt overrides apply only to "
-            "built-in rendered chunk, paragraph, or analysis passes" % (path, name)
+            f"{path}: [[pass]] {name}: per-pass prompt overrides apply only to "
+            "built-in rendered chunk, paragraph, or analysis passes"
         )
 
     ascii_value = table.get("ascii")
@@ -130,9 +130,7 @@ def pass_draft_from(
     elif isinstance(ascii_value, bool):
         ascii_setting = ascii_value
     else:
-        return fail_config(
-            "%s: [[pass]] %s: ascii must be true or false" % (path, name)
-        )
+        return fail_config(f"{path}: [[pass]] {name}: ascii must be true or false")
 
     ensure_paragraphs_value = table.get("ensure_paragraphs")
     if ensure_paragraphs_value is None:
@@ -141,8 +139,8 @@ def pass_draft_from(
         ensure_paragraphs_setting = ensure_paragraphs_value
     else:
         return fail_config(
-            "%s: [[pass]] %s: ensure_paragraphs must be true, false, "
-            "or a positive integer" % (path, name)
+            f"{path}: [[pass]] {name}: ensure_paragraphs must be true, false, "
+            "or a positive integer"
         )
 
     retranslate_value = table.get("retranslate_untranslated")
@@ -152,8 +150,7 @@ def pass_draft_from(
         retranslate_setting = retranslate_value
     else:
         return fail_config(
-            "%s: [[pass]] %s: retranslate_untranslated must be true or false"
-            % (path, name)
+            f"{path}: [[pass]] {name}: retranslate_untranslated must be true or false"
         )
 
     model_value = table.get("model")
@@ -162,9 +159,7 @@ def pass_draft_from(
     elif is_non_empty_string(model_value):
         model = model_value.strip()
     else:
-        return fail_config(
-            "%s: [[pass]] %s: model must be a non-empty string" % (path, name)
-        )
+        return fail_config(f"{path}: [[pass]] {name}: model must be a non-empty string")
 
     target_language_value = table.get("target_language")
     if target_language_value is None:
@@ -173,33 +168,34 @@ def pass_draft_from(
         target_language = target_language_value.strip()
     else:
         return fail_config(
-            "%s: [[pass]] %s: target_language must be a non-empty string" % (path, name)
+            f"{path}: [[pass]] {name}: target_language must be a non-empty string"
         )
 
     if "include_types" in table and mode != "update_glossary":
         return fail_config(
-            "%s: [[pass]] %s: include_types applies only to update_glossary passes"
-            % (path, name)
+            f"{path}: [[pass]] {name}: include_types applies only "
+            "to update_glossary passes"
         )
 
     include_types_value = table.get("include_types", [])
     if not is_string_array(include_types_value):
         return fail_config(
-            "%s: [[pass]] %s: include_types must be a list of strings" % (path, name)
+            f"{path}: [[pass]] {name}: include_types must be a list of strings"
         )
 
     if any(value not in GLOSSARY_ENTRY_TYPES for value in include_types_value):
         return fail_config(
-            "%s: [[pass]] %s: include_types entries must be chosen from: %s"
-            % (path, name, ", ".join(GLOSSARY_ENTRY_TYPES))
+            "{}: [[pass]] {}: include_types entries must be chosen from: {}".format(
+                path, name, ", ".join(GLOSSARY_ENTRY_TYPES)
+            )
         )
 
     parameters_value = table.get("params", {})
     if not is_string_keyed_table(parameters_value):
-        return fail_config("%s: [[pass]] %s: params must be a table" % (path, name))
+        return fail_config(f"{path}: [[pass]] {name}: params must be a table")
     if not is_json_object(parameters_value):
         return fail_config(
-            "%s: [[pass]] %s: params must contain only JSON values" % (path, name)
+            f"{path}: [[pass]] {name}: params must contain only JSON values"
         )
 
     return Ok(
@@ -263,16 +259,16 @@ def load_instruction_text(
 
         return io_result(
             fail_config(
-                "%s: [[pass]] %s: exactly one of instruction_file "
-                "or instruction is required" % (path, name)
+                f"{path}: [[pass]] {name}: exactly one of instruction_file "
+                "or instruction is required"
             )
         )
 
     if has_file == has_inline:
         return io_result(
             fail_config(
-                "%s: [[pass]] %s: exactly one of instruction_file "
-                "or instruction is required" % (path, name)
+                f"{path}: [[pass]] {name}: exactly one of instruction_file "
+                "or instruction is required"
             )
         )
 
@@ -280,7 +276,7 @@ def load_instruction_text(
         instruction_value = table["instruction"]
         if not is_non_empty_string(instruction_value):
             return io_result(
-                fail_config("%s: [[pass]] %s: instruction is empty" % (path, name))
+                fail_config(f"{path}: [[pass]] {name}: instruction is empty")
             )
 
         return io_result(Ok(instruction_value.strip()))
@@ -288,12 +284,10 @@ def load_instruction_text(
     instruction_file_value = table["instruction_file"]
     if not is_non_empty_string(instruction_file_value):
         return io_result(
-            fail_config(
-                "%s: [[pass]] %s: instruction_file must be a path" % (path, name)
-            )
+            fail_config(f"{path}: [[pass]] {name}: instruction_file must be a path")
         )
 
-    description = "%s: [[pass]] %s: instruction file" % (path, name)
+    description = f"{path}: [[pass]] {name}: instruction file"
     file_path = os.path.join(base_directory, instruction_file_value)
 
     def checked(
@@ -304,9 +298,7 @@ def load_instruction_text(
             if stripped:
                 return Ok(stripped)
 
-            return fail_config(
-                "%s: [[pass]] %s: instruction file is empty" % (path, name)
-            )
+            return fail_config(f"{path}: [[pass]] {name}: instruction file is empty")
 
         return result_bind(text_result, check)
 
@@ -328,8 +320,8 @@ def prompt_override_inline_text(
             return Ok(PromptSectionOverride("", inline_origin))
 
         return fail_config(
-            '%s: %s %s must be empty ("") to remove a section, or '
-            "contain non-whitespace text" % (path, description, section)
+            f'{path}: {description} {section} must be empty ("") to remove '
+            "a section, or contain non-whitespace text"
         )
 
     return Ok(PromptSectionOverride(value.strip(), inline_origin))
@@ -340,21 +332,20 @@ def prompt_override_file_path(
 ) -> Result[str, TranslationError]:
     if not is_json_object(value):
         return fail_config(
-            "%s: %s %s must be inline text or a table with a single "
-            "file key" % (path, description, section)
+            f"{path}: {description} {section} must be inline text or "
+            "a table with a single file key"
         )
 
     if set(value) != {"file"}:
         return fail_config(
-            "%s: %s %s must be a table with exactly one key, file"
-            % (path, description, section)
+            f"{path}: {description} {section} must be a table "
+            "with exactly one key, file"
         )
 
     file_value = value["file"]
     if not is_non_empty_string(file_value):
         return fail_config(
-            "%s: %s %s: file must be a non-empty path string"
-            % (path, description, section)
+            f"{path}: {description} {section}: file must be a non-empty path string"
         )
 
     return Ok(file_value)
@@ -379,14 +370,13 @@ def parse_prompt_overrides(
     file_origin: PromptSectionOrigin,
 ) -> IO[Result[Mapping[PromptSectionName, PromptSectionOverride], TranslationError]]:
     if not is_string_keyed_table(table):
-        return io_result(fail_config("%s: %s must be a table" % (path, description)))
+        return io_result(fail_config(f"{path}: {description} must be a table"))
 
     unknown = sorted(set(table) - set(PROMPT_SECTION_NAMES))
     if unknown:
         return io_result(
             fail_config(
-                "%s: %s: unknown prompt section(s): %s (expected: %s)"
-                % (
+                "{}: {}: unknown prompt section(s): {} (expected: {})".format(
                     path,
                     description,
                     ", ".join(unknown),
@@ -410,7 +400,7 @@ def parse_prompt_overrides(
             return io_result(file_path_result)
 
         file_path = os.path.join(base_directory, file_path_result.value)
-        file_description = "%s %s: prompt file" % (description, section)
+        file_description = f"{description} {section}: prompt file"
 
         def checked(
             text_result: Result[str, TranslationError],
@@ -421,7 +411,7 @@ def parse_prompt_overrides(
                     Ok(PromptSectionOverride(text.strip(), file_origin))
                     if text.strip()
                     else fail_config(
-                        "%s: %s %s: prompt file is empty" % (path, description, section)
+                        f"{path}: {description} {section}: prompt file is empty"
                     )
                 ),
             )
@@ -482,8 +472,9 @@ def style_formality_field(
 
         case _:
             return fail_config(
-                "%s: %s formality must be one of: %s"
-                % (path, description, ", ".join(STYLE_VALUES["formality"]))
+                "{}: {} formality must be one of: {}".format(
+                    path, description, ", ".join(STYLE_VALUES["formality"])
+                )
             )
 
 
@@ -505,8 +496,9 @@ def style_honorifics_field(
 
         case _:
             return fail_config(
-                "%s: %s honorifics must be one of: %s"
-                % (path, description, ", ".join(STYLE_VALUES["honorifics"]))
+                "{}: {} honorifics must be one of: {}".format(
+                    path, description, ", ".join(STYLE_VALUES["honorifics"])
+                )
             )
 
 
@@ -525,8 +517,9 @@ def style_register_fidelity_field(
 
         case _:
             return fail_config(
-                "%s: %s register_fidelity must be one of: %s"
-                % (path, description, ", ".join(STYLE_VALUES["register_fidelity"]))
+                "{}: {} register_fidelity must be one of: {}".format(
+                    path, description, ", ".join(STYLE_VALUES["register_fidelity"])
+                )
             )
 
 
@@ -536,13 +529,14 @@ def parse_style_table(
     description: str,
 ) -> Result[StylePolicyPatch, TranslationError]:
     if not is_string_keyed_table(table):
-        return fail_config("%s: %s must be a table" % (path, description))
+        return fail_config(f"{path}: {description} must be a table")
 
     unknown = sorted(set(table) - set(STYLE_KEYS))
     if unknown:
         return fail_config(
-            "%s: %s: unknown style key(s): %s (expected: %s)"
-            % (path, description, ", ".join(unknown), ", ".join(STYLE_KEYS))
+            "{}: {}: unknown style key(s): {} (expected: {})".format(
+                path, description, ", ".join(unknown), ", ".join(STYLE_KEYS)
+            )
         )
 
     formality_result = style_formality_field(path, description, table)
@@ -587,14 +581,14 @@ def pass_style_patch(
 
     if instruction is not None or mode not in ("chunk", "paragraph"):
         return fail_config(
-            "%s: [[pass]] %s: per-pass style applies only to built-in "
-            "rendered chunk or paragraph passes" % (path, name)
+            f"{path}: [[pass]] {name}: per-pass style applies only to built-in "
+            "rendered chunk or paragraph passes"
         )
 
     return parse_style_table(
         path,
         table["style"],
-        "[[pass]] %s: [pass.style]" % name,
+        f"[[pass]] {name}: [pass.style]",
     )
 
 
@@ -607,13 +601,14 @@ def parse_output_table(
     description: str,
 ) -> Result[OutputPolicyPatch, TranslationError]:
     if not is_string_keyed_table(table):
-        return fail_config("%s: %s must be a table" % (path, description))
+        return fail_config(f"{path}: {description} must be a table")
 
     unknown = sorted(set(table) - set(OUTPUT_KEYS))
     if unknown:
         return fail_config(
-            "%s: %s: unknown output key(s): %s (expected: %s)"
-            % (path, description, ", ".join(unknown), ", ".join(OUTPUT_KEYS))
+            "{}: {}: unknown output key(s): {} (expected: {})".format(
+                path, description, ", ".join(unknown), ", ".join(OUTPUT_KEYS)
+            )
         )
 
     paragraphs_value = table.get("paragraphs")
@@ -625,7 +620,7 @@ def parse_output_table(
         paragraphs_setting = "approximate"
     else:
         return fail_config(
-            '%s: %s: paragraphs must be "exact" or "approximate"' % (path, description)
+            f'{path}: {description}: paragraphs must be "exact" or "approximate"'
         )
 
     maximum_characters_value = table.get("maximum_characters")
@@ -639,7 +634,7 @@ def parse_output_table(
         maximum_characters_setting = maximum_characters_value
     else:
         return fail_config(
-            "%s: %s maximum_characters must be a positive integer" % (path, description)
+            f"{path}: {description} maximum_characters must be a positive integer"
         )
 
     return Ok(
@@ -671,14 +666,14 @@ def pass_output_patch(
 
     if instruction is not None or mode not in ("chunk", "paragraph"):
         return fail_config(
-            "%s: [[pass]] %s: per-pass output applies only to built-in "
-            "rendered chunk or paragraph passes" % (path, name)
+            f"{path}: [[pass]] {name}: per-pass output applies only to built-in "
+            "rendered chunk or paragraph passes"
         )
 
     return parse_output_table(
         path,
         table["output"],
-        "[[pass]] %s: [pass.output]" % name,
+        f"[[pass]] {name}: [pass.output]",
     )
 
 
@@ -710,7 +705,7 @@ def pass_prompt_overrides(
         path,
         table["prompts"],
         base_directory,
-        "[[pass]] %s: [pass.prompts]" % name,
+        f"[[pass]] {name}: [pass.prompts]",
         "pass-inline",
         "pass-file",
     )
@@ -720,18 +715,20 @@ def parse_pass_table(
     path: str, table: object, base_directory: str
 ) -> IO[Result[PassDraft, TranslationError]]:
     if not is_string_keyed_table(table):
-        return io_result(fail_config("%s: [[pass]] entries must be tables" % path))
+        return io_result(fail_config(f"{path}: [[pass]] entries must be tables"))
 
     unknown = sorted(set(table) - set(PASS_KEYS))
     if unknown:
         return io_result(
-            fail_config("%s: [[pass]]: unknown key(s): %s" % (path, ", ".join(unknown)))
+            fail_config(
+                "{}: [[pass]]: unknown key(s): {}".format(path, ", ".join(unknown))
+            )
         )
 
     name_value = table.get("name")
     if not is_non_empty_string(name_value):
         return io_result(
-            fail_config("%s: [[pass]]: name must be a non-empty string" % path)
+            fail_config(f"{path}: [[pass]]: name must be a non-empty string")
         )
 
     name = name_value.strip()
@@ -777,7 +774,7 @@ def document_passes(
 
     if not is_non_empty_table_array(entries):
         return io_result(
-            fail_config("%s: [[pass]] must define one or more pass tables" % path)
+            fail_config(f"{path}: [[pass]] must define one or more pass tables")
         )
 
     return io_traverse(

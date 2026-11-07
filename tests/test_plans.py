@@ -227,13 +227,13 @@ def test_glossary_term_problem_flags_untranslated_terms() -> None:
     assert '大观园" (use "Grand View Garden")' in problem.value
 
     many = tuple(
-        GlossaryEntry("名字%d" % index, "Name %d" % index, None, "other")
+        GlossaryEntry(f"名字{index}", f"Name {index}", None, "other")
         for index in range(5)
     )
     sampled = glossary_term_problem("名字0名字1名字2名字3名字4", many)
     assert isinstance(sampled, Just)
     assert "名字0" in sampled.value
-    listed_all = all("名字%d" % index in sampled.value for index in range(5))
+    listed_all = all(f"名字{index}" in sampled.value for index in range(5))
     assert not listed_all, "the message should sample, not list every term"
 
 

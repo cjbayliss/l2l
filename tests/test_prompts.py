@@ -208,7 +208,7 @@ def test_analyser_golden_prompt() -> None:
     )
     assert ANALYSER_OPENING_LINE == "Preparation brief (reference only):"
     for heading in ANALYSER_HEADINGS:
-        assert "- %s:" % heading in rendered.instruction
+        assert f"- {heading}:" in rendered.instruction
     assert "under 400 words" in rendered.instruction
 
 

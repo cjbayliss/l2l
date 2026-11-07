@@ -211,8 +211,8 @@ ANALYSER_OUTPUT_RULES_TEXT: Final = "\n".join(
         "Reply with the brief only: no preamble, no closing remarks, no "
         "markdown fences, and none of the document's own prose beyond "
         "short quoted phrases.",
-        'Open with the exact line "%s" so the translator can tell the '
-        "brief apart from the source text." % ANALYSER_OPENING_LINE,
+        f'Open with the exact line "{ANALYSER_OPENING_LINE}" so the translator '
+        "can tell the brief apart from the source text.",
         ANALYSER_QUOTATION_RULE_TEXT,
         "Use these headings, dropping any that would add nothing:",
         "- Story: what the document does overall, then the scenes in "
@@ -226,8 +226,8 @@ ANALYSER_OUTPUT_RULES_TEXT: Final = "\n".join(
         "- Idioms: set phrases where force matters more than literals, "
         "noting the register that a literal reading would flatten.",
         "- Traps: anything easy to get wrong, one line each with its resolution.",
-        "Keep the whole brief under %d words: it is repeated for every "
-        "call." % ANALYSER_WORD_LIMIT,
+        f"Keep the whole brief under {ANALYSER_WORD_LIMIT} words: "
+        "it is repeated for every call.",
     )
 )
 
@@ -346,7 +346,7 @@ def target_region_guidance_text(target_language: str) -> str:
         return ""
 
     label = TARGET_REGION_LABELS.get(components)
-    return "Use %s spelling and conventions." % label if label else ""
+    return f"Use {label} spelling and conventions." if label else ""
 
 
 def target_scripts_guidance_text(target_language: str) -> str:
@@ -354,7 +354,7 @@ def target_scripts_guidance_text(target_language: str) -> str:
     if not scripts:
         return ""
 
-    return "Write the translation in the %s script%s." % (
+    return "Write the translation in the {} script{}.".format(
         scripts_description(scripts),
         "" if len(scripts) == 1 else "s",
     )
@@ -472,8 +472,9 @@ class PromptSections:
         extra = frozenset(self.texts) - frozenset(get_args(PromptSectionName))
         if missing or extra:
             raise ValueError(
-                "prompt sections must cover exactly %s"
-                % ", ".join(PROMPT_SECTION_NAMES)
+                "prompt sections must cover exactly {}".format(
+                    ", ".join(PROMPT_SECTION_NAMES)
+                )
             )
 
     def assembled(self) -> str:
@@ -594,7 +595,7 @@ def merged_output_rules(static_text: str, generated_rule: str) -> str:
     if not static_text.strip():
         return generated_rule
 
-    return "%s\n\n%s" % (static_text, generated_rule)
+    return f"{static_text}\n\n{generated_rule}"
 
 
 def joined_fragments(*fragments: str) -> str:

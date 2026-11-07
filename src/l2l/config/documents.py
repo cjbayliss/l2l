@@ -51,15 +51,15 @@ def validate_document(
     )
     if unknown:
         return fail_config(
-            "%s: unknown top-level key(s): %s (expected [api], [options], "
+            "{}: unknown top-level key(s): {} (expected [api], [options], "
             "glossary, target_language, source_language, [prompts], [style], "
             "[output], "
-            "[[pass]])" % (path, ", ".join(unknown))
+            "[[pass]])".format(path, ", ".join(unknown))
         )
 
     glossary = document.get("glossary")
     if glossary is not None and not is_non_empty_string_array(glossary):
-        return fail_config("%s: glossary must be a list of file paths" % path)
+        return fail_config(f"{path}: glossary must be a list of file paths")
 
     return Ok(None)
 

@@ -36,10 +36,9 @@ lazy from l2l.json_values import JsonValue
 
 
 def source_report_line(text: str, source_paragraphs: tuple[str, ...]) -> str:
-    return "source: %d character(s), %d paragraph(s), ~%d tokens" % (
-        len(text),
-        len(source_paragraphs),
-        estimate_tokens(text),
+    return (
+        f"source: {len(text)} character(s), {len(source_paragraphs)} paragraph(s), "
+        f"~{estimate_tokens(text)} tokens"
     )
 
 
@@ -50,14 +49,11 @@ def target_language_report_note(
         run_context.target_language, pass_definition.target_language
     )
     scripts = expected_target_scripts(language)
-    return "target language %s (scripts: %s)" % (
-        language,
-        scripts_description(scripts),
-    )
+    return f"target language {language} (scripts: {scripts_description(scripts)})"
 
 
 def pass_report_header(number: int, total: int, pass_definition: PassDefinition) -> str:
-    return "pass %d/%d [%s]" % (number, total, pass_definition.name)
+    return f"pass {number}/{total} [{pass_definition.name}]"
 
 
 def whole_document_pass_lines(
@@ -66,26 +62,22 @@ def whole_document_pass_lines(
     pass_definition: PassDefinition,
 ) -> tuple[str, ...]:
     return (
-        "%s: %s, mode=%s, 1 call with the whole document"
-        % (header, language_note, pass_definition.mode),
+        f"{header}: {language_note}, mode={pass_definition.mode}, "
+        "1 call with the whole document",
     )
 
 
 def unit_call_report_lines(calls: tuple[UnitCall, ...]) -> tuple[str, ...]:
     return tuple(
-        "  unit %d/%d: ~%d source tokens, cache key %s..."
-        % (
-            call.index + 1,
-            call.total,
-            estimate_tokens(call.source_chunk),
-            call.key[:12],
-        )
+        f"  unit {call.index + 1}/{call.total}: "
+        f"~{estimate_tokens(call.source_chunk)} source tokens, "
+        f"cache key {call.key[:12]}..."
         for call in calls
     )
 
 
 def work_group_warning_lines(warning: Maybe[str]) -> tuple[str, ...]:
-    return ("  warning: %s" % warning.value,) if isinstance(warning, Just) else ()
+    return (f"  warning: {warning.value}",) if isinstance(warning, Just) else ()
 
 
 def budget_violation_lines(
@@ -94,12 +86,13 @@ def budget_violation_lines(
     source_budget: int,
 ) -> tuple[str, ...]:
     return tuple(
-        "  warning: %s"
-        % chunk_budget_violation_message(
-            pass_definition.name,
-            paragraph_index,
-            paragraph_tokens,
-            source_budget,
+        "  warning: {}".format(
+            chunk_budget_violation_message(
+                pass_definition.name,
+                paragraph_index,
+                paragraph_tokens,
+                source_budget,
+            )
         )
         for paragraph_index, paragraph_tokens in violations
     )
@@ -138,7 +131,7 @@ def text_pass_report_lines(
     )
     is_chunk = pass_definition.mode == "chunk"
     budget_note = (
-        ", source budget ~%d tokens" % pass_plan.chunk_budget if is_chunk else ""
+        f", source budget ~{pass_plan.chunk_budget} tokens" if is_chunk else ""
     )
     violations = (
         oversized_paragraph_sizes(source_paragraphs, pass_plan.source_budget)
@@ -146,14 +139,8 @@ def text_pass_report_lines(
         else ()
     )
     return (
-        "%s: %s, mode=%s, %d unit(s)%s"
-        % (
-            header,
-            language_note,
-            pass_definition.mode,
-            len(work_groups),
-            budget_note,
-        ),
+        f"{header}: {language_note}, mode={pass_definition.mode}, "
+        f"{len(work_groups)} unit(s){budget_note}",
         *unit_call_report_lines(calls),
         *work_group_warning_lines(warning),
         *budget_violation_lines(pass_definition, violations, pass_plan.source_budget),
@@ -234,20 +221,15 @@ def setup_warnings(setup: Setup) -> tuple[str, ...]:
     target_scripts = expected_target_scripts(setup.target_language)
     unknown_language_warnings: tuple[str, ...] = (
         (
-            "target language %s is not recognized; script checks fall back to "
-            "the ASCII-letter heuristic" % setup.target_language,
+            f"target language {setup.target_language} is not recognized; "
+            "script checks fall back to the ASCII-letter heuristic",
         )
         if not target_scripts
         else ()
     )
     instruction_warnings = tuple(
-        "pass %d [%s]: instruction does not mention the target language %s; "
-        "add {target_language} to the instruction"
-        % (
-            number,
-            pass_definition.name,
-            language,
-        )
+        f"pass {number} [{pass_definition.name}]: instruction does not mention "
+        f"the target language {language}; add {{target_language}} to the instruction"
         for number, pass_definition in enumerate(setup.passes, 1)
         for language in (
             effective_target_language(
@@ -259,13 +241,9 @@ def setup_warnings(setup: Setup) -> tuple[str, ...]:
         and not instruction_uses_target_language(pass_definition.instruction, language)
     )
     glossary_warnings = tuple(
-        "glossary entry %r renders as %r, which is not in the target "
-        "script(s) %s; the glossary may come from another target language"
-        % (
-            entry.original,
-            rendering,
-            scripts_description(target_scripts),
-        )
+        f"glossary entry {entry.original!r} renders as {rendering!r}, which is "
+        f"not in the target script(s) {scripts_description(target_scripts)}; "
+        "the glossary may come from another target language"
         for entry in setup.glossary_entries
         for rendering in (entry.translated or "",)
         for script in (dominant_script(rendering),)
@@ -281,13 +259,13 @@ def setup_warnings(setup: Setup) -> tuple[str, ...]:
 
 def api_setup_lines(config: Config) -> tuple[str, ...]:
     return (
-        "api.base_url: %s" % config.base_url,
-        "api.model: %s" % config.model,
-        "api.timeout: %g" % config.timeout,
-        "api.max_tokens: %d" % config.maximum_tokens,
-        "api.api_key: %s" % mask_api_key(config.api_key),
+        f"api.base_url: {config.base_url}",
+        f"api.model: {config.model}",
+        f"api.timeout: {config.timeout:g}",
+        f"api.max_tokens: {config.maximum_tokens}",
+        f"api.api_key: {mask_api_key(config.api_key)}",
         *(
-            ("api.params: %s" % parameters_text(config.parameters),)
+            (f"api.params: {parameters_text(config.parameters)}",)
             if config.parameters
             else ()
         ),
@@ -296,7 +274,7 @@ def api_setup_lines(config: Config) -> tuple[str, ...]:
 
 def prompt_label(pass_definition: PassDefinition) -> str:
     return (
-        "built-in role=%s" % pass_definition.prompt_role
+        f"built-in role={pass_definition.prompt_role}"
         if pass_definition.prompt_role is not None
         else "legacy instruction"
     )
@@ -307,7 +285,9 @@ def prompt_metadata_lines(pass_definition: PassDefinition) -> tuple[str, ...]:
         return ()
 
     included = ", ".join(
-        "%s=%s" % (name, pass_definition.prompt_section_origins.get(name, "built-in"))
+        "{}={}".format(
+            name, pass_definition.prompt_section_origins.get(name, "built-in")
+        )
         for name in pass_definition.prompt_sections
     )
     omitted = (
@@ -316,10 +296,10 @@ def prompt_metadata_lines(pass_definition: PassDefinition) -> tuple[str, ...]:
         else "none"
     )
     return (
-        "  prompt sections: %s" % included,
-        "  prompt omitted sections: %s" % omitted,
+        f"  prompt sections: {included}",
+        f"  prompt omitted sections: {omitted}",
         "  instruction text:",
-        *("    %s" % line for line in pass_definition.instruction.splitlines()),
+        *(f"    {line}" for line in pass_definition.instruction.splitlines()),
     )
 
 
@@ -329,32 +309,24 @@ def pass_setup_lines(
     language = effective_target_language(
         setup.target_language, pass_definition.target_language
     )
+    uses_placeholder = "{target_language}" in pass_definition.instruction
     summary = (
-        "pass %d/%d [%s]: mode=%s ascii=%s ensure_paragraphs=%s "
-        "retranslate_untranslated=%s model=%s instruction=%d chars "
-        "target_language=%s scripts=%s uses_target_language_placeholder=%s "
-        "style=formality:%s honorifics:%s register_fidelity:%s prompt=%s"
-        % (
-            number,
-            len(setup.passes),
-            pass_definition.name,
-            pass_definition.mode,
-            pass_definition.ascii,
-            pass_definition.ensure_paragraphs,
-            pass_definition.retranslate_untranslated,
-            pass_definition.model or "<default>",
-            len(pass_definition.instruction),
-            language,
-            scripts_description(expected_target_scripts(language)),
-            "{target_language}" in pass_definition.instruction,
-            pass_definition.style.formality,
-            pass_definition.style.honorifics,
-            pass_definition.style.register_fidelity,
-            prompt_label(pass_definition),
-        )
+        f"pass {number}/{len(setup.passes)} [{pass_definition.name}]: "
+        f"mode={pass_definition.mode} ascii={pass_definition.ascii} "
+        f"ensure_paragraphs={pass_definition.ensure_paragraphs} "
+        f"retranslate_untranslated={pass_definition.retranslate_untranslated} "
+        f"model={pass_definition.model or '<default>'} "
+        f"instruction={len(pass_definition.instruction)} chars "
+        f"target_language={language} "
+        f"scripts={scripts_description(expected_target_scripts(language))} "
+        f"uses_target_language_placeholder={uses_placeholder} "
+        f"style=formality:{pass_definition.style.formality} "
+        f"honorifics:{pass_definition.style.honorifics} "
+        f"register_fidelity:{pass_definition.style.register_fidelity} "
+        f"prompt={prompt_label(pass_definition)}"
     )
     parameters = (
-        ("  params: %s" % parameters_text(pass_definition.parameters),)
+        (f"  params: {parameters_text(pass_definition.parameters)}",)
         if pass_definition.parameters
         else ()
     )
@@ -364,9 +336,11 @@ def pass_setup_lines(
         ("unit_tolerance", pass_definition.unit_paragraph_tolerance),
         ("pass_tolerance", pass_definition.pass_paragraph_tolerance),
     )
-    output_line = "  output: %s" % " ".join(
-        "%s=%s" % (label, "unset" if value is None else value)
-        for label, value in output_values
+    output_line = "  output: {}".format(
+        " ".join(
+            "{}={}".format(label, "unset" if value is None else value)
+            for label, value in output_values
+        )
     )
     return (summary, *parameters, output_line, *prompt_metadata_lines(pass_definition))
 
@@ -376,26 +350,26 @@ def glossary_setup_lines(setup: Setup) -> tuple[str, ...]:
         return ()
 
     return (
-        "glossary: %d file(s), %d entries"
-        % (len(setup.glossary_paths), len(setup.glossary_entries)),
-        *(("  - %s" % path) for path in setup.glossary_paths),
+        f"glossary: {len(setup.glossary_paths)} file(s), "
+        f"{len(setup.glossary_entries)} entries",
+        *((f"  - {path}") for path in setup.glossary_paths),
     )
 
 
 def setup_report(setup: Setup, effective_ensure_paragraphs: bool | int) -> str:
     global_scripts = expected_target_scripts(setup.target_language)
     return "\n".join(
-        api_setup_lines(setup.config)
-        + (
-            "target_language: %s (scripts: %s)"
-            % (setup.target_language, scripts_description(global_scripts)),
-            "source_language: %s" % setup.source_language,
+        (
+            *api_setup_lines(setup.config),
+            f"target_language: {setup.target_language} "
+            f"(scripts: {scripts_description(global_scripts)})",
+            f"source_language: {setup.source_language}",
+            *tuple(
+                line
+                for number, pass_definition in enumerate(setup.passes, 1)
+                for line in pass_setup_lines(setup, number, pass_definition)
+            ),
+            *glossary_setup_lines(setup),
+            f"options.ensure_paragraphs: {effective_ensure_paragraphs}",
         )
-        + tuple(
-            line
-            for number, pass_definition in enumerate(setup.passes, 1)
-            for line in pass_setup_lines(setup, number, pass_definition)
-        )
-        + glossary_setup_lines(setup)
-        + ("options.ensure_paragraphs: %s" % effective_ensure_paragraphs,)
     )

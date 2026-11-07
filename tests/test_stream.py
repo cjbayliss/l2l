@@ -463,8 +463,9 @@ def test_drive_stream_rejects_a_stream_without_a_completion_event() -> None:
 
 
 def test_drive_stream_rejects_a_stream_truncated_by_length() -> None:
-    chunks = stream_chunks("Hi") + [
-        {"choices": [{"delta": {}, "finish_reason": "length"}]}
+    chunks: list[JsonObject] = [
+        *stream_chunks("Hi"),
+        {"choices": [{"delta": {}, "finish_reason": "length"}]},
     ]
     body = FakeStreamResponse(chunks)
     result = drive_stream(body, lambda label, count: io_pure(None)).run()

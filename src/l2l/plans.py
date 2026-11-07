@@ -58,18 +58,18 @@ def unit_output_problem(
         for index, paragraph in enumerate(split_paragraphs(output)[0], start=1):
             if len(paragraph) > maximum_characters:
                 return Just(
-                    "paragraph %d has %d characters but the limit is "
-                    "at most %d" % (index, len(paragraph), maximum_characters)
+                    f"paragraph {index} has {len(paragraph)} characters but the "
+                    f"limit is at most {maximum_characters}"
                 )
 
     if tolerance is not None:
         expected = count_paragraphs(source_text)
         found = count_paragraphs(output)
         if abs(found - expected) > tolerance:
-            allowed = "" if tolerance <= 0 else " (allowed ±%d)" % tolerance
+            allowed = "" if tolerance <= 0 else f" (allowed ±{tolerance})"
             return Just(
-                "the reply has %d paragraph(s) but the source has %d%s"
-                % (found, expected, allowed)
+                f"the reply has {found} paragraph(s) but the source has {expected}"
+                f"{allowed}"
             )
 
     source_estimate = estimate_tokens(source_text)
@@ -79,13 +79,8 @@ def unit_output_problem(
 
     if output_estimate > settings.unit_output_max_ratio * max(source_estimate, 1):
         return Just(
-            "the reply is ~%d tokens against a source of ~%d tokens "
-            "(limit %.0fx)"
-            % (
-                output_estimate,
-                source_estimate,
-                settings.unit_output_max_ratio,
-            )
+            f"the reply is ~{output_estimate} tokens against a source of "
+            f"~{source_estimate} tokens (limit {settings.unit_output_max_ratio:.0f}x)"
         )
 
     return NOTHING
@@ -102,11 +97,12 @@ def glossary_term_problem(
         return NOTHING
 
     return Just(
-        "the reply contains untranslated glossary term(s) %s; use their "
-        "mandated renderings"
-        % ", ".join(
-            '"%s" (use "%s")' % (entry.original, entry.translated)
-            for entry in untranslated[:UNTRANSLATED_GLOSSARY_TERM_SAMPLE_COUNT]
+        "the reply contains untranslated glossary term(s) {}; use their "
+        "mandated renderings".format(
+            ", ".join(
+                f'"{entry.original}" (use "{entry.translated}")'
+                for entry in untranslated[:UNTRANSLATED_GLOSSARY_TERM_SAMPLE_COUNT]
+            )
         )
     )
 
@@ -132,8 +128,9 @@ def script_mismatch_problem(
         return NOTHING
 
     return Just(
-        "the reply is in the source language (%s script) instead of the "
-        "draft's language" % scripts_description((output_script,))
+        f"the reply is in the source language "
+        f"({scripts_description((output_script,))} script) instead of "
+        "the draft's language"
     )
 
 
@@ -155,8 +152,8 @@ def target_script_problem(
         return NOTHING
 
     return Just(
-        "the reply is not in the target language (%s: %s script)"
-        % (target_language, scripts_description(target_scripts))
+        f"the reply is not in the target language ({target_language}: "
+        f"{scripts_description(target_scripts)} script)"
     )
 
 
@@ -193,8 +190,8 @@ def build_pass_user(
     translated_context: tuple[str, ...] = (),
 ) -> str:
     has_draft = work_chunk is not None and work_chunk != source_chunk
-    source_block = ("Source text:\n%s" % source_chunk) if has_draft else source_chunk
-    draft_block = ("Current draft:\n%s" % work_chunk) if has_draft else ""
+    source_block = (f"Source text:\n{source_chunk}") if has_draft else source_chunk
+    draft_block = (f"Current draft:\n{work_chunk}") if has_draft else ""
     parts = (
         analysis.strip() if analysis else "",
         *translated_context_parts(translated_context),
@@ -212,16 +209,15 @@ def plan_information_message(
 ) -> str:
     match pass_definition.mode:
         case "paragraph":
-            return "l2l: [%s] %d paragraph(s), one call per paragraph" % (
-                pass_definition.name,
-                len(work_groups),
+            return (
+                f"l2l: [{pass_definition.name}] {len(work_groups)} paragraph(s), "
+                "one call per paragraph"
             )
 
         case _:
-            return "l2l: [%s] %d paragraph(s) in %d chunk(s)" % (
-                pass_definition.name,
-                len(work_paragraphs),
-                len(work_groups),
+            return (
+                f"l2l: [{pass_definition.name}] {len(work_paragraphs)} paragraph(s) "
+                f"in {len(work_groups)} chunk(s)"
             )
 
 
@@ -237,8 +233,8 @@ def resolve_work_groups(
         return grouped.value, NOTHING
 
     warning: Maybe[str] = Just(
-        "l2l: [%s] paragraph count changed by a previous pass; "
-        "grouping working text independently" % pass_name
+        f"l2l: [{pass_name}] paragraph count changed by a previous pass; "
+        "grouping working text independently"
     )
     match mode:
         case "paragraph":
@@ -454,12 +450,11 @@ def pass_chunk_plans(
 
 def build_ascii_fix_user(source_paragraph: str, output_paragraph: str) -> str:
     return (
-        "Source paragraph (original language):\n%s\n\n"
+        f"Source paragraph (original language):\n{source_paragraph}\n\n"
         "Translated paragraph (must use ASCII characters only):\n"
-        "%s\n\n"
+        f"{output_paragraph}\n\n"
         "Rewrite the translated paragraph using ASCII characters only, "
         "preserving its meaning, register, and language."
-        % (source_paragraph, output_paragraph)
     )
 
 
@@ -467,15 +462,14 @@ def build_ascii_retry_user(
     source_paragraph: str, output_paragraph: str, result: str
 ) -> str:
     return (
-        "Source paragraph (original language):\n%s\n\n"
+        f"Source paragraph (original language):\n{source_paragraph}\n\n"
         "Translated paragraph (must use ASCII characters only):\n"
-        "%s\n\n"
+        f"{output_paragraph}\n\n"
         "Your previous reply still contained these non-ASCII "
-        "characters: %s. Rewrite the translated "
+        f"characters: {non_ascii_sample(result)}. Rewrite the translated "
         "paragraph again, finding an equivalent ASCII formulation for "
         "every one of them from the source and context. Reply with ASCII "
         "characters only."
-        % (source_paragraph, output_paragraph, non_ascii_sample(result))
     )
 
 
@@ -489,22 +483,21 @@ def build_unit_retry_user(
 ) -> str:
     has_draft = work_chunk is not None and work_chunk != source_chunk
     draft_part = (
-        "Current draft (correct this where the problem requires it):\n%s" % work_chunk
+        f"Current draft (correct this where the problem requires it):\n{work_chunk}"
         if has_draft
         else ""
     )
     return "\n\n".join(
         (
-            "Your previous reply below does not satisfy the output rules: %s."
-            % problem,
+            f"Your previous reply below does not satisfy the output rules: {problem}.",
             *translated_context_parts(translated_context),
             *context_parts(context),
             "Translate only the source text between the <<<SOURCE and SOURCE>>> "
             "markers, as exactly one paragraph; do not translate the context "
             "paragraphs and do not repeat the rejected reply.",
-            "<<<SOURCE\n%s\nSOURCE>>>" % source_chunk,
+            f"<<<SOURCE\n{source_chunk}\nSOURCE>>>",
             draft_part,
-            "Your previous rejected reply (do not copy it):\n<<<\n%s\n>>>" % bad_output,
+            f"Your previous rejected reply (do not copy it):\n<<<\n{bad_output}\n>>>",
             "Translate the source text again, fixing the problem; output only "
             "the translation of the source text.",
         )
@@ -513,9 +506,9 @@ def build_unit_retry_user(
 
 def ascii_drop_warning(drop: AsciiDrop) -> str:
     return (
-        "l2l: ascii: warning: paragraph %d still contained "
-        "non-ASCII characters (%s) after %d LLM attempts; dropping "
-        "them" % (drop.index + 1, drop.sample, drop.attempts)
+        f"l2l: ascii: warning: paragraph {drop.index + 1} still contained "
+        f"non-ASCII characters ({drop.sample}) after {drop.attempts} LLM "
+        "attempts; dropping them"
     )
 
 

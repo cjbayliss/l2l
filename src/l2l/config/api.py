@@ -57,7 +57,7 @@ def string_api_setting(
 
         value = table[key]
         if not is_non_empty_string(value):
-            return fail_config("%s: [api] %s must be a non-empty string" % (path, key))
+            return fail_config(f"{path}: [api] {key} must be a non-empty string")
 
         return Ok(set_field(partial, key, value.strip()))
 
@@ -88,12 +88,12 @@ def positive_number_setting(
     value = table[key]
     if whole:
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-            return fail_config("%s: [api] %s must be a positive integer" % (path, key))
+            return fail_config(f"{path}: [api] {key} must be a positive integer")
 
         return Ok(replace(partial, maximum_tokens=value))
 
     if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
-        return fail_config("%s: [api] %s must be a positive number" % (path, key))
+        return fail_config(f"{path}: [api] {key} must be a positive number")
 
     return Ok(replace(partial, timeout=float(value)))
 
@@ -118,9 +118,9 @@ def parameters_api_setting(
 
     value = table["params"]
     if not is_string_keyed_table(value):
-        return fail_config("%s: [api] params must be a table" % path)
+        return fail_config(f"{path}: [api] params must be a table")
     if not is_json_object(value):
-        return fail_config("%s: [api] params must contain only JSON values" % path)
+        return fail_config(f"{path}: [api] params must contain only JSON values")
 
     return Ok(replace(partial, parameters=value))
 
@@ -141,11 +141,13 @@ def document_api_settings(
 
     table = document["api"]
     if not is_string_keyed_table(table):
-        return fail_config("%s: [api] must be a table" % path)
+        return fail_config(f"{path}: [api] must be a table")
 
     unknown = sorted(set(table) - set(API_SETTING_KEYS))
     if unknown:
-        return fail_config("%s: [api]: unknown key(s): %s" % (path, ", ".join(unknown)))
+        return fail_config(
+            "{}: [api]: unknown key(s): {}".format(path, ", ".join(unknown))
+        )
 
     def step(
         partial_result: Result[PartialApiSettings, TranslationError],
@@ -178,7 +180,7 @@ def optional_positive_setting(
     if value is None:
         return Ok(None)
     if value <= 0:
-        return fail_config("%s must be positive" % description)
+        return fail_config(f"{description} must be positive")
     return Ok(value)
 
 
@@ -195,7 +197,7 @@ def env_positive_setting(
     try:
         parsed = parse(raw)
     except ValueError:
-        return fail_config("%s must be %s, got %r" % (variable, kind, raw))
+        return fail_config(f"{variable} must be {kind}, got {raw!r}")
 
     return optional_positive_setting(parsed, variable)
 

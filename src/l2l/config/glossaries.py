@@ -41,7 +41,7 @@ def document_glossary_paths(
         )
 
     if not is_non_empty_string_array(value):
-        return fail_config("%s: glossary must be a list of file paths" % path)
+        return fail_config(f"{path}: glossary must be a list of file paths")
 
     base_directory = os.path.dirname(os.path.abspath(path))
     return Ok(tuple(os.path.join(base_directory, item) for item in value))

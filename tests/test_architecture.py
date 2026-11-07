@@ -72,18 +72,9 @@ def comment_lines(source: str) -> list[int]:
     ]
 
 
-def fstring_nodes(tree: ast.Module) -> list[ast.JoinedStr]:
-    return [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.JoinedStr)
-        and any(isinstance(value, ast.FormattedValue) for value in node.values)
-    ]
-
-
 def test_dataclasses_are_frozen() -> None:
     problems = [
-        "%s:%d %s" % (name, node.lineno, node.name)
+        f"{name}:{node.lineno} {node.name}"
         for name, source in source_files()
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.ClassDef)
@@ -91,35 +82,26 @@ def test_dataclasses_are_frozen() -> None:
         and any(decorator_name(item) == "dataclass" for item in node.decorator_list)
         and not any(frozen_dataclass(item) for item in node.decorator_list)
     ]
-    assert not problems, "mutable dataclasses: %s" % "; ".join(problems)
+    assert not problems, "mutable dataclasses: " + "; ".join(problems)
 
 
 def test_no_global_or_nonlocal_statements() -> None:
     problems = [
-        "%s:%d %s" % (name, node.lineno, type(node).__name__)
+        f"{name}:{node.lineno} {type(node).__name__}"
         for name, source in source_files()
         for node in ast.walk(ast.parse(source))
         if isinstance(node, (ast.Global, ast.Nonlocal))
     ]
-    assert not problems, "global or nonlocal statements: %s" % "; ".join(problems)
-
-
-def test_formatting_stays_printf_style() -> None:
-    problems = [
-        "%s:%d" % (name, node.lineno)
-        for name, source in python_sources()
-        for node in fstring_nodes(ast.parse(source))
-    ]
-    assert not problems, "f-strings are banned: %s" % "; ".join(problems)
+    assert not problems, "global or nonlocal statements: " + "; ".join(problems)
 
 
 def test_no_comments_anywhere() -> None:
     problems = [
-        "%s:%d" % (name, line)
+        f"{name}:{line}"
         for name, source in python_sources()
         for line in comment_lines(source)
     ]
-    assert not problems, "comments are banned: %s" % "; ".join(problems)
+    assert not problems, "comments are banned: " + "; ".join(problems)
 
 
 def any_annotation_nodes(tree: ast.Module) -> list[ast.Name]:
@@ -132,11 +114,11 @@ def any_annotation_nodes(tree: ast.Module) -> list[ast.Name]:
 
 def test_no_any_annotations() -> None:
     problems = [
-        "%s:%d" % (name, node.lineno)
+        f"{name}:{node.lineno}"
         for name, source in source_files()
         for node in any_annotation_nodes(ast.parse(source))
     ]
-    assert not problems, "Any annotations: %s" % "; ".join(problems)
+    assert not problems, "Any annotations: " + "; ".join(problems)
 
 
 def cast_nodes(tree: ast.Module) -> list[ast.Call]:
@@ -151,16 +133,16 @@ def cast_nodes(tree: ast.Module) -> list[ast.Call]:
 
 def test_no_casts_in_sources() -> None:
     problems = [
-        "%s:%d" % (name, node.lineno)
+        f"{name}:{node.lineno}"
         for name, source in source_files()
         for node in cast_nodes(ast.parse(source))
     ]
-    assert not problems, "casts are banned in sources: %s" % "; ".join(problems)
+    assert not problems, "casts are banned in sources: " + "; ".join(problems)
 
 
 def test_frozen_dataclasses_define_slots() -> None:
     problems = [
-        "%s:%d %s" % (name, node.lineno, node.name)
+        f"{name}:{node.lineno} {node.name}"
         for name, source in python_sources()
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.ClassDef)
@@ -169,7 +151,7 @@ def test_frozen_dataclasses_define_slots() -> None:
             dataclass_keyword_is_true(item, "slots") for item in node.decorator_list
         )
     ]
-    assert not problems, "frozen dataclasses without slots: %s" % "; ".join(problems)
+    assert not problems, "frozen dataclasses without slots: " + "; ".join(problems)
 
 
 def is_final_annotation(annotation: ast.expr) -> bool:
@@ -190,14 +172,14 @@ def test_module_constants_are_final() -> None:
             if not isinstance(target, ast.Name) or not target.id.isupper():
                 continue
             if isinstance(node, ast.Assign) or not is_final_annotation(node.annotation):
-                problems.append("%s:%d %s" % (name, node.lineno, target.id))
-    assert not problems, "module constants without Final: %s" % "; ".join(problems)
+                problems.append(f"{name}:{node.lineno} {target.id}")
+    assert not problems, "module constants without Final: " + "; ".join(problems)
 
 
 def test_no_docstrings_anywhere() -> None:
     problems = [
-        "%s:%d" % (name, node.lineno)
+        f"{name}:{node.lineno}"
         for name, source in python_sources()
         for node in docstring_nodes(ast.parse(source))
     ]
-    assert not problems, "docstrings are banned: %s" % "; ".join(problems)
+    assert not problems, "docstrings are banned: " + "; ".join(problems)

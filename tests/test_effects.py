@@ -103,7 +103,7 @@ def test_cache_write_and_read_roundtrip(tmp_path: Path) -> None:
 def test_concurrent_cache_writes_to_the_same_key_all_succeed(tmp_path: Path) -> None:
     cache_directory = str(tmp_path)
     written_values = frozenset(
-        "value-%d" % index for index in range(WRITER_COUNT_FOR_RACE_TEST)
+        f"value-{index}" for index in range(WRITER_COUNT_FOR_RACE_TEST)
     )
 
     def write(value: str) -> bool:

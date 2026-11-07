@@ -586,7 +586,7 @@ def test_extract_glossary_happy_path(tmp_path: Path) -> None:
     document = json.loads(output.read_text(encoding="utf-8"))
     assert [item["original"] for item in document] == ["南京", "林黛玉"]
     assert document[1]["pronouns"] == "she/her"
-    assert "wrote 2 glossary entries to %s" % output in stderr
+    assert f"wrote 2 glossary entries to {output}" in stderr
     payload = json.loads(http.requests[0].body.decode("utf-8"))
     user_message = payload["messages"][1]["content"]
     assert payload["model"] == "m"

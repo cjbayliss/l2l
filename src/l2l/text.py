@@ -120,13 +120,13 @@ def group_units_to_budget(
         groups, current, size = accumulator
         unit_size = estimate_tokens(unit)
         if current and size + unit_size > budget:
-            return groups + (current,), (unit,), unit_size
+            return (*groups, current), (unit,), unit_size
 
-        return groups, current + (unit,), size + unit_size
+        return groups, (*current, unit), size + unit_size
 
     initial: tuple[tuple[tuple[str, ...], ...], tuple[str, ...], int] = ((), (), 0)
     groups, current, _ = reduce(fold, units, initial)
-    return groups + (current,) if current else groups
+    return (*groups, current) if current else groups
 
 
 def make_chunks(
@@ -136,7 +136,7 @@ def make_chunks(
 
 
 def split_sentences(text: str, boundary_characters: str) -> tuple[str, ...]:
-    pieces = re.split("(?<=[%s])" % re.escape(boundary_characters), text)
+    pieces = re.split(f"(?<=[{re.escape(boundary_characters)}])", text)
     trimmed = pieces[:-1] if pieces and pieces[-1] == "" else pieces
     return tuple(trimmed)
 
@@ -465,7 +465,7 @@ def sse_step(state: SseState, raw_line: bytes) -> tuple[SseState, SseFrame]:
     if line.startswith("data:"):
         payload = line[len("data:") :].removeprefix(" ")
 
-        return replace(state, pending_data=state.pending_data + (payload,)), None
+        return replace(state, pending_data=(*state.pending_data, payload)), None
 
     return state, None
 

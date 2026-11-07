@@ -83,10 +83,11 @@ def resolve_passes(
         layers = document_layers(user_path, documents[0], selected_path, documents[1])
         pass_sources = tuple(layer for layer in layers if "pass" in layer[1])
         if not pass_sources:
+            config_hint = selected_path or user_path or "a config file (see --help)"
             return io_result(
                 fail_config(
-                    "no [[pass]] tables found; define at least one pass in %s"
-                    % (selected_path or user_path or "a config file (see --help)")
+                    f"no [[pass]] tables found; define at least one pass in "
+                    f"{config_hint}"
                 )
             )
 
@@ -327,25 +328,26 @@ def finalize_pass_draft(
             or pass_draft.output_patch != OutputPolicyPatch()
         ):
             return fail_config(
-                "pass [%s]: per-pass prompt, style, or output settings apply "
-                "only to built-in rendered chunk, paragraph, or analysis passes"
-                % pass_draft.name
+                f"pass [{pass_draft.name}]: per-pass prompt, style, or output "
+                "settings apply only to built-in rendered chunk, paragraph, "
+                "or analysis passes"
             )
 
         warnings: list[str] = []
         if global_prompts and pass_draft.instruction is not None:
             warnings.append(
-                "global prompt section override(s) %s do not apply to the "
-                "legacy pass [%s]"
-                % (", ".join(sorted(global_prompts)), pass_draft.name)
+                "global prompt section override(s) {} do not apply to the "
+                "legacy pass [{}]".format(
+                    ", ".join(sorted(global_prompts)), pass_draft.name
+                )
             )
         if global_style_patch != StylePolicyPatch():
             warnings.append(
-                "global style settings do not apply to the pass [%s]" % pass_draft.name
+                f"global style settings do not apply to the pass [{pass_draft.name}]"
             )
         if global_output_patch != OutputPolicyPatch():
             warnings.append(
-                "global output settings do not apply to the pass [%s]" % pass_draft.name
+                f"global output settings do not apply to the pass [{pass_draft.name}]"
             )
         instruction = (
             pass_draft.instruction if pass_draft.instruction is not None else ""
@@ -412,18 +414,17 @@ def finalize_pass_draft(
     )
     honorifics_warnings: tuple[str, ...] = (
         (
-            "pass [%s]: honorifics = %s applies only to Japanese or Korean "
-            "sources; the resolved source language is %s"
-            % (pass_draft.name, style_policy.honorifics, global_source_language),
+            f"pass [{pass_draft.name}]: honorifics = {style_policy.honorifics} "
+            f"applies only to Japanese or Korean sources; the resolved source "
+            f"language is {global_source_language}",
         )
         if style_policy.honorifics != "keep"
         and not uses_japanese_or_korean_honorifics(global_source_language)
         else ()
     )
     no_op_warnings = tuple(
-        "pass [%s]: the empty prompt override for section %s removes "
-        "nothing: the built-in %s section has no static text"
-        % (pass_draft.name, name, name)
+        f"pass [{pass_draft.name}]: the empty prompt override for section {name} "
+        f"removes nothing: the built-in {name} section has no static text"
         for name, override in merged_prompts.items()
         if override.text == "" and not role_sections(rendered.role)[name].strip()
     )

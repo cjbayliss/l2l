@@ -163,16 +163,16 @@ def fail_file_error(path: str, operation: str, detail: str) -> Err[TranslationEr
 def describe_http(error: HttpError) -> str:
     match error.kind:
         case "status":
-            return "HTTP %s from endpoint: %s" % (error.status, error.detail)
+            return f"HTTP {error.status} from endpoint: {error.detail}"
 
         case "unreachable":
-            return "could not reach endpoint: %s" % error.detail
+            return f"could not reach endpoint: {error.detail}"
 
         case "stream":
-            return "endpoint stream error: %s" % error.detail
+            return f"endpoint stream error: {error.detail}"
 
         case "interrupted":
-            return "stream interrupted: %s" % error.detail
+            return f"stream interrupted: {error.detail}"
 
         case "protocol":
             return error.detail
@@ -183,14 +183,13 @@ def describe_http(error: HttpError) -> str:
 
 def describe_budget(error: BudgetError) -> str:
     subject = (
-        "document requires analysis in %d parts" % error.parts
+        f"document requires analysis in {error.parts} parts"
         if error.parts > 1
-        else "request is ~%d tokens" % error.request_tokens
+        else f"request is ~{error.request_tokens} tokens"
     )
     return (
-        "%s, over the %d-token budget; raise api.max_tokens "
+        f"{subject}, over the {error.budget}-token budget; raise api.max_tokens "
         "(--maximum-tokens / TRANSLATE_MAX_TOKENS) or shorten the input"
-        % (subject, error.budget)
     )
 
 
@@ -209,56 +208,48 @@ def describe(error: TranslationError) -> str:
             return describe_budget(error)
 
         case PassError():
-            return "l2l: pass [%s] failed: %s" % (
-                error.pass_name,
-                describe(error.inner),
-            )
+            return f"l2l: pass [{error.pass_name}] failed: {describe(error.inner)}"
 
         case UnitError():
-            return "l2l: [%s] failed on unit %d: %s" % (
-                error.pass_name,
-                error.unit_index + 1,
-                describe(error.inner),
+            return (
+                f"l2l: [{error.pass_name}] failed on unit {error.unit_index + 1}: "
+                f"{describe(error.inner)}"
             )
 
         case AsciiError():
-            return "l2l: pass [%s] ascii enforcement failed: %s" % (
-                error.pass_name,
-                describe(error.inner),
+            return (
+                f"l2l: pass [{error.pass_name}] ascii enforcement failed: "
+                f"{describe(error.inner)}"
             )
 
         case AsciiCollapseError():
             return (
-                "%d of %d paragraph(s) would need LLM ASCII repair; an "
-                "upstream pass probably returned untranslated text instead "
-                "of translating" % (error.stubborn, error.total)
+                f"{error.stubborn} of {error.total} paragraph(s) would need LLM ASCII "
+                "repair; an upstream pass probably returned untranslated text "
+                "instead of translating"
             )
 
         case UntranslatedError():
             return (
-                "l2l: pass [%s] paragraph %d is still untranslated after "
-                "retranslation: %r" % (error.pass_name, error.index + 1, error.sample)
+                f"l2l: pass [{error.pass_name}] paragraph {error.index + 1} is still "
+                f"untranslated after retranslation: {error.sample!r}"
             )
 
         case GlossaryReplyError():
-            return "l2l: [%s] the model reply is not valid glossary output: %s" % (
-                error.pass_name,
-                error.problem,
+            return (
+                f"l2l: [{error.pass_name}] the model reply is not valid glossary "
+                f"output: {error.problem}"
             )
 
         case InvalidOutputError():
             return (
-                "l2l: pass [%s] output still failed validation after %d repair "
-                "attempt(s): %s; pass --best-effort to keep the last reply instead"
-                % (error.pass_name, error.attempts, error.problem)
+                f"l2l: pass [{error.pass_name}] output still failed validation after "
+                f"{error.attempts} repair attempt(s): {error.problem}; pass "
+                "--best-effort to keep the last reply instead"
             )
 
         case FileError():
-            return "l2l: could not %s %s: %s" % (
-                error.operation,
-                error.path,
-                error.detail,
-            )
+            return f"l2l: could not {error.operation} {error.path}: {error.detail}"
 
         case _:
             assert_never(error)

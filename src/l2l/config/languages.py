@@ -23,7 +23,7 @@ def document_language(
 
     if not is_non_empty_string(language):
         return fail_config(
-            "%s: %s must be a non-empty string" % (path or "config", key)
+            "{}: {} must be a non-empty string".format(path or "config", key)
         )
 
     return Ok(language.strip())
@@ -39,7 +39,7 @@ def command_line_language(value: str | Unset, option: str) -> LanguageResult:
             return Ok(None)
 
         case str() as provided if not provided.strip():
-            return fail_config("%s must be a non-empty string" % option)
+            return fail_config(f"{option} must be a non-empty string")
 
         case str() as provided:
             return Ok(provided.strip())

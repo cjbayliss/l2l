@@ -355,7 +355,7 @@ def reject_exclusive_modes(parsed: Arguments) -> ParsedArguments:
     active = active_mode_flags(parsed)
     if len(active) > 1:
         return fail_config(
-            "%s cannot be combined with %s" % (" ".join(active[:-1]), active[-1])
+            "{} cannot be combined with {}".format(" ".join(active[:-1]), active[-1])
         )
     return Ok(parsed)
 
@@ -442,7 +442,7 @@ def announce_run_log(parsed: Arguments, console: Console, log: RunLog) -> IO[Non
         log.path,
         lambda path: io_when_unit(
             parsed.print_log_path,
-            console.log("l2l: log: %s" % path),
+            console.log(f"l2l: log: {path}"),
         ),
         lambda: io_pure(None),
     )
@@ -585,7 +585,7 @@ def dry_run_program(
 def log_setup_warnings(console: Console, setup: Setup) -> IO[None]:
     return reduce(
         io_and_then,
-        (console.log("warning: %s" % warning) for warning in setup_warnings(setup)),
+        (console.log(f"warning: {warning}") for warning in setup_warnings(setup)),
         io_pure(None),
     )
 
@@ -599,9 +599,7 @@ def check_config_program(
 ) -> IO[int]:
     def print_setup(setup: Setup) -> IO[int]:
         report = setup_report(setup, setup.ensure_paragraphs)
-        warnings = "".join(
-            "\nwarning: %s" % warning for warning in setup_warnings(setup)
-        )
+        warnings = "".join(f"\nwarning: {warning}" for warning in setup_warnings(setup))
         return io_map(write_stdout(stdout, report + warnings + "\n"), lambda _: 0)
 
     def with_console(console: Console) -> IO[int]:
@@ -635,7 +633,7 @@ def report_cache_prune(
         case Ok(count):
             noun = "entry" if count == 1 else "entries"
             return report_message_and_exit(
-                console, "l2l: pruned %d cache %s" % (count, noun), 0
+                console, f"l2l: pruned {count} cache {noun}", 0
             )
 
 
@@ -783,8 +781,8 @@ def write_extracted_glossary(
                             case Ok(_):
                                 return report_message_and_exit(
                                     console,
-                                    "l2l: wrote %d glossary entries to %s"
-                                    % (len(merged), output_path),
+                                    f"l2l: wrote {len(merged)} glossary entries "
+                                    f"to {output_path}",
                                     0,
                                 )
 

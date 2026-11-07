@@ -54,18 +54,20 @@ GLOSSARY_BLOCK_HEADER: Final = (
 
 
 def render_glossary_entry_line(entry: GlossaryEntry) -> str:
-    return "- %s%s%s%s" % (
+    return "- {}{}{}{}".format(
         entry.original,
-        (' = "%s"' % entry.translated) if entry.translated is not None else "",
-        (" (pronouns: %s)" % entry.pronouns) if entry.pronouns is not None else "",
-        (" (type: %s)" % entry.type) if entry.type != "other" else "",
+        (f' = "{entry.translated}"') if entry.translated is not None else "",
+        (f" (pronouns: {entry.pronouns})") if entry.pronouns is not None else "",
+        (f" (type: {entry.type})") if entry.type != "other" else "",
     )
 
 
 def render_glossary_block(entries: tuple[GlossaryEntry, ...]) -> str:
     return "\n".join(
-        (GLOSSARY_BLOCK_HEADER,)
-        + tuple(render_glossary_entry_line(entry) for entry in entries)
+        (
+            GLOSSARY_BLOCK_HEADER,
+            *tuple(render_glossary_entry_line(entry) for entry in entries),
+        )
     )
 
 
@@ -155,11 +157,11 @@ def glossary_entry_type_from_value(value: object) -> GlossaryEntryType | None:
 
 def glossary_entry_from_json(index: int, item: object) -> Result[GlossaryEntry, str]:
     if not is_json_object(item):
-        return Err("glossary entry %d must be an object" % index)
+        return Err(f"glossary entry {index} must be an object")
 
     original_value = item.get("original")
     if not is_non_empty_string(original_value):
-        return Err('glossary entry %d needs a non-empty "original" string' % index)
+        return Err(f'glossary entry {index} needs a non-empty "original" string')
 
     original = original_value
 
@@ -170,22 +172,17 @@ def glossary_entry_from_json(index: int, item: object) -> Result[GlossaryEntry, 
     )
     if invalid_keys:
         return Err(
-            'glossary entry %d ("%s") has invalid value(s) for: %s; '
-            "translated and pronouns must be a string or null"
-            % (index, original, ", ".join(invalid_keys))
+            f'glossary entry {index} ("{original}") has invalid value(s) for: '
+            f"{', '.join(invalid_keys)}; translated and pronouns must be a string "
+            "or null"
         )
 
     type_value = item.get("type", "other")
     entry_type = glossary_entry_type_from_value(type_value)
     if entry_type is None:
         return Err(
-            'glossary entry %d ("%s") has invalid type %r; allowed types are %s'
-            % (
-                index,
-                original,
-                type_value,
-                ", ".join(GLOSSARY_ENTRY_TYPES),
-            )
+            f'glossary entry {index} ("{original}") has invalid type {type_value!r}; '
+            f"allowed types are {', '.join(GLOSSARY_ENTRY_TYPES)}"
         )
 
     return Ok(
@@ -228,7 +225,7 @@ def parse_glossary_document(
 ) -> Result[tuple[GlossaryEntry, ...], TranslationError]:
     return result_map_error(
         parse_entries_document(document, glossary_entry_from_json),
-        lambda problem: ConfigError("%s: %s" % (path, problem)),
+        lambda problem: ConfigError(f"{path}: {problem}"),
     )
 
 
@@ -263,7 +260,7 @@ def parse_model_glossary_reply(
         return Err(
             GlossaryReplyError(
                 pass_name=path,
-                problem="model reply is not valid JSON: %s" % decoded.error,
+                problem=f"model reply is not valid JSON: {decoded.error}",
             )
         )
 
@@ -388,4 +385,4 @@ def entries_to_json_text(entries: tuple[GlossaryEntry, ...]) -> str:
 
 
 def extraction_user_message(target_language: str, text: str) -> str:
-    return "Target language: %s\n\nSource text:\n%s" % (target_language, text)
+    return f"Target language: {target_language}\n\nSource text:\n{text}"

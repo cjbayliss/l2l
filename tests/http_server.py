@@ -62,7 +62,8 @@ class LocalEndpoint:
     @property
     def url(self) -> str:
         host, port = self._server.server_address[:2]
-        return "http://%s:%d/v1" % (cast("str", host), port)
+        host_text = cast("str", host)
+        return f"http://{host_text}:{port}/v1"
 
     def __enter__(self) -> Self:
         return self

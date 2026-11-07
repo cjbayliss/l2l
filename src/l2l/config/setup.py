@@ -58,9 +58,9 @@ def validate_ascii_target_language(
             return None
 
         return (
-            "pass %d [%s]: ascii = true but target language %s uses the "
-            "%s script; set ascii = false or choose a Latin-script target"
-            % (position, pass_definition.name, language, scripts_description(scripts))
+            f"pass {position} [{pass_definition.name}]: ascii = true but target "
+            f"language {language} uses the {scripts_description(scripts)} script; "
+            "set ascii = false or choose a Latin-script target"
         )
 
     problems = tuple(

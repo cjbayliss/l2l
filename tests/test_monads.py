@@ -186,9 +186,7 @@ def test_io_traverse_collects_successes() -> None:
 
 def test_io_traverse_short_circuits_on_error() -> None:
     def step(number: int) -> IO[Result[int, str]]:
-        outcome: Result[int, str] = (
-            Err("bad %d" % number) if number == 2 else Ok(number)
-        )
+        outcome: Result[int, str] = Err(f"bad {number}") if number == 2 else Ok(number)
         return io_result(outcome)
 
     program: IO[Result[tuple[int, ...], str]] = io_traverse((1, 2, 3), step)
@@ -303,7 +301,7 @@ def test_io_catch_result_catches_exceptions_in_result_channel() -> None:
         raise RuntimeError("disaster")
 
     def handler(error: Exception) -> Result[int, str]:
-        return Err("caught: %s" % error)
+        return Err(f"caught: {error}")
 
     assert io_catch_result(IO(boom), handler).run() == Err("caught: disaster")
     assert io_catch_result(io_result(Ok(1)), handler).run() == Ok(1)
@@ -316,7 +314,7 @@ def test_reference_reads_writes_and_modifies() -> None:
     assert modify_reference(reference, lambda value: value + 1).run() == 10
 
     def double_and_label(value: int) -> tuple[int, str]:
-        return value * 2, "was %d" % value
+        return value * 2, f"was {value}"
 
     assert modify_reference_with(reference, double_and_label).run() == "was 10"
     assert read_reference(reference).run() == 20

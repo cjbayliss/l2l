@@ -378,7 +378,7 @@ def output_policy_salt_component(pass_definition: PassDefinition) -> str:
     )
     return salt(
         *(
-            "%s=%s" % (label, "none" if value is None else value)
+            "{}={}".format(label, "none" if value is None else value)
             for label, value in policy_values
         )
     )
@@ -403,7 +403,7 @@ def pass_salt(
     if output_component:
         base = salt(base, output_component)
 
-    return salt(base, "retry%d" % retry_attempt) if retry_attempt else base
+    return salt(base, f"retry{retry_attempt}") if retry_attempt else base
 
 
 def retranslation_salt(

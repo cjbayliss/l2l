@@ -656,8 +656,9 @@ def test_chat_rejects_a_stream_that_ends_without_a_completion_event() -> None:
 
 def test_chat_rejects_a_stream_truncated_by_length() -> None:
     console, _ = make_console()
-    chunks = stream_chunks("Hi") + [
-        {"choices": [{"delta": {}, "finish_reason": "length"}]}
+    chunks: list[JsonObject] = [
+        *stream_chunks("Hi"),
+        {"choices": [{"delta": {}, "finish_reason": "length"}]},
     ]
     http = FakeHttp([FakeStreamResponse(chunks)])
     run_context = make_context(console, http.open)
@@ -857,7 +858,7 @@ def test_http_post_json_reports_a_status_failure_from_a_local_server() -> None:
 
 def test_http_post_json_reports_an_unreachable_local_port() -> None:
     console, _ = make_console()
-    endpoint_url = "http://127.0.0.1:%d/v1" % closed_local_port()
+    endpoint_url = f"http://127.0.0.1:{closed_local_port()}/v1"
     result = http_post_json(local_context(console, endpoint_url), {"model": "m"}).run()
     assert isinstance(result, Err)
     failure = result.error

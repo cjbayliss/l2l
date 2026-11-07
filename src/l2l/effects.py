@@ -116,12 +116,10 @@ def load_toml(path: str, description: str) -> IO[Result[JsonObject, TranslationE
         except OSError as error:
             return fail_file_error(path, "read " + description, str(error))
         except tomllib.TOMLDecodeError as error:
-            return fail_config("cannot parse %s %s: %s" % (description, path, error))
+            return fail_config(f"cannot parse {description} {path}: {error}")
 
         if not is_json_object(loaded):
-            return fail_config(
-                "%s %s must contain only JSON values" % (description, path)
-            )
+            return fail_config(f"{description} {path} must contain only JSON values")
 
         return Ok(loaded)
 
@@ -136,7 +134,7 @@ def load_json(path: str, description: str) -> IO[Result[JsonValue, TranslationEr
         except OSError as error:
             return fail_file_error(path, "read " + description, str(error))
         except json.JSONDecodeError as error:
-            return fail_config("cannot parse %s %s: %s" % (description, path, error))
+            return fail_config(f"cannot parse {description} {path}: {error}")
 
         return Ok(loaded)
 
@@ -224,11 +222,11 @@ class RunLog:
 
 
 def run_log_path(cache_directory: str, now_value: float, process_id_value: int) -> str:
+    timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(now_value))
     return os.path.join(
         cache_directory,
         "logs",
-        "%s-%d.log"
-        % (time.strftime("%Y%m%d-%H%M%S", time.gmtime(now_value)), process_id_value),
+        f"{timestamp}-{process_id_value}.log",
     )
 
 
@@ -270,9 +268,7 @@ def run_log_write(log: RunLog, content: str) -> IO[None]:
 
 def log_entry(log: RunLog, label: str, body: str) -> IO[None]:
     def stamped(now_value: float) -> IO[None]:
-        return run_log_write(
-            log, "== %s %s\n%s\n\n" % (log_stamp(now_value), label, body)
-        )
+        return run_log_write(log, f"== {log_stamp(now_value)} {label}\n{body}\n\n")
 
     return io_bind(now(log.clock), stamped)
 

@@ -178,8 +178,8 @@ def block_failing_provider(run_context: Context, failure: TranslationError) -> I
 
         return io_map(
             run_context.console.log_verbose(
-                "l2l: openrouter provider %s failed; added to the blocklist, "
-                "retrying without it" % provider
+                f"l2l: openrouter provider {provider} failed; added to the blocklist, "
+                "retrying without it"
             ),
             lambda _: True,
         )
@@ -264,7 +264,7 @@ def noproxy_for(environment: Mapping[str, str]) -> Maybe[str]:
 
 
 def unexpected_response(body: object) -> Err[TranslationError]:
-    return fail_http("protocol", "unexpected response shape: %s" % str(body)[:500])
+    return fail_http("protocol", f"unexpected response shape: {str(body)[:500]}")
 
 
 def extract_message(
@@ -313,14 +313,14 @@ def collect_content_parts(
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         texts, thoughts = accumulator
         if not is_json_object(part):
-            return texts + (str(part),), thoughts
+            return (*texts, str(part)), thoughts
 
         if part.get("type") == "thinking":
             return texts, thoughts + collect_thinking_texts(part)
 
         text = part.get("text")
         if isinstance(text, str) and text:
-            return texts + (text,), thoughts
+            return (*texts, text), thoughts
 
         return accumulator
 
@@ -501,7 +501,7 @@ def ingest_raw_line(
             return Ok(replace(updated, completed=True, progress_update=None))
 
         case SseMalformed():
-            return fail_http("stream", "malformed SSE data: %r" % frame.data[:200])
+            return fail_http("stream", f"malformed SSE data: {frame.data[:200]!r}")
 
         case SseEvent():
             if isinstance(frame.payload.get("error"), dict):
@@ -548,9 +548,7 @@ def plain_reply(body: object) -> Result[ChatReply, TranslationError]:
     message, content = message_result.value
     texts, thoughts = flatten_content_parts(content)
     if not isinstance(texts, str):
-        return fail_http(
-            "protocol", "unexpected content type: %s" % type(texts).__name__
-        )
+        return fail_http("protocol", f"unexpected content type: {type(texts).__name__}")
 
     usage_report = body.get("usage")
     reported_usage = (
@@ -621,7 +619,7 @@ def is_error_status_line(line: bytes) -> bool:
 
 
 def append_bytes(collected: tuple[bytes, ...], item: bytes) -> tuple[bytes, ...]:
-    return collected + (item,)
+    return (*collected, item)
 
 
 class CurlHandle(Protocol):
@@ -833,7 +831,7 @@ def verbose_retry_log(
     run_context: Context, retry_number: int, retries: int, wait: float
 ) -> IO[None]:
     return run_context.console.log_verbose(
-        "l2l: transient failure; retry %d/%d in %.1fs" % (retry_number, retries, wait)
+        f"l2l: transient failure; retry {retry_number}/{retries} in {wait:.1f}s"
     )
 
 
@@ -903,14 +901,14 @@ def parse_json_body(
         loaded: JsonValue = json.loads(text)
         return Ok((text, loaded))
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        return fail_http("protocol", "invalid JSON response: %s" % error)
+        return fail_http("protocol", f"invalid JSON response: {error}")
 
 
 def read_failure(error: Exception) -> Result[tuple[str, JsonValue], TranslationError]:
     if isinstance(error, TRANSPORT_ERRORS):
-        return fail_http("unreachable", "response read failed: %s" % error)
+        return fail_http("unreachable", f"response read failed: {error}")
 
-    return fail_http("protocol", "%s: %s" % (type(error).__name__, error))
+    return fail_http("protocol", f"{type(error).__name__}: {error}")
 
 
 def log_failure[T](
@@ -1101,7 +1099,7 @@ def collect_stream(
         if isinstance(error, TRANSPORT_ERRORS):
             return fail_http("interrupted", str(error))
 
-        return fail_http("protocol", "%s: %s" % (type(error).__name__, error))
+        return fail_http("protocol", f"{type(error).__name__}: {error}")
 
     def drive(response: HttpResponse) -> IO[Result[StreamState, TranslationError]]:
         return io_catch_result(

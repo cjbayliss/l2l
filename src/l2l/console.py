@@ -43,10 +43,9 @@ class StatusView:
 
 
 def status_line_text(view: StatusView, now_value: float) -> str:
-    line = "%s: time elapsed: %.2fs, tokens received: %d" % (
-        view.label,
-        now_value - view.started,
-        view.tokens,
+    line = (
+        f"{view.label}: time elapsed: {now_value - view.started:.2f}s, "
+        f"tokens received: {view.tokens}"
     )
     return view.prefix + line if view.prefix else line
 
@@ -391,7 +390,7 @@ def erase_rows_render(rows: int, height: int) -> str:
         return ""
 
     count = min(rows, max(height - 1, 0))
-    up = "\x1b[%dA" % count if count > 0 else ""
+    up = f"\x1b[{count}A" if count > 0 else ""
     return up + "\x1b[J"
 
 

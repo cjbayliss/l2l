@@ -298,4 +298,4 @@ def stream_chunks(*texts: str) -> list[JsonObject]:
 
 
 def with_usage(chunks: list[JsonObject], usage: JsonObject) -> list[JsonObject]:
-    return chunks + [{"choices": [{"delta": {}}], "usage": usage}]
+    return [*chunks, {"choices": [{"delta": {}}], "usage": usage}]

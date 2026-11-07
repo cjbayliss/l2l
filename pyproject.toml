@@ -56,15 +56,9 @@ select = [
     "PYI",
 ]
 ignore = [
-    # The package standardises on printf-style formatting.
-    "UP031",
-    # `IO[None]` thunks keep an explicit `return None` on early exits.
-    "RET501",
     # The package translates text; strings legitimately contain fullwidth
     # and lookalike characters.
     "RUF001",
-    # The package standardises on `+` list concatenation.
-    "RUF005",
 ]
 
 # ARG (unused arguments) is deliberately not enabled: argparse actions,
@@ -111,7 +105,3 @@ reportImplicitOverride = "error"
 reportCallInDefaultInitializer = "error"
 reportUnnecessaryTypeIgnoreComment = "error"
 deprecateTypingAliases = true
-# `reportImplicitStringConcatenation` is deliberately not enabled: the package
-# standardises on multi-line implicit string concatenation for long message
-# literals (20 files, 116 sites), and explicit `+` or joining would be churn
-# with no type-safety benefit.
