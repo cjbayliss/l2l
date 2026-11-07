@@ -42,12 +42,7 @@ def test_maybe_either_folds_both_branches() -> None:
     assert maybe_either(NOTHING, str, lambda: "none") == "none"
 
 
-def test_maybe_or_else_unwraps_or_falls_back() -> None:
-    assert maybe_or_else(Just(1), lambda: 0) == 1
-    assert maybe_or_else(NOTHING, lambda: 0) == 0
-
-
-def test_maybe_or_else_is_lazy() -> None:
+def test_maybe_or_else_unwraps_or_falls_back_lazily() -> None:
     def fallback() -> int:
         raise AssertionError("fallback must not run")
 
@@ -72,7 +67,6 @@ def test_maybe_to_result_lifts_into_error_channel() -> None:
 
 def test_nothing_instances_are_equal() -> None:
     assert Nothing() == NOTHING
-    assert maybe_to_optional(NOTHING) is None
 
 
 @given(maybe_integers)

@@ -157,7 +157,7 @@ def test_repeat_until_runs_until_event_set() -> None:
 
         return IO(thunk)
 
-    repeat_until(action(), until, 0.001)()
+    repeat_until(action(), until, 0.0)()
     assert log == ["tick"]
 
 

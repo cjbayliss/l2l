@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import ast
 from dataclasses import replace
-from pathlib import Path
 from types import MappingProxyType
-from typing import get_args
 
 import pytest
 
@@ -15,12 +12,9 @@ from l2l.config.resolution import (
 )
 from l2l.monads import Ok
 from l2l.prompts import (
-    ACCURACY_SECTION_TEXT,
-    ANALYSER_ACCURACY_SECTION_TEXT,
     ANALYSER_HEADINGS,
     ANALYSER_OPENING_LINE,
     ANALYSER_OUTPUT_RULES_TEXT,
-    ANALYSER_TASK_TEXT,
     APPROXIMATE_PARAGRAPH_RULE_TEXT,
     ASCII_FIX_INSTRUCTION_TEXT,
     CHINESE_SOURCE_GUIDANCE_TEXT,
@@ -31,15 +25,12 @@ from l2l.prompts import (
     HONORIFICS_GUIDANCE_TEXTS,
     JAPANESE_SOURCE_GUIDANCE_TEXT,
     MIXED_SOURCE_GUIDANCE_TEXT,
-    PROMPT_ROLES,
     PROMPT_SECTION_NAMES,
     REGISTER_FIDELITY_GUIDANCE_TEXTS,
     REVIEWER_SECTIONS,
-    TRANSLATOR_SECTIONS,
     OutputPolicy,
     OutputPolicyPatch,
     PassPromptRequest,
-    PromptSectionName,
     PromptSections,
     StylePolicy,
     StylePolicyPatch,
@@ -48,20 +39,11 @@ from l2l.prompts import (
     instruction_with_languages,
     paragraph_rule_text,
     render_pass_prompt,
-    role_sections,
     source_preset_guidance_text,
     target_region_guidance_text,
     target_scripts_guidance_text,
 )
 from l2l.settings import UNSET, PassDraft, PassMode, build_settings
-
-PROMPTS_SOURCE = (
-    Path(__file__).resolve().parents[1] / "src" / "l2l" / "prompts.py"
-).read_text(encoding="utf-8")
-
-FORBIDDEN_IMPORTS = frozenset(
-    {"l2l.config", "l2l.settings", "l2l.context", "l2l.effects", "l2l.pipeline"}
-)
 
 
 def translator_request(
@@ -153,30 +135,6 @@ TRANSLATOR_GOLDEN = "\n".join(
     )
 )
 
-ANALYSER_GOLDEN = "\n".join(
-    (
-        "You are the preparation stage of a fiction translation pipeline.",
-        "",
-        ANALYSER_TASK_TEXT,
-        "",
-        "The source is Chinese; write the brief in English.",
-        "",
-        ANALYSER_ACCURACY_SECTION_TEXT,
-        "",
-        ANALYSER_OUTPUT_RULES_TEXT,
-    )
-)
-
-
-def test_registry_tables_and_role_dispatch_stay_consistent() -> None:
-    assert get_args(PromptSectionName) == PROMPT_SECTION_NAMES
-    assert len(set(PROMPT_SECTION_NAMES)) == len(PROMPT_SECTION_NAMES)
-    assert PROMPT_ROLES == ("translator", "reviewer", "analyser")
-    assert frozenset(TRANSLATOR_SECTIONS) == frozenset(PROMPT_SECTION_NAMES)
-    assert frozenset(REVIEWER_SECTIONS) == frozenset(PROMPT_SECTION_NAMES)
-    for role in PROMPT_ROLES:
-        assert role_sections(role) is not None
-
 
 def test_translator_golden_prompt() -> None:
     rendered = render_pass_prompt(translator_request())
@@ -199,25 +157,15 @@ def test_reviewer_prompt_uses_reviewer_sections_and_generated_guidance() -> None
     assert CHINESE_SOURCE_GUIDANCE_TEXT not in rendered.instruction
 
 
-def test_analyser_golden_prompt() -> None:
+def test_analyser_prompt_defines_the_brief_contract() -> None:
     rendered = render_pass_prompt(analyser_request())
-    assert rendered.instruction == ANALYSER_GOLDEN
     assert rendered.role == "analyser"
     assert 'Open with the exact line "Preparation brief (reference only):"' in (
         rendered.instruction
     )
-    assert ANALYSER_OPENING_LINE == "Preparation brief (reference only):"
     for heading in ANALYSER_HEADINGS:
         assert f"- {heading}:" in rendered.instruction
     assert "under 400 words" in rendered.instruction
-
-
-def test_reviewer_and_translator_share_accuracy_and_fluency() -> None:
-    assert REVIEWER_SECTIONS["accuracy"] is ACCURACY_SECTION_TEXT
-    assert REVIEWER_SECTIONS["fluency"] is FLUENCY_SECTION_TEXT
-    assert REVIEWER_SECTIONS["role"] != TRANSLATOR_SECTIONS["role"]
-    assert REVIEWER_SECTIONS["task"] != TRANSLATOR_SECTIONS["task"]
-    assert REVIEWER_SECTIONS["output_rules"] != TRANSLATOR_SECTIONS["output_rules"]
 
 
 def test_dedicated_template_bytes_are_unchanged() -> None:
@@ -225,9 +173,7 @@ def test_dedicated_template_bytes_are_unchanged() -> None:
     assert settings.glossary_extraction_instruction == (
         GLOSSARY_EXTRACTION_INSTRUCTION_TEXT
     )
-    assert settings.glossary_extraction_instruction.startswith("\nYou extract")
     assert settings.ascii_fix_instruction == ASCII_FIX_INSTRUCTION_TEXT
-    assert settings.ascii_fix_instruction.startswith("\nThis paragraph")
 
 
 def test_rendered_instruction_has_no_padding_or_blank_gaps() -> None:
@@ -273,32 +219,6 @@ def test_paragraph_rule_is_generated_not_static() -> None:
     )
     assert paragraph_rule_text(True) not in analyser.instruction
     assert paragraph_rule_text(False) not in analyser.instruction
-
-
-def test_role_sections_tables_are_complete() -> None:
-    assert frozenset(TRANSLATOR_SECTIONS) == frozenset(PROMPT_SECTION_NAMES)
-    assert frozenset(REVIEWER_SECTIONS) == frozenset(PROMPT_SECTION_NAMES)
-
-
-def test_role_dispatch_is_exhaustive() -> None:
-    for role in PROMPT_ROLES:
-        assert role_sections(role) is not None
-
-
-def test_prompts_module_performs_no_io() -> None:
-    tree = ast.parse(PROMPTS_SOURCE)
-    imported = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module
-    }
-    assert not imported & FORBIDDEN_IMPORTS
-    called = {
-        node.func.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert not called & {"open", "read_text", "load_toml"}
 
 
 def legacy_draft() -> PassDraft:

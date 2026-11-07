@@ -21,18 +21,12 @@ def test_python_dash_m_l2l_prints_help() -> None:
     assert "usage:" in completed.stdout
 
 
-@pytest.mark.parametrize(
-    ("module", "arguments"),
-    [
-        ("l2l.__main__", ["--version"]),
-    ],
-)
-def test_module_entrypoints_run_their_programs(
-    monkeypatch: pytest.MonkeyPatch, module: str, arguments: list[str]
+def test_main_module_entrypoint_runs_the_program(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(sys, "argv", [module, *arguments])
+    monkeypatch.setattr(sys, "argv", ["l2l.__main__", "--version"])
     with pytest.raises(SystemExit) as raised:
-        runpy.run_module(module, run_name="__main__")
+        runpy.run_module("l2l.__main__", run_name="__main__")
     assert raised.value.code == 0
 
 

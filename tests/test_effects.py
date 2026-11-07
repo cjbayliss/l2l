@@ -134,10 +134,9 @@ def test_cache_entry_paths_includes_tmp_orphans(tmp_path: Path) -> None:
     (tmp_path / "note.log").write_text("log", encoding="utf-8")
     paths = cache_entry_paths(str(tmp_path)).run()
     assert isinstance(paths, Ok)
-    assert sorted(path.endswith((".txt", ".txt.tmp")) for path in paths.value) == [
-        True,
-        True,
-    ]
+    assert frozenset(paths.value) == frozenset(
+        {str(tmp_path / "key.txt"), str(tmp_path / "key.txt.tmp")}
+    )
     assert cache_entry_paths(str(tmp_path / "absent")).run() == Ok(())
 
 

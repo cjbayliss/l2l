@@ -189,30 +189,18 @@ def test_untranslated_glossary_entries_flags_leftover_originals() -> None:
     assert untranslated_glossary_entries(entries, "拳法 and TCP") == ()
 
 
-def test_parse_model_glossary_reply_accepts_the_wrapper_object() -> None:
-    reply = (
+@pytest.mark.parametrize(
+    "reply",
+    [
         '```json\n{"entries": [{"original": "南京", "translated": "Nanjing", '
-        '"pronouns": null, "type": "place"}]}\n```'
-    )
-    result = parse_model_glossary_reply(reply, "out.json")
-    assert isinstance(result, Ok)
-    assert result.value == (entry("南京", "Nanjing", entry_type="place"),)
-
-
-def test_parse_model_glossary_reply_accepts_a_bare_array() -> None:
-    result = parse_model_glossary_reply(
-        '[{"original": "南京", "translated": "Nanjing", "type": "place"}]', "out.json"
-    )
-    assert isinstance(result, Ok)
-    assert result.value == (entry("南京", "Nanjing", entry_type="place"),)
-
-
-def test_parse_model_glossary_reply_accepts_a_prefixed_array() -> None:
-    result = parse_model_glossary_reply(
+        '"pronouns": null, "type": "place"}]}\n```',
+        '[{"original": "南京", "translated": "Nanjing", "type": "place"}]',
         'Here are the entries: [{"original": "南京", "translated": "Nanjing", '
         '"type": "place"}]',
-        "out.json",
-    )
+    ],
+)
+def test_parse_model_glossary_reply_accepts_supported_envelopes(reply: str) -> None:
+    result = parse_model_glossary_reply(reply, "out.json")
     assert isinstance(result, Ok)
     assert result.value == (entry("南京", "Nanjing", entry_type="place"),)
 

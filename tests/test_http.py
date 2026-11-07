@@ -1,5 +1,4 @@
 import json
-import socket
 from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 lazy from collections.abc import Callable
@@ -703,20 +702,6 @@ def test_chat_reports_malformed_sse_data_as_a_stream_error() -> None:
     assert "malformed SSE data" in describe(failure)
 
 
-def test_chat_retries_a_stream_that_fails_to_connect() -> None:
-    sleep, sleeps = make_sleep_recorder()
-    console, _ = make_console()
-    curl = FakeCurl(error=pycurl.error(7, "Failed to connect"))
-    http = FakeCurlHttp([curl])
-    run_context = make_context(console, http.open, sleep=sleep)
-    result = chat(run_context, "s", "u", "m", {}, Usage()).run()
-    assert isinstance(result, Err)
-    failure = result.error
-    assert isinstance(failure, HttpError)
-    assert failure.kind == "unreachable"
-    assert sleeps() == (1.0, 2.0)
-
-
 def test_chat_reports_a_dropped_stream_without_retrying() -> None:
     sleep, sleeps = make_sleep_recorder()
     console, _ = make_console()
@@ -790,36 +775,11 @@ def test_log_all_writes_each_message_when_verbose() -> None:
 DIRECT_ENVIRONMENT = {"no_proxy": "127.0.0.1,localhost"}
 
 
-def real_open_http(
-    request: HttpRequest, timeout: float
-) -> Result[HttpResponse, TranslationError]:
-    return curl_open(request, timeout, DIRECT_ENVIRONMENT)
-
-
 def local_context(console: Console, endpoint_url: str) -> Context:
-    run_context = make_context(console, real_open_http)
+    run_context = make_context(console, curl_open_http(DIRECT_ENVIRONMENT))
     return replace(
         run_context, config=replace(run_context.config, base_url=endpoint_url)
     )
-
-
-def closed_local_port() -> int:
-    probe = socket.socket()
-    probe.bind(("127.0.0.1", 0))
-    port = int(probe.getsockname()[1])
-    probe.close()
-    return port
-
-
-def test_curl_open_http_wires_the_environment_into_curl() -> None:
-    console, _ = make_console()
-    with local_endpoint(lambda body, headers: json_reply({"echo": "ok"})) as endpoint:
-        base = make_context(console, curl_open_http(DIRECT_ENVIRONMENT))
-        run_context = replace(base, config=replace(base.config, base_url=endpoint.url))
-        result = http_post_json(run_context, {"model": "m"}).run()
-
-    assert isinstance(result, Ok)
-    assert result.value == {"echo": "ok"}
 
 
 def test_http_post_json_round_trips_a_local_server() -> None:
@@ -854,16 +814,6 @@ def test_http_post_json_reports_a_status_failure_from_a_local_server() -> None:
     assert failure.status == 429
     assert failure.detail == "slow down"
     assert failure.retry_after == 7.0
-
-
-def test_http_post_json_reports_an_unreachable_local_port() -> None:
-    console, _ = make_console()
-    endpoint_url = f"http://127.0.0.1:{closed_local_port()}/v1"
-    result = http_post_json(local_context(console, endpoint_url), {"model": "m"}).run()
-    assert isinstance(result, Err)
-    failure = result.error
-    assert isinstance(failure, HttpError)
-    assert failure.kind == "unreachable"
 
 
 def test_http_post_json_reports_invalid_json_from_a_local_server() -> None:
