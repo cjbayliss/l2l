@@ -20,7 +20,7 @@ from l2l import __version__, cli, effects, pipeline
 from l2l.config import setup as config_setup
 from l2l.errors import FileError, TranslationError, describe, fail_http
 from l2l.monads import IO, Err, Ok, Result, io_pure, io_result
-from l2l.settings import Arguments
+from l2l.settings import Arguments, Unset
 lazy from l2l.json_values import JsonObject
 
 if TYPE_CHECKING:
@@ -1120,7 +1120,7 @@ def test_parse_arguments_rejects_invalid_or_conflicting_modes() -> None:
         (["-c", "cfg.toml", "--prune-cache", "7", "--dry-run"], "cannot be combined"),
     )
     for arguments, fragment in invalid_argument_groups:
-        result = cli.parse_arguments(arguments).run()
+        result = cli.parse_arguments(arguments, {}).run()
         assert isinstance(result, Err)
         assert fragment in describe(result.error)
 
@@ -1132,7 +1132,7 @@ def test_parse_arguments_accepts_single_modes() -> None:
         ["-c", "cfg.toml", "--extract-glossary", "glossary.json"],
         ["-c", "cfg.toml", "--dry-run"],
     ):
-        result = cli.parse_arguments(arguments).run()
+        result = cli.parse_arguments(arguments, {}).run()
         assert isinstance(result, Ok)
         assert isinstance(result.value, Arguments)
 
@@ -1275,6 +1275,70 @@ def test_parse_args_defaults_and_short_flags() -> None:
     assert arguments.verbose
 
 
+def test_parse_args_glossary_and_extract_default_to_state_home() -> None:
+    environment = {"XDG_STATE_HOME": "/xdg-state"}
+    glossary_only = cli.parse_args(["-c", "cfg.toml", "-g"], environment)
+    assert glossary_only.glossary == ("/xdg-state/l2l/glossary.json",)
+    assert glossary_only.default_glossary == "/xdg-state/l2l/glossary.json"
+
+    extract_only = cli.parse_args(["-c", "cfg.toml", "-E"], environment)
+    assert extract_only.extract_glossary == "/xdg-state/l2l/glossary.json"
+
+    without_flags = cli.parse_args(["-c", "cfg.toml"], environment)
+    assert without_flags.glossary == ()
+    assert isinstance(without_flags.extract_glossary, Unset)
+
+
+def test_extract_glossary_defaults_to_state_home(tmp_path: Path) -> None:
+    state_home = tmp_path / "xdg-state"
+    http = FakeHttp([glossary_reply([{"original": "大观园", "translated": "G"}])])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        ["-c", str(write_config(tmp_path)), "-E"],
+        {**cache_environment(tmp_path), "XDG_STATE_HOME": str(state_home)},
+        io.StringIO("book text"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    output = state_home / "l2l" / "glossary.json"
+    assert code == 0
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert [item["original"] for item in document] == ["大观园"]
+    assert f"wrote 1 glossary entries to {output}" in stderr.getvalue()
+
+
+def test_update_glossary_pass_defaults_to_state_home(tmp_path: Path) -> None:
+    state_home = tmp_path / "xdg-state"
+    http = FakeHttp(
+        [
+            glossary_reply([{"original": "大观园", "translated": "Grand View Garden"}]),
+            translation_response("Hello."),
+        ]
+    )
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            "-c",
+            str(write_update_glossary_config(tmp_path)),
+            "--no-cache",
+            "-g",
+        ],
+        {**cache_environment(tmp_path), "XDG_STATE_HOME": str(state_home)},
+        io.StringIO("你好大观园。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    output = state_home / "l2l" / "glossary.json"
+    assert code == 0
+    assert stdout.getvalue().strip() == "Hello."
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert [item["original"] for item in document] == ["大观园"]
+
+
 def test_update_glossary_pass_with_malformed_reply_exits_one(tmp_path: Path) -> None:
     glossary = tmp_path / "glossary.json"
     glossary.write_text("[]", encoding="utf-8")
@@ -1346,20 +1410,18 @@ def test_update_glossary_pass_reports_a_glossary_write_failure(
     glossary = tmp_path / "glossary.json"
     glossary.write_text("[]", encoding="utf-8")
 
-    def failing_write(
-        path: str, content: str, description: str
-    ) -> IO[Result[None, TranslationError]]:
+    def failing_write(path: str, content: str) -> IO[Result[None, TranslationError]]:
         return io_result(
             Err(
                 FileError(
                     path,
-                    "write " + description,
+                    "write glossary file",
                     "[Errno 13] Permission denied",
                 )
             )
         )
 
-    monkeypatch.setattr(pipeline, "write_text_file", failing_write)
+    monkeypatch.setattr(pipeline, "write_glossary_file", failing_write)
     http = FakeHttp([glossary_reply([{"original": "大观园", "translated": "G"}])])
     stdout, stderr = io.StringIO(), io.StringIO()
     code = cli.main(

@@ -4,7 +4,7 @@ import os
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from l2l.effects import load_json
+from l2l.effects import load_json, path_exists
 from l2l.errors import TranslationError, fail_config
 from l2l.glossary import (
     merge_glossary_entries,
@@ -15,7 +15,9 @@ from l2l.monads import (
     IO,
     Ok,
     Result,
+    io_bind,
     io_map,
+    io_result,
     io_traverse,
     result_bind,
     result_bind_io,
@@ -58,8 +60,22 @@ def glossary_paths(
     )
 
 
+def load_glossary_document(
+    path: str, default_path: str | None
+) -> IO[Result[JsonValue, TranslationError]]:
+    if path != default_path:
+        return load_json(path, "glossary file")
+
+    def after_existence(exists: bool) -> IO[Result[JsonValue, TranslationError]]:
+        # The default state file is managed by l2l itself and may not exist
+        # yet; treat it as an empty glossary instead of failing the run.
+        return load_json(path, "glossary file") if exists else io_result(Ok([]))
+
+    return io_bind(path_exists(path), after_existence)
+
+
 def load_glossaries(
-    paths: tuple[str, ...],
+    paths: tuple[str, ...], default_path: str | None = None
 ) -> IO[Result[Glossaries, TranslationError]]:
     def parsed(
         loaded_result: Result[tuple[JsonValue, ...], TranslationError],
@@ -76,7 +92,9 @@ def load_glossaries(
         )
 
     return io_map(
-        io_traverse(paths, lambda item_path: load_json(item_path, "glossary file")),
+        io_traverse(
+            paths, lambda item_path: load_glossary_document(item_path, default_path)
+        ),
         parsed,
     )
 
@@ -85,13 +103,14 @@ def resolve_glossaries(
     path: str,
     document_result: DocumentResult,
     command_line_paths: tuple[str, ...],
+    default_path: str | None = None,
 ) -> IO[Result[Glossaries, TranslationError]]:
     return result_bind_io(
         result_bind(
             document_result,
             lambda document: glossary_paths(path, document, command_line_paths),
         ),
-        load_glossaries,
+        lambda paths: load_glossaries(paths, default_path),
     )
 
 

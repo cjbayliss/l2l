@@ -13,7 +13,7 @@ from l2l.cache import (
     non_empty,
     store_translation,
 )
-from l2l.effects import now, write_stdout, write_text_file
+from l2l.effects import now, write_glossary_file, write_stdout
 from l2l.errors import (
     TranslationError,
     describe,
@@ -1033,7 +1033,7 @@ def apply_glossary_update(
         )
 
     return io_bind(
-        write_text_file(update_path, entries_to_json_text(merged), "glossary file"),
+        write_glossary_file(update_path, entries_to_json_text(merged)),
         after_write,
     )
 

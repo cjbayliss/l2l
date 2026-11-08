@@ -155,6 +155,7 @@ class Arguments:
     best_effort: bool = False
     glossary: tuple[str, ...] = ()
     extract_glossary: str | Unset = UNSET
+    default_glossary: str | Unset = UNSET
     no_structured_output: bool = False
 
 

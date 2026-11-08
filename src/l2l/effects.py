@@ -94,6 +94,32 @@ def user_config_path(environment: Mapping[str, str]) -> IO[str]:
     )
 
 
+def user_state_glossary_path(environment: Mapping[str, str]) -> IO[str]:
+    return IO(
+        lambda: os.path.join(
+            environment.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+            "l2l",
+            "glossary.json",
+        )
+    )
+
+
+def ensure_parent_directory(path: str) -> IO[Result[None, TranslationError]]:
+    def thunk() -> Result[None, TranslationError]:
+        parent = os.path.dirname(path)
+        if not parent:
+            return Ok(None)
+
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError as error:
+            return fail_file_error(parent, "create parent directory of", str(error))
+
+        return Ok(None)
+
+    return IO(thunk)
+
+
 def resolve_cache_directory(environment: Mapping[str, str]) -> IO[str]:
     def thunk() -> str:
         directory = os.path.join(
@@ -463,6 +489,13 @@ def write_text_file(
         return Ok(None)
 
     return IO(thunk)
+
+
+def write_glossary_file(path: str, content: str) -> IO[Result[None, TranslationError]]:
+    return io_bind(
+        ensure_parent_directory(path),
+        lambda _: write_text_file(path, content, "glossary file"),
+    )
 
 
 def append_text_file(

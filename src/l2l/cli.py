@@ -4,8 +4,9 @@ import argparse
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import reduce
+from types import MappingProxyType
 from typing import TYPE_CHECKING, TextIO, final, override
 
 from l2l import __version__
@@ -29,8 +30,9 @@ from l2l.effects import (
     run_filter_script,
     stream_isatty,
     time_sleep,
+    user_state_glossary_path,
+    write_glossary_file,
     write_stdout,
-    write_text_file,
 )
 from l2l.errors import TranslationError, describe, fail_config, fail_filter
 from l2l.filtering import (
@@ -105,7 +107,7 @@ class VersionExitAction(argparse.Action):
         raise EarlyExitText("l2l " + __version__)
 
 
-def add_arguments(parser: argparse.ArgumentParser) -> None:
+def add_arguments(parser: argparse.ArgumentParser, default_glossary: str) -> None:
     parser.add_argument(
         "-c",
         "--config",
@@ -116,19 +118,25 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "-g",
         "--glossary",
         action="append",
+        nargs="?",
         metavar="FILE",
+        const=default_glossary,
         default=[],
         help="JSON glossary file with mandatory renderings; repeatable; "
         "later files override earlier entries; generated and updated "
-        "entries are written to the first file",
+        "entries are written to the first file (default FILE: "
+        "$XDG_STATE_HOME/l2l/glossary.json)",
     )
     parser.add_argument(
         "-E",
         "--extract-glossary",
+        nargs="?",
         metavar="FILE",
         dest="extract_glossary",
+        const=default_glossary,
         help="extract a starting glossary from the stdin text with one "
-        "model call, write it to FILE, and exit",
+        "model call, write it to FILE, and exit (default FILE: "
+        "$XDG_STATE_HOME/l2l/glossary.json)",
     )
     parser.add_argument(
         "-b",
@@ -208,7 +216,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(default_glossary: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="l2l",
         description="Translate text between any pair of languages on "
@@ -216,8 +224,24 @@ def build_parser() -> argparse.ArgumentParser:
         add_help=False,
         allow_abbrev=False,
     )
-    add_arguments(parser)
+    add_arguments(parser, default_glossary)
     return parser
+
+
+def default_glossary_file(environment: Mapping[str, str]) -> str:
+    return user_state_glossary_path(environment).run()
+
+
+def parse_args(
+    arguments: Sequence[str], environment: Mapping[str, str] | None = None
+) -> Arguments:
+    resolved_environment: Mapping[str, str] = (
+        MappingProxyType({}) if environment is None else environment
+    )
+    parsed = arguments_from_namespace(
+        build_parser(default_glossary_file(resolved_environment)).parse_args(arguments)
+    )
+    return replace(parsed, default_glossary=default_glossary_file(resolved_environment))
 
 
 def arguments_from_namespace(parsed: argparse.Namespace) -> Arguments:
@@ -238,10 +262,6 @@ def arguments_from_namespace(parsed: argparse.Namespace) -> Arguments:
         extract_glossary=provided(parsed.extract_glossary),
         no_structured_output=parsed.no_structured_output,
     )
-
-
-def parse_args(arguments: Sequence[str]) -> Arguments:
-    return arguments_from_namespace(build_parser().parse_args(arguments))
 
 
 type ParsedArguments = Result[Arguments | EarlyExitText, TranslationError]
@@ -270,11 +290,11 @@ def reject_exclusive_modes(parsed: Arguments) -> ParsedArguments:
 
 
 def parse_arguments(
-    arguments: Sequence[str],
+    arguments: Sequence[str], environment: Mapping[str, str]
 ) -> IO[ParsedArguments]:
     def thunk() -> ParsedArguments:
         try:
-            return reject_exclusive_modes(parse_args(arguments))
+            return reject_exclusive_modes(parse_args(arguments, environment))
         except EarlyExitText as early_exit:
             return Ok(early_exit)
         except SystemExit:
@@ -422,7 +442,7 @@ def main(
             ),
         )
 
-    return io_bind(parse_arguments(arguments), after_parse)
+    return io_bind(parse_arguments(arguments, environment), after_parse)
 
 
 def with_console_io(
@@ -778,11 +798,7 @@ def write_extracted_glossary(
                                 )
 
                     return io_bind(
-                        write_text_file(
-                            output_path,
-                            entries_to_json_text(merged),
-                            "glossary file",
-                        ),
+                        write_glossary_file(output_path, entries_to_json_text(merged)),
                         report,
                     )
 

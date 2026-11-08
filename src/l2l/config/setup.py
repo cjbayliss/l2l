@@ -37,6 +37,7 @@ from l2l.settings import (
     PassDefinition,
     Setup,
     effective_target_language,
+    value_if_set,
 )
 
 
@@ -163,7 +164,12 @@ def assemble_setup(
             resolve_passes(path, document_result)
             if resolve_pipeline_passes
             else io_result(Ok(ResolvedPasses.empty())),
-            resolve_glossaries(path, document_result, arguments.glossary),
+            resolve_glossaries(
+                path,
+                document_result,
+                arguments.glossary,
+                value_if_set(arguments.default_glossary),
+            ),
         ),
         setup_with,
     )
