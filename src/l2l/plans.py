@@ -170,7 +170,7 @@ def translated_context_parts(translated_context: tuple[str, ...]) -> tuple[str, 
     )
 
 
-def context_parts(context: tuple[str, ...]) -> tuple[str, ...]:
+def context_parts(context: tuple[str, ...], source_text: str) -> tuple[str, ...]:
     if not context:
         return ()
 
@@ -179,7 +179,8 @@ def context_parts(context: tuple[str, ...]) -> tuple[str, ...]:
         "continue the story from them, and do not include them in the "
         "output):",
         *context,
-        "Translate only the paragraph that follows, as exactly one paragraph:",
+        "Translate only the source text that follows, as exactly "
+        f"{count_paragraphs(source_text)} paragraph(s):",
     )
 
 
@@ -191,12 +192,13 @@ def build_pass_user(
     translated_context: tuple[str, ...] = (),
 ) -> str:
     has_draft = work_chunk is not None and work_chunk != source_chunk
-    source_block = (f"Source text:\n{source_chunk}") if has_draft else source_chunk
+    tagged_source = f"<<<SOURCE\n{source_chunk}\nSOURCE>>>"
+    source_block = f"Source text:\n{tagged_source}" if has_draft else tagged_source
     draft_block = (f"Current draft:\n{work_chunk}") if has_draft else ""
     parts = (
         analysis.strip() if analysis else "",
         *translated_context_parts(translated_context),
-        *context_parts(context),
+        *context_parts(context, source_chunk),
         source_block,
         draft_block,
     )
@@ -486,10 +488,11 @@ def build_unit_retry_user(
         (
             f"Your previous reply below does not satisfy the output rules: {problem}.",
             *translated_context_parts(translated_context),
-            *context_parts(context),
+            *context_parts(context, source_chunk),
             "Translate only the source text between the <<<SOURCE and SOURCE>>> "
-            "markers, as exactly one paragraph; do not translate the context "
-            "paragraphs and do not repeat the rejected reply.",
+            f"markers, as exactly {count_paragraphs(source_chunk)} paragraph(s); "
+            "do not translate the context paragraphs and do not repeat the "
+            "rejected reply.",
             f"<<<SOURCE\n{source_chunk}\nSOURCE>>>",
             draft_part,
             f"Your previous rejected reply (do not copy it):\n<<<\n{bad_output}\n>>>",

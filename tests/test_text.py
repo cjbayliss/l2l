@@ -230,11 +230,13 @@ def test_build_chat_payload() -> None:
 
 def test_build_pass_user() -> None:
     user = build_pass_user("src", "draft", " brief ")
-    assert user == ("brief\n\nSource text:\nsrc\n\nCurrent draft:\ndraft")
+    assert user == (
+        "brief\n\nSource text:\n<<<SOURCE\nsrc\nSOURCE>>>\n\nCurrent draft:\ndraft"
+    )
     same = build_pass_user("src", "src", None)
-    assert same == "src"
+    assert same == "<<<SOURCE\nsrc\nSOURCE>>>"
     blank = build_pass_user("src", None, "   ")
-    assert blank == "src"
+    assert blank == "<<<SOURCE\nsrc\nSOURCE>>>"
 
 
 def test_unit_output_problem_accepts_matching_reply() -> None:
@@ -293,18 +295,19 @@ def test_unit_output_problem_flags_implausible_length() -> None:
 
 
 def test_context_parts_and_build_pass_user_with_context() -> None:
-    assert context_parts(()) == ()
+    assert context_parts((), "src") == ()
     user = build_pass_user("src", None, None, ("before", "after"))
     assert user.count("reference only") == 1
     assert "before\n\nafter" in user
-    assert user.endswith("src")
+    assert "as exactly 1 paragraph(s)" in user
+    assert user.endswith("<<<SOURCE\nsrc\nSOURCE>>>")
 
     labeled = build_pass_user("src", None, None, ("after",), ("before",))
     assert "Already-translated context" in labeled
     assert labeled.count("reference only") == 2
     assert labeled.index("Already-translated") < labeled.index("Context paragraphs")
     assert labeled.index("before") < labeled.index("after")
-    assert labeled.endswith("src")
+    assert labeled.endswith("<<<SOURCE\nsrc\nSOURCE>>>")
 
     assert (
         build_pass_user("src", None, None, (), ("before",)).count("reference only") == 1
@@ -325,8 +328,17 @@ def test_build_unit_retry_user_includes_problem_and_reply() -> None:
     user = build_unit_retry_user("src", "src", (), "bad reply", "the reply was empty")
     assert "the reply was empty" in user
     assert "rejected reply" in user
+    assert "as exactly 1 paragraph(s)" in user
     assert "<<<SOURCE\nsrc\nSOURCE>>>" in user
     assert user.endswith("the translation of the source text.")
+
+
+def test_build_unit_retry_user_uses_numeric_source_paragraph_count() -> None:
+    user = build_unit_retry_user(
+        "first\n\nsecond\n\nthird", None, (), "bad reply", "problem"
+    )
+    assert "as exactly 3 paragraph(s)" in user
+    assert "as exactly one paragraph" not in user
 
 
 def test_build_unit_retry_user_keeps_rejected_reply_after_the_source() -> None:

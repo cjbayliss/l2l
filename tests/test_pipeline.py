@@ -334,7 +334,8 @@ def test_retranslation_retranslates_an_echoed_paragraph() -> None:
     assert retry_user.startswith("Context paragraphs (reference only")
     assert "你好。" in retry_user
     assert "三。" in retry_user
-    assert retry_user.endswith("世界。")
+    assert "as exactly 1 paragraph(s)" in retry_user
+    assert retry_user.endswith("<<<SOURCE\n世界。\nSOURCE>>>")
 
 
 def test_ascii_stage_preserves_retranslation_validated_and_problem() -> None:
@@ -1149,13 +1150,14 @@ def test_refine_pass_echoing_source_language_is_repaired_with_draft() -> None:
     assert stdout.getvalue() == "Hello again.\n\nWorld again.\n"
     assert len(http.requests) == 4
     initial_user = json.loads(http.requests[1].body)["messages"][1]["content"]
-    assert "Source text:\n你好。\n\n世界。" in initial_user
+    assert "Source text:\n<<<SOURCE\n你好。\n\n世界。\nSOURCE>>>" in initial_user
     assert "Current draft:\nHello.\n\nWorld." in initial_user
     retry_user = json.loads(http.requests[2].body)["messages"][1]["content"]
     assert "does not satisfy the output rules" in retry_user
     assert (
         "the reply is not in the target language (English: Latin script)" in retry_user
     )
+    assert "as exactly 2 paragraph(s)" in retry_user
     assert "<<<SOURCE\n你好。\n\n世界。\nSOURCE>>>" in retry_user
     assert "Current draft (correct this where the problem requires it):\n" in retry_user
     assert "Hello.\n\nWorld." in retry_user
@@ -1602,8 +1604,13 @@ def test_chunk_planning_splits_paragraphs_to_request_budget() -> None:
     assert code == 0
     assert stdout.getvalue() == "One.\n\nTwo.\n"
     assert len(http.requests) == 2
-    assert json.loads(http.requests[0].body)["messages"][1]["content"] == paragraph
-    assert json.loads(http.requests[1].body)["messages"][1]["content"] == paragraph
+    tagged_paragraph = f"<<<SOURCE\n{paragraph}\nSOURCE>>>"
+    assert (
+        json.loads(http.requests[0].body)["messages"][1]["content"] == tagged_paragraph
+    )
+    assert (
+        json.loads(http.requests[1].body)["messages"][1]["content"] == tagged_paragraph
+    )
     assert "budget" not in stderr.getvalue()
 
 
