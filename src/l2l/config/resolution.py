@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import reduce
 from types import MappingProxyType
 from typing import final
 lazy from collections.abc import Mapping
@@ -24,7 +23,6 @@ from l2l.monads import (
     io_bind,
     io_pair,
     io_result,
-    io_traverse,
     result_bind,
     result_bind_io,
     result_map,
@@ -58,155 +56,78 @@ lazy from l2l.filtering import FilterSettings
 lazy from l2l.json_values import JsonObject
 
 
-def document_layers(
-    user_path: str,
-    user_document: JsonObject,
-    selected_path: str | None,
-    selected_document: JsonObject,
-) -> tuple[tuple[str | None, JsonObject], ...]:
-    return tuple(
-        (path, document)
-        for path, document, present in (
-            (selected_path, selected_document, bool(selected_document)),
-            (user_path, user_document, bool(user_document)),
-        )
-        if present
-    )
-
-
-def first_layer_with(
-    layers: tuple[tuple[str | None, JsonObject], ...], key: str
-) -> tuple[str | None, JsonObject] | None:
-    for path, document in layers:
-        if key in document:
-            return path, document
-
-    return None
-
-
 def resolve_filter_settings(
-    user_path: str,
-    user_document_result: DocumentResult,
-    selected_path: str | None,
-    selected_document_result: DocumentResult,
+    path: str,
+    document_result: DocumentResult,
 ) -> Result[FilterSettings | None, TranslationError]:
     def resolve(
-        user_document: JsonObject, selected_document: JsonObject
+        document: JsonObject,
     ) -> Result[FilterSettings | None, TranslationError]:
-        layers = document_layers(
-            user_path, user_document, selected_path, selected_document
-        )
-        source = first_layer_with(layers, "filter")
-        if source is None:
+        if "filter" not in document:
             return Ok(None)
 
-        filter_path, filter_document = source
         # result_map widens Ok[FilterSettings] to the optional settings type.
         return result_map(
-            parse_filter_table(filter_path or "", filter_document["filter"]),
+            parse_filter_table(path, document["filter"]),
             lambda settings: settings,
         )
 
-    return result_bind(
-        user_document_result,
-        lambda user_document: result_bind(
-            selected_document_result,
-            lambda selected_document: resolve(user_document, selected_document),
-        ),
-    )
+    return result_bind(document_result, resolve)
 
 
 def resolve_passes(
-    user_path: str,
-    user_document_result: DocumentResult,
-    selected_path: str | None,
-    selected_document_result: DocumentResult,
+    path: str,
+    document_result: DocumentResult,
 ) -> IO[Result[ResolvedPasses, TranslationError]]:
     def resolve(
-        documents: tuple[JsonObject, JsonObject],
+        document: JsonObject,
     ) -> IO[Result[ResolvedPasses, TranslationError]]:
-        layers = document_layers(user_path, documents[0], selected_path, documents[1])
-        pass_source = first_layer_with(layers, "pass")
-        if pass_source is None:
-            config_hint = selected_path or user_path or "a config file (see --help)"
+        if "pass" not in document:
             return io_result(
                 fail_config(
-                    f"no [pass.<name>] tables found; define at least one pass in "
-                    f"{config_hint}"
+                    f"no [pass.<name>] tables found; define at least one pass in {path}"
                 )
             )
 
-        option_source = first_layer_with(layers, "options")
         options: Result[OptionDefaults, TranslationError] = (
             Ok(OptionDefaults())
-            if option_source is None
-            else parse_options_table(
-                option_source[0] or "", option_source[1]["options"]
-            )
+            if "options" not in document
+            else parse_options_table(path, document["options"])
         )
-
-        def merged_global_prompts(
-            layer_prompts: tuple[
-                Mapping[PromptSectionName, PromptSectionOverride], ...
-            ],
-        ) -> Mapping[PromptSectionName, PromptSectionOverride]:
-            return MappingProxyType(
-                {
-                    name: override
-                    for layer in reversed(layer_prompts)
-                    for name, override in layer.items()
-                }
-            )
-
-        def merged_style_patch(
-            layer_patches: tuple[StylePolicyPatch, ...],
-        ) -> StylePolicyPatch:
-            return reduce(StylePolicyPatch.merge, layer_patches, StylePolicyPatch())
-
-        def merged_output_patch(
-            layer_patches: tuple[OutputPolicyPatch, ...],
-        ) -> OutputPolicyPatch:
-            return reduce(OutputPolicyPatch.merge, layer_patches, OutputPolicyPatch())
 
         def combine(
             resolved: tuple[
                 tuple[
                     Result[tuple[PassDraft, ...], TranslationError],
                     Result[
-                        tuple[Mapping[PromptSectionName, PromptSectionOverride], ...],
+                        Mapping[PromptSectionName, PromptSectionOverride],
                         TranslationError,
                     ],
                 ],
                 tuple[
-                    Result[tuple[StylePolicyPatch, ...], TranslationError],
-                    Result[tuple[OutputPolicyPatch, ...], TranslationError],
+                    Result[StylePolicyPatch, TranslationError],
+                    Result[OutputPolicyPatch, TranslationError],
                 ],
             ],
         ) -> IO[Result[ResolvedPasses, TranslationError]]:
-            ((drafts_result, layer_prompts_result), styles_and_outputs) = resolved
-            layer_styles_result, layer_outputs_result = styles_and_outputs
+            ((drafts_result, prompts_result), styles_and_outputs) = resolved
+            styles_result, outputs_result = styles_and_outputs
             return io_result(
                 result_bind(
                     drafts_result,
                     lambda drafts: result_bind(
-                        layer_prompts_result,
-                        lambda layer_prompts: result_bind(
-                            layer_styles_result,
-                            lambda layer_styles: result_bind(
-                                layer_outputs_result,
-                                lambda layer_outputs: result_map(
+                        prompts_result,
+                        lambda prompts: result_bind(
+                            styles_result,
+                            lambda styles: result_bind(
+                                outputs_result,
+                                lambda outputs: result_map(
                                     options,
                                     lambda option_values: ResolvedPasses(
                                         option_defaults=option_values,
-                                        global_prompts=merged_global_prompts(
-                                            layer_prompts
-                                        ),
-                                        global_style_patch=merged_style_patch(
-                                            layer_styles
-                                        ),
-                                        global_output_patch=merged_output_patch(
-                                            layer_outputs
-                                        ),
+                                        global_prompts=prompts,
+                                        global_style_patch=styles,
+                                        global_output_patch=outputs,
                                         pass_drafts=drafts,
                                     ),
                                 ),
@@ -216,44 +137,21 @@ def resolve_passes(
                 )
             )
 
-        pass_path, pass_document = pass_source
         return io_bind(
             io_pair(
                 io_pair(
-                    document_passes(pass_path or "", pass_document),
-                    io_traverse(
-                        layers,
-                        lambda layer: document_prompt_overrides(layer[0], layer[1]),
-                    ),
+                    document_passes(path, document),
+                    document_prompt_overrides(path, document),
                 ),
                 io_pair(
-                    io_traverse(
-                        layers,
-                        lambda layer: io_result(
-                            document_style_patch(layer[0], layer[1])
-                        ),
-                    ),
-                    io_traverse(
-                        layers,
-                        lambda layer: io_result(
-                            document_output_patch(layer[0], layer[1])
-                        ),
-                    ),
+                    io_result(document_style_patch(path, document)),
+                    io_result(document_output_patch(path, document)),
                 ),
             ),
             combine,
         )
 
-    return result_bind_io(
-        result_bind(
-            user_document_result,
-            lambda user_document: result_map(
-                selected_document_result,
-                lambda selected_document: (user_document, selected_document),
-            ),
-        ),
-        resolve,
-    )
+    return result_bind_io(document_result, resolve)
 
 
 def selected_pass_role(

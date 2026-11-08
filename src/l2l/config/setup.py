@@ -4,7 +4,7 @@ from dataclasses import replace
 lazy from collections.abc import Mapping
 
 from l2l.config.api import merged_api_settings
-from l2l.config.documents import read_setup_documents, resolve_config_path
+from l2l.config.documents import read_setup_document, resolve_config_path
 from l2l.config.glossaries import (
     require_glossary_for_update_passes,
     resolve_glossaries,
@@ -18,7 +18,6 @@ from l2l.config.resolution import (
     resolve_filter_settings,
     resolve_passes,
 )
-from l2l.effects import user_config_path
 from l2l.errors import TranslationError, fail_config
 from l2l.languages import expected_target_scripts, scripts_description
 from l2l.monads import (
@@ -85,15 +84,12 @@ def build_setup(
     pair: Result[ResolvedPasses, TranslationError],
     target_language: str,
     source_language: str,
-    ensure_paragraphs_flag: bool = False,
 ) -> Result[Setup, TranslationError]:
     def with_options(resolved: ResolvedPasses) -> Result[Setup, TranslationError]:
         option_defaults = resolved.option_defaults
-        effective = option_defaults.ensure_paragraphs or ensure_paragraphs_flag
+        effective = option_defaults.ensure_paragraphs
         global_ensure = (
-            effective
-            if option_defaults.ensure_paragraphs_explicit or ensure_paragraphs_flag
-            else None
+            effective if option_defaults.ensure_paragraphs_explicit else None
         )
         return result_bind(
             finalize_passes(
@@ -123,13 +119,10 @@ def build_setup(
 def assemble_setup(
     arguments: Arguments,
     environment: Mapping[str, str],
-    user_path: str,
-    selected_path: str | None,
-    documents: tuple[DocumentResult, DocumentResult],
+    path: str,
+    document_result: DocumentResult,
     resolve_pipeline_passes: bool,
 ) -> IO[SetupResult]:
-    user_document, selected_document = documents
-
     def setup_with(
         pair: tuple[
             Result[ResolvedPasses, TranslationError],
@@ -138,38 +131,13 @@ def assemble_setup(
     ) -> SetupResult:
         resolved, glossaries = pair
         return result_bind(
-            merged_api_settings(
-                arguments,
-                environment,
-                user_path,
-                user_document,
-                selected_path,
-                selected_document,
-            ),
+            merged_api_settings(environment, path, document_result),
             lambda config: result_bind(
-                resolve_target_language(
-                    arguments.target_language,
-                    user_path,
-                    user_document,
-                    selected_path,
-                    selected_document,
-                ),
+                resolve_target_language(path, document_result),
                 lambda target_language: result_bind(
-                    resolve_source_language(
-                        arguments.source_language,
-                        user_path,
-                        user_document,
-                        selected_path,
-                        selected_document,
-                    ),
+                    resolve_source_language(path, document_result),
                     lambda source_language: result_bind(
-                        build_setup(
-                            config,
-                            resolved,
-                            target_language,
-                            source_language,
-                            arguments.ensure_paragraphs,
-                        ),
+                        build_setup(config, resolved, target_language, source_language),
                         lambda setup: result_bind(
                             glossaries,
                             lambda resolved_glossaries: result_bind(
@@ -178,12 +146,7 @@ def assemble_setup(
                                     setup_with_glossary(setup, resolved_glossaries),
                                 ),
                                 lambda complete_setup: result_map(
-                                    resolve_filter_settings(
-                                        user_path,
-                                        user_document,
-                                        selected_path,
-                                        selected_document,
-                                    ),
+                                    resolve_filter_settings(path, document_result),
                                     lambda filter_settings: replace(
                                         complete_setup, filter=filter_settings
                                     ),
@@ -197,16 +160,10 @@ def assemble_setup(
 
     return io_map(
         io_pair(
-            resolve_passes(user_path, user_document, selected_path, selected_document)
+            resolve_passes(path, document_result)
             if resolve_pipeline_passes
             else io_result(Ok(ResolvedPasses.empty())),
-            resolve_glossaries(
-                user_path,
-                user_document,
-                selected_path,
-                selected_document,
-                arguments.glossary,
-            ),
+            resolve_glossaries(path, document_result, arguments.glossary),
         ),
         setup_with,
     )
@@ -217,25 +174,17 @@ def load_setup(
     environment: Mapping[str, str],
     resolve_pipeline_passes: bool = True,
 ) -> IO[SetupResult]:
-    def with_selected_path(
-        user_path: str, selected_path: str | None
-    ) -> IO[SetupResult]:
+    def with_path(path: str) -> IO[SetupResult]:
+        requested = isinstance(arguments.config, str) and bool(arguments.config.strip())
         return io_bind(
-            read_setup_documents(user_path, selected_path),
-            lambda documents: assemble_setup(
+            read_setup_document(path, requested),
+            lambda document_result: assemble_setup(
                 arguments,
                 environment,
-                user_path,
-                selected_path,
-                documents,
+                path,
+                document_result,
                 resolve_pipeline_passes,
             ),
         )
 
-    return io_bind(
-        user_config_path(environment),
-        lambda user_path: io_bind(
-            resolve_config_path(arguments.config, environment),
-            lambda selected_path: with_selected_path(user_path, selected_path),
-        ),
-    )
+    return io_bind(resolve_config_path(arguments.config, environment), with_path)

@@ -5,7 +5,6 @@ lazy from pathlib import Path
 
 from l2l.config import load_setup
 from l2l.config.api import (
-    api_settings_from_arguments,
     api_settings_from_environment,
     build_config,
     document_api_settings,
@@ -17,7 +16,6 @@ from l2l.config.api import (
 from l2l.config.documents import read_document, resolve_config_path, validate_document
 from l2l.config.glossaries import document_glossary_paths
 from l2l.config.languages import (
-    command_line_source_language,
     document_source_language,
     document_target_language,
     resolve_source_language,
@@ -45,7 +43,7 @@ from l2l.config.resolution import (
 from l2l.config.setup import build_setup, validate_ascii_target_language
 from l2l.errors import FileError, TranslationError, describe
 from l2l.glossary import GlossaryEntry
-from l2l.monads import Err, Ok, Result, io_pure
+from l2l.monads import Err, Ok, Result
 from l2l.prompts import (
     ACCURACY_SECTION_TEXT,
     APPROXIMATE_PARAGRAPH_RULE_TEXT,
@@ -70,7 +68,6 @@ from l2l.settings import (
     PassDefinition,
     PassDraft,
     Setup,
-    Unset,
     effective_target_language,
     output_policy_salt_component,
     pass_salt,
@@ -116,6 +113,11 @@ def test_api_setting_parsers() -> None:
     assert parsed_maximum.value.maximum_tokens == 7
 
 
+def test_document_api_settings_without_api_table_is_empty() -> None:
+    result = document_api_settings("f", {})
+    assert result == Ok(PartialApiSettings())
+
+
 def test_document_api_settings_rejects_invalid_tables() -> None:
     outcomes = (
         ({"api": {"nope": 1}}, "unknown key(s): nope"),
@@ -139,7 +141,7 @@ def test_merge_api_settings_params_deep_merge() -> None:
     assert merged == PartialApiSettings(model="b", parameters={"x": 1, "y": 2, "z": 3})
 
 
-def test_api_settings_from_environment_and_arguments() -> None:
+def test_api_settings_from_environment() -> None:
     invalid_environment = (
         ({"TRANSLATE_MODEL": " m ", "TRANSLATE_TIMEOUT": "bogus"}, "TRANSLATE_TIMEOUT"),
         ({"TRANSLATE_MAX_TOKENS": "bogus"}, "TRANSLATE_MAX_TOKENS"),
@@ -157,47 +159,21 @@ def test_api_settings_from_environment_and_arguments() -> None:
     assert parsed_environment.value.base_url == "http://e"
     assert parsed_environment.value.maximum_tokens == 9
 
-    arguments = Arguments(api_key="k", timeout=2.0)
-    parsed_arguments = api_settings_from_arguments(arguments)
-    assert isinstance(parsed_arguments, Ok)
-    assert parsed_arguments.value == PartialApiSettings(api_key="k", timeout=2.0)
-
-
-def arguments_with_numeric_flags(
-    timeout: float | Unset, maximum_tokens: int | Unset
-) -> Arguments:
-    return Arguments(timeout=timeout, maximum_tokens=maximum_tokens)
-
-
-def test_numeric_flags_are_validated() -> None:
-    empty: Result[JsonObject, TranslationError] = Ok({})
-    for arguments, fragment in (
-        (arguments_with_numeric_flags(-5.0, UNSET), "--timeout must be positive"),
-        (arguments_with_numeric_flags(UNSET, 0), "--maximum-tokens must be positive"),
-    ):
-        direct = api_settings_from_arguments(arguments)
-        assert isinstance(direct, Err)
-        assert fragment in describe(direct.error)
-        merged = merged_api_settings(arguments, {}, "user", empty, None, empty)
-        assert isinstance(merged, Err)
-        assert fragment in describe(merged.error)
-
 
 def test_merged_api_settings_precedence() -> None:
-    arguments = Arguments(model="arg-model")
     environment = {
         "TRANSLATE_BASE_URL": "http://env",
         "TRANSLATE_TIMEOUT": "5",
         "TRANSLATE_API_KEY": "env-key",
+        "TRANSLATE_MODEL": "env-model",
     }
-    user = ok_document({"api": {"timeout": 30, "params": {"a": 1}}})
-    selected: Result[JsonObject, TranslationError] = Ok({})
-    result = merged_api_settings(arguments, environment, "user", user, None, selected)
+    document = ok_document({"api": {"timeout": 30, "params": {"a": 1}}})
+    result = merged_api_settings(environment, "config.toml", document)
     assert isinstance(result, Ok)
     config = result.value
     assert config.base_url == "http://env"
     assert config.api_key == "env-key"
-    assert config.model == "arg-model"
+    assert config.model == "env-model"
     assert config.timeout == 5.0
     assert config.parameters["a"] == 1
 
@@ -392,7 +368,7 @@ def test_apply_default_options() -> None:
 def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
     config = Config("u", "k", "m", 1.0, 100, {})
 
-    def setup_with(options: OptionDefaults, flag: bool) -> Setup:
+    def setup_with(options: OptionDefaults) -> Setup:
         resolved: Result[ResolvedPasses, TranslationError] = Ok(
             ResolvedPasses(
                 option_defaults=options,
@@ -406,19 +382,11 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
                 ),
             )
         )
-        result = build_setup(config, resolved, "English", "auto", flag)
+        result = build_setup(config, resolved, "English", "auto")
         assert isinstance(result, Ok)
         return result.value
 
-    setup = setup_with(OptionDefaults(), True)
-    assert setup.ensure_paragraphs
-    assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
-        True,
-        False,
-        True,
-    ]
-
-    setup = setup_with(OptionDefaults(), False)
+    setup = setup_with(OptionDefaults())
     assert not setup.ensure_paragraphs
     assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
         False,
@@ -426,15 +394,7 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
         True,
     ]
 
-    setup = setup_with(OptionDefaults(ensure_paragraphs=2), False)
-    assert setup.ensure_paragraphs == 2
-    assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
-        2,
-        False,
-        True,
-    ]
-
-    setup = setup_with(OptionDefaults(ensure_paragraphs=2), True)
+    setup = setup_with(OptionDefaults(ensure_paragraphs=2))
     assert setup.ensure_paragraphs == 2
     assert [pass_definition.ensure_paragraphs for pass_definition in setup.passes] == [
         2,
@@ -617,7 +577,7 @@ def test_document_passes_without_tables_yields_no_passes() -> None:
 
 
 def test_resolve_passes_requires_pass_table() -> None:
-    result = resolve_passes("user", ok_document({"api": {}}), None, Ok({})).run()
+    result = resolve_passes("user", ok_document({"api": {}})).run()
     assert isinstance(result, Err)
     assert "no [pass.<name>] tables" in describe(result.error)
 
@@ -630,7 +590,7 @@ def test_resolve_passes_selection_and_options() -> None:
             "pass": {"p": {"instruction": "i"}},
         }
     )
-    result = resolve_passes("user", user, None, Ok({})).run()
+    result = resolve_passes("user", user).run()
     assert isinstance(result, Ok)
     assert result.value.global_style_patch == StylePolicyPatch()
     assert result.value.option_defaults == OptionDefaults(ascii=True)
@@ -638,10 +598,20 @@ def test_resolve_passes_selection_and_options() -> None:
     assert len(result.value.pass_drafts) == 1
 
 
-def test_resolve_config_path_requested_and_environment() -> None:
+def test_resolve_config_path_requested_then_xdg_default() -> None:
     assert resolve_config_path("a.toml", {}).run() == "a.toml"
-    result = resolve_config_path(UNSET, {"TRANSLATE_CONFIG": " b.toml "}).run()
-    assert result == "b.toml"
+    assert resolve_config_path(" a.toml ", {}).run() == " a.toml "
+    assert (
+        resolve_config_path(UNSET, {"XDG_CONFIG_HOME": "/cfg"}).run()
+        == "/cfg/l2l/config.toml"
+    )
+    # TRANSLATE_CONFIG is no longer honoured
+    assert (
+        resolve_config_path(
+            UNSET, {"TRANSLATE_CONFIG": "b.toml", "XDG_CONFIG_HOME": "/cfg"}
+        ).run()
+        == "/cfg/l2l/config.toml"
+    )
 
 
 def test_mask_api_key() -> None:
@@ -838,35 +808,17 @@ def test_read_document_without_a_file_is_empty() -> None:
     assert result.value == {}
 
 
-def test_resolve_config_path_discovers_local_then_user(tmp_path: Path) -> None:
-    empty_root = tmp_path / "empty"
-    local = tmp_path / "l2l.toml"
+def test_resolve_config_path_default_is_xdg_user_config(tmp_path: Path) -> None:
     user_root = tmp_path / "cfg"
     user_path = user_root / "l2l" / "config.toml"
-
-    def exists_none(path: str) -> bool:
-        return False
-
-    assert (
-        resolve_config_path(
-            UNSET, {"XDG_CONFIG_HOME": str(empty_root)}, exists_none
-        ).run()
-        is None
+    assert resolve_config_path(UNSET, {"XDG_CONFIG_HOME": str(user_root)}).run() == str(
+        user_path
     )
-
-    def exists_local(path: str) -> bool:
-        return path == str(local)
-
-    assert resolve_config_path(
-        UNSET, {}, exists_local, io_pure(str(tmp_path))
-    ).run() == str(local)
-
-    def exists_user(path: str) -> bool:
-        return path == str(user_path)
-
-    assert resolve_config_path(
-        UNSET, {"XDG_CONFIG_HOME": str(user_root)}, exists_user
-    ).run() == str(user_path)
+    # the local ./l2l.toml file is no longer a config source
+    (tmp_path / "l2l.toml").write_text('[pass.x]\nmode = "chunk"\n')
+    assert resolve_config_path(UNSET, {"XDG_CONFIG_HOME": str(user_root)}).run() == str(
+        user_path
+    )
 
 
 def test_load_setup_reports_malformed_toml(tmp_path: Path) -> None:
@@ -923,15 +875,6 @@ def test_document_source_language_validates() -> None:
         assert "source_language must be a non-empty string" in describe(result.error)
 
 
-def test_command_line_source_language_validates() -> None:
-    assert command_line_source_language(UNSET) == Ok(None)
-    assert command_line_source_language(" Chinese ") == Ok("Chinese")
-    for bad_source_language in ("", "  "):
-        result = command_line_source_language(bad_source_language)
-        assert isinstance(result, Err)
-        assert "--source-language must be a non-empty string" in describe(result.error)
-
-
 def empty_document() -> Result[JsonObject, TranslationError]:
     return Ok({})
 
@@ -940,54 +883,30 @@ def document_result(document: JsonObject) -> Result[JsonObject, TranslationError
     return Ok(document)
 
 
-def test_resolve_source_language_precedence() -> None:
-    user = document_result({"source_language": "German"})
-    selected = document_result({"source_language": "Spanish"})
-    assert resolve_source_language("French", "user", user, "selected", selected) == Ok(
-        "French"
-    )
-    assert resolve_source_language(UNSET, "user", user, "selected", selected) == Ok(
-        "Spanish"
-    )
-    assert resolve_source_language(
-        UNSET, "user", user, "selected", empty_document()
-    ) == Ok("German")
-    assert resolve_source_language(
-        UNSET, "user", user, "selected", document_result({"api": {}})
-    ) == Ok("German")
-    assert resolve_source_language(
-        UNSET, "user", empty_document(), None, empty_document()
-    ) == Ok("auto")
+def test_resolve_source_language_reads_the_document() -> None:
+    document = document_result({"source_language": "Spanish"})
+    assert resolve_source_language("config.toml", document) == Ok("Spanish")
+    assert resolve_source_language("config.toml", empty_document()) == Ok("auto")
 
 
 def test_resolve_source_language_normalizes_final_value_once() -> None:
-    user = document_result({"source_language": "ignored"})
-    assert resolve_source_language(" MUL ", "user", user, None, empty_document()) == Ok(
-        "mixed"
-    )
     assert resolve_source_language(
-        UNSET,
-        "user",
+        "config.toml",
+        document_result({"source_language": " MUL "}),
+    ) == Ok("mixed")
+    assert resolve_source_language(
+        "config.toml",
         document_result({"source_language": "Guess"}),
-        None,
-        empty_document(),
     ) == Ok("auto")
 
 
-def test_resolve_source_language_fails_on_invalid_higher_layer() -> None:
-    user = document_result({"source_language": "German"})
-    assert isinstance(
-        resolve_source_language("", "user", user, None, empty_document()), Err
-    )
-    invalid_selected = document_result({"source_language": ""})
-    assert isinstance(
-        resolve_source_language(UNSET, "user", user, "selected", invalid_selected),
-        Err,
-    )
-    non_string_selected = document_result({"source_language": 3})
-    result = resolve_source_language(
-        UNSET, "user", user, "selected", non_string_selected
-    )
+def test_resolve_source_language_fails_on_invalid_document() -> None:
+    invalid_document = document_result({"source_language": ""})
+    result = resolve_source_language("config.toml", invalid_document)
+    assert isinstance(result, Err)
+    assert "source_language must be a non-empty string" in describe(result.error)
+    non_string = document_result({"source_language": 3})
+    result = resolve_source_language("config.toml", non_string)
     assert isinstance(result, Err)
     assert "source_language must be a non-empty string" in describe(result.error)
 
@@ -1035,8 +954,8 @@ def test_load_setup_requires_target_language(tmp_path: Path) -> None:
     ).run()
     assert isinstance(result, Err)
     assert (
-        "target language is required; pass --target-language or set "
-        "target_language in a config file" in describe(result.error)
+        "target language is required; set target_language in a config file"
+        in describe(result.error)
     )
 
 
@@ -1059,30 +978,6 @@ def test_load_setup_resolves_target_language_precedence(tmp_path: Path) -> None:
     assert isinstance(configured, Ok)
     assert configured.value.target_language == "English"
 
-    from_command_line = load_setup(
-        replace(
-            glossary_arguments(selected_config),
-            target_language="German",
-        ),
-        environment,
-    ).run()
-    assert isinstance(from_command_line, Ok)
-    assert from_command_line.value.target_language == "German"
-
-
-def test_load_setup_rejects_blank_command_line_target_language(
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "book.toml"
-    config_path.write_text(SELECTED_CONFIG_TEXT, encoding="utf-8")
-    (tmp_path / "selected-glossary.json").write_text("[]", encoding="utf-8")
-    result = load_setup(
-        replace(glossary_arguments(config_path), target_language="  "),
-        {"XDG_CONFIG_HOME": str(tmp_path / "nouser")},
-    ).run()
-    assert isinstance(result, Err)
-    assert "--target-language must be a non-empty string" in describe(result.error)
-
 
 def test_validate_document_rejects_bad_glossary_values() -> None:
     for document in (
@@ -1096,23 +991,13 @@ def test_validate_document_rejects_bad_glossary_values() -> None:
 
 
 def test_load_setup_resolves_and_merges_glossaries(tmp_path: Path) -> None:
-    user_home = tmp_path / "user"
-    user_config_directory = user_home / "l2l"
-    user_config_directory.mkdir(parents=True)
-    (user_config_directory / "config.toml").write_text(
-        'glossary = ["user-glossary.json"]\n', encoding="utf-8"
-    )
-    (user_config_directory / "user-glossary.json").write_text(
-        '[{"original": "甲", "translated": "Alpha", "pronouns": "she/her"}]',
+    config_directory = tmp_path / "book"
+    config_directory.mkdir()
+    config_path = config_directory / "book.toml"
+    config_path.write_text(SELECTED_CONFIG_TEXT, encoding="utf-8")
+    (config_directory / "selected-glossary.json").write_text(
+        '[{"original": "甲", "translated": "Aleph", "pronouns": "she/her"}]',
         encoding="utf-8",
-    )
-
-    selected_directory = tmp_path / "selected"
-    selected_directory.mkdir()
-    selected_config = selected_directory / "book.toml"
-    selected_config.write_text(SELECTED_CONFIG_TEXT, encoding="utf-8")
-    (selected_directory / "selected-glossary.json").write_text(
-        '[{"original": "甲", "translated": "Aleph"}]', encoding="utf-8"
     )
 
     cli_glossary = tmp_path / "cli-glossary.json"
@@ -1120,23 +1005,18 @@ def test_load_setup_resolves_and_merges_glossaries(tmp_path: Path) -> None:
         '[{"original": "乙", "translated": "Bee"}]', encoding="utf-8"
     )
 
-    arguments = replace(
-        glossary_arguments(selected_config), glossary=(str(cli_glossary),)
-    )
-    result = load_setup(arguments, {"XDG_CONFIG_HOME": str(user_home)}).run()
+    arguments = replace(glossary_arguments(config_path), glossary=(str(cli_glossary),))
+    result = load_setup(arguments, {"XDG_CONFIG_HOME": str(tmp_path / "nouser")}).run()
     assert isinstance(result, Ok)
     setup = result.value
     assert setup.glossary_paths == (
-        str(user_config_directory / "user-glossary.json"),
-        str(selected_directory / "selected-glossary.json"),
+        str(config_directory / "selected-glossary.json"),
         str(cli_glossary),
     )
     assert [entry.original for entry in setup.glossary_entries] == ["甲", "乙"]
     assert setup.glossary_entries[0].translated == "Aleph"
     for pass_definition in setup.passes:
         assert pass_definition.instruction == "Translate."
-    assert [entry.original for entry in setup.glossary_entries] == ["甲", "乙"]
-    assert setup.glossary_entries[0].translated == "Aleph"
 
 
 def test_load_setup_without_glossary_keeps_instructions(tmp_path: Path) -> None:
@@ -1445,25 +1325,19 @@ def test_prompt_override_empty_inline_removal_is_kept() -> None:
     assert result.value["accuracy"].text == "New text."
 
 
-def test_resolve_passes_merges_global_prompts_selected_over_user() -> None:
-    user = ok_document(
+def test_resolve_passes_carries_global_prompts_with_origins() -> None:
+    document = ok_document(
         {
             "pass": {"p": {"instruction": "i"}},
-            "prompts": {"accuracy": "FROM USER", "fluency": "USER FLUENCY"},
+            "prompts": {"accuracy": "FROM CONFIG", "fluency": "CONFIG FLUENCY"},
         }
     )
-    selected = ok_document(
-        {
-            "pass": {"p": {"instruction": "i"}},
-            "prompts": {"accuracy": "FROM SELECTED"},
-        }
-    )
-    result = resolve_passes("user", user, "selected", selected).run()
+    result = resolve_passes("config.toml", document).run()
     assert isinstance(result, Ok)
     global_prompts = result.value.global_prompts
-    assert global_prompts["accuracy"].text == "FROM SELECTED"
+    assert global_prompts["accuracy"].text == "FROM CONFIG"
     assert global_prompts["accuracy"].origin == "global-inline"
-    assert global_prompts["fluency"].text == "USER FLUENCY"
+    assert global_prompts["fluency"].text == "CONFIG FLUENCY"
 
 
 def test_per_pass_prompts_error_on_legacy_and_glossary_passes() -> None:

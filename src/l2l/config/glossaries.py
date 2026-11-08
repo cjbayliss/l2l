@@ -48,25 +48,13 @@ def document_glossary_paths(
 
 
 def glossary_paths(
-    user_path: str,
-    user_document: JsonObject,
-    selected_path: str | None,
-    selected_document: JsonObject,
+    path: str,
+    document: JsonObject,
     command_line_paths: tuple[str, ...],
 ) -> Result[tuple[str, ...], TranslationError]:
     return result_map(
-        result_sequence(
-            document_glossary_paths(path, document)
-            for path, document in (
-                (user_path, user_document),
-                (selected_path, selected_document),
-            )
-            if document
-        ),
-        lambda groups: (
-            tuple(path for group in groups for path in group)
-            + tuple(command_line_paths)
-        ),
+        document_glossary_paths(path, document),
+        lambda groups: groups + tuple(command_line_paths),
     )
 
 
@@ -94,35 +82,16 @@ def load_glossaries(
 
 
 def resolve_glossaries(
-    user_path: str,
-    user_document_result: DocumentResult,
-    selected_path: str | None,
-    selected_document_result: DocumentResult,
+    path: str,
+    document_result: DocumentResult,
     command_line_paths: tuple[str, ...],
 ) -> IO[Result[Glossaries, TranslationError]]:
-    def with_documents(
-        documents: tuple[JsonObject, JsonObject],
-    ) -> IO[Result[Glossaries, TranslationError]]:
-        return result_bind_io(
-            glossary_paths(
-                user_path,
-                documents[0],
-                selected_path,
-                documents[1],
-                command_line_paths,
-            ),
-            load_glossaries,
-        )
-
     return result_bind_io(
         result_bind(
-            user_document_result,
-            lambda user_document: result_map(
-                selected_document_result,
-                lambda selected_document: (user_document, selected_document),
-            ),
+            document_result,
+            lambda document: glossary_paths(path, document, command_line_paths),
         ),
-        with_documents,
+        load_glossaries,
     )
 
 

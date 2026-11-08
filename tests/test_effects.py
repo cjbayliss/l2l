@@ -87,14 +87,10 @@ def test_load_json_reads_and_reports_errors(tmp_path: Path) -> None:
 
 
 def test_resolve_cache_directory_and_user_config_path(tmp_path: Path) -> None:
-    target = tmp_path / "cache"
-    assert resolve_cache_directory({}, str(target)).run() == str(target)
-    assert target.exists()
-    assert (
-        resolve_cache_directory({"XDG_CACHE_HOME": str(tmp_path)})
-        .run()
-        .startswith(str(tmp_path))
-    )
+    resolved = resolve_cache_directory({"XDG_CACHE_HOME": str(tmp_path)}).run()
+    assert resolved == str(tmp_path / "l2l")
+    assert resolved.startswith(str(tmp_path))
+    assert (tmp_path / "l2l").exists()
     assert user_config_path({"XDG_CONFIG_HOME": "/cfg"}).run() == "/cfg/l2l/config.toml"
 
 

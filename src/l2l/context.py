@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Protocol, final
 
 from l2l.errors import TranslationError
 from l2l.monads import IO, Reference, Result
-from l2l.settings import UNSET, Unset
 lazy from l2l.console import Console
 lazy from l2l.glossary import GlossaryEntry
 
@@ -52,7 +51,6 @@ class Context:
     sleep: Sleep
     target_language: str
     source_language: str
-    stream: bool | Unset = UNSET
     best_effort: bool = False
     glossary_entries: tuple[GlossaryEntry, ...] = ()
     glossary_update_path: str | None = None

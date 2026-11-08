@@ -22,10 +22,8 @@ from l2l.monads import (
     write_reference,
 )
 from l2l.settings import (
-    UNSET,
     Config,
     PassDefinition,
-    Unset,
     build_settings,
     paragraph_tolerance,
 )
@@ -260,7 +258,6 @@ def make_context(
     use_cache: bool = False,
     maximum_tokens: int = 100000,
     log: RunLog | None = None,
-    stream: bool | Unset = UNSET,
     verbose: bool = False,
     clock: Callable[[], float] = time.time,
     sleep: Sleep = no_sleep,
@@ -289,7 +286,6 @@ def make_context(
         log=log if log is not None else RunLog(NOTHING, clock),
         clock=clock,
         sleep=sleep,
-        stream=stream,
         best_effort=best_effort,
         glossary_entries=glossary_entries,
         glossary_update_path=glossary_update_path,

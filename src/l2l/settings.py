@@ -145,26 +145,16 @@ class OptionDefaults:
 @dataclass(frozen=True, kw_only=True, slots=True)
 class Arguments:
     config: str | Unset = UNSET
-    base_url: str | Unset = UNSET
-    api_key: str | Unset = UNSET
-    model: str | Unset = UNSET
-    timeout: float | Unset = UNSET
-    maximum_tokens: int | Unset = UNSET
     no_cache: bool = False
-    ensure_paragraphs: bool = False
     verbose: bool = False
     print_log_path: bool = False
-    cache_directory: str | Unset = UNSET
     check_config: bool = False
     dry_run: bool = False
-    stream: bool | Unset = UNSET
     prune_cache: int | Unset = UNSET
     log_retention_days: int = 30
     best_effort: bool = False
     glossary: tuple[str, ...] = ()
     extract_glossary: str | Unset = UNSET
-    target_language: str | Unset = UNSET
-    source_language: str | Unset = UNSET
     no_structured_output: bool = False
 
 

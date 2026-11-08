@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from l2l.effects import (
-    current_working_directory,
     load_toml,
     path_exists,
     user_config_path,
@@ -16,7 +14,7 @@ from l2l.monads import (
     Ok,
     Result,
     io_bind,
-    io_pair,
+    io_map,
     io_pure,
     io_result,
     io_result_bind,
@@ -26,7 +24,7 @@ lazy from l2l.config.models import DocumentResult
 lazy from l2l.settings import Unset
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Mapping
 
 
 def validate_document(
@@ -83,49 +81,19 @@ def read_document(
 def resolve_config_path(
     requested: str | Unset,
     environment: Mapping[str, str],
-    path_exists: Callable[[str], bool] = os.path.exists,
-    current_directory: IO[str] | None = None,
-) -> IO[str | None]:
+) -> IO[str]:
     match requested:
         case str() as path if path.strip():
             return io_pure(path)
 
         case _:
-            pass
-
-    configured = environment.get("TRANSLATE_CONFIG", "").strip()
-    if configured:
-        return io_pure(configured)
-
-    def pick(current_working_directory_value: str, user_path: str) -> str | None:
-        local = os.path.join(current_working_directory_value, "l2l.toml")
-        if path_exists(local):
-            return local
-
-        return user_path if path_exists(user_path) else None
-
-    return io_bind(
-        current_directory
-        if current_directory is not None
-        else current_working_directory(),
-        lambda current_working_directory_value: io_bind(
-            user_config_path(environment),
-            lambda user_path: IO(
-                lambda: pick(current_working_directory_value, user_path)
-            ),
-        ),
-    )
+            return io_map(user_config_path(environment), lambda path: path)
 
 
-def read_setup_documents(
-    user_path: str, selected_path: str | None
-) -> IO[tuple[DocumentResult, DocumentResult]]:
-    def with_user_exists(
-        user_exists: bool,
-    ) -> IO[tuple[DocumentResult, DocumentResult]]:
-        return io_pair(
-            read_document(user_path, "user config", user_exists),
-            read_document(selected_path, "config file", bool(selected_path)),
-        )
+def read_setup_document(path: str, requested: bool) -> IO[DocumentResult]:
+    # An absent default config reads as an empty document (the run then fails
+    # on missing passes); a file named with -c must be readable.
+    def with_exists(exists: bool) -> IO[DocumentResult]:
+        return read_document(path, "config file", exists or requested)
 
-    return io_bind(path_exists(user_path), with_user_exists)
+    return io_bind(path_exists(path), with_exists)

@@ -58,7 +58,6 @@ from l2l.monads import (
     read_reference,
     write_reference,
 )
-from l2l.settings import UNSET
 from l2l.text import Usage
 lazy from l2l.json_values import JsonObject
 
@@ -297,17 +296,17 @@ def test_chat_gives_up_after_retry_budget() -> None:
     assert sleeps() == (1.0, 2.0)
 
 
-def test_chat_stream_setting_precedence() -> None:
+def test_chat_stream_setting_comes_from_parameters() -> None:
     plain_body: JsonObject = {
         "choices": [{"message": {"content": "Plain"}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
     }
-    cases: tuple[tuple[bool | None, dict[str, bool], bool, str], ...] = (
-        (False, {}, False, "Plain"),
-        (True, {"stream": False}, True, "Hi"),
-        (None, {"stream": False}, False, "Plain"),
+    cases: tuple[tuple[dict[str, bool], bool, str], ...] = (
+        ({"stream": False}, False, "Plain"),
+        ({}, True, "Hi"),
+        ({"stream": True}, True, "Hi"),
     )
-    for context_stream, parameters, expected_stream, expected_text in cases:
+    for parameters, expected_stream, expected_text in cases:
         console, _ = make_console()
         response: FakePlainResponse | FakeStreamResponse = (
             FakeStreamResponse(with_usage(stream_chunks("Hi"), USAGE))
@@ -315,11 +314,7 @@ def test_chat_stream_setting_precedence() -> None:
             else FakePlainResponse(plain_body)
         )
         http = FakeHttp([response])
-        run_context = make_context(
-            console,
-            http.open,
-            stream=UNSET if context_stream is None else context_stream,
-        )
+        run_context = make_context(console, http.open)
         result = chat(run_context, "s", "u", "m", parameters, Usage()).run()
         assert isinstance(result, Ok)
         assert result.value.text == expected_text
@@ -345,8 +340,8 @@ class DyingPlainResponse:
 def test_chat_reports_a_plain_response_that_dies_mid_body() -> None:
     console, _ = make_console()
     http = FakeHttp([DyingPlainResponse()])
-    run_context = make_context(console, http.open, stream=False)
-    result = chat(run_context, "s", "u", "m", {}, Usage()).run()
+    run_context = make_context(console, http.open)
+    result = chat(run_context, "s", "u", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Err)
     failure = result.error
     assert isinstance(failure, HttpError)
@@ -495,8 +490,8 @@ class GarbagePlainResponse:
 def test_chat_reports_invalid_json_body_as_protocol_error() -> None:
     console, _ = make_console()
     http = FakeHttp([GarbagePlainResponse()])
-    run_context = make_context(console, http.open, stream=False)
-    result = chat(run_context, "s", "u", "m", {}, Usage()).run()
+    run_context = make_context(console, http.open)
+    result = chat(run_context, "s", "u", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Err)
     assert "invalid JSON response" in describe(result.error)
 
@@ -520,8 +515,8 @@ class ExplodingPlainResponse:
 def test_chat_reports_a_plain_read_failure_as_protocol_error() -> None:
     console, _ = make_console()
     http = FakeHttp([ExplodingPlainResponse()])
-    run_context = make_context(console, http.open, stream=False)
-    result = chat(run_context, "s", "u", "m", {}, Usage()).run()
+    run_context = make_context(console, http.open)
+    result = chat(run_context, "s", "u", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Err)
     failure = result.error
     assert isinstance(failure, HttpError)
@@ -682,8 +677,8 @@ def test_chat_rejects_a_plain_response_truncated_by_length() -> None:
         "choices": [{"message": {"content": "Partial"}, "finish_reason": "length"}]
     }
     http = FakeHttp([FakePlainResponse(body)])
-    run_context = make_context(console, http.open, stream=False)
-    result = chat(run_context, "s", "u", "m", {}, Usage()).run()
+    run_context = make_context(console, http.open)
+    result = chat(run_context, "s", "u", "m", {"stream": False}, Usage()).run()
     assert isinstance(result, Err)
     failure = result.error
     assert isinstance(failure, HttpError)
@@ -848,8 +843,10 @@ def test_chat_streams_a_completion_from_a_local_server() -> None:
         return (200, (("Content-Type", "text/event-stream"),), b"".join(frames))
 
     with local_endpoint(stream_hello) as endpoint:
-        run_context = replace(local_context(console, endpoint.url), stream=True)
-        result = chat(run_context, "sys", "user text", "m", {}, Usage()).run()
+        run_context = local_context(console, endpoint.url)
+        result = chat(
+            run_context, "sys", "user text", "m", {"stream": True}, Usage()
+        ).run()
     assert isinstance(result, Ok)
     assert result.value.text == "Hello"
     sent = endpoint.requests[0]

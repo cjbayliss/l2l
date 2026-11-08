@@ -61,47 +61,33 @@ Save it to `$XDG_CONFIG_HOME/l2l/config.toml`, or pass it explicitly
 with `-c config.toml`. Multiple translation passes run in the order they
 are defined.
 
-### Config file resolution
-
-The config file is resolved in this order:
-
-1. `-c` / `--config` on the command line
-2. the `$TRANSLATE_CONFIG` environment variable
-3. `./l2l.toml` in the working directory
-4. `~/.config/l2l/config.toml` (honors `$XDG_CONFIG_HOME`)
-
-If both a selected file and the user file exist, they are layered: the
-selected file takes precedence for languages, options, and prompts, and
-both contribute glossary paths.
-
 ### Top-level options
 
-| Key               | Type                       | Description                                                                            |
-| ----------------- | -------------------------- | -------------------------------------------------------------------------------------- |
-| `target_language` | string                     | Target language name, for example `"English"`. Required (or pass `--target-language`). |
-| `source_language` | string                     | Source language name. Defaults to auto-detection.                                      |
-| `glossary`        | list of strings            | Paths to glossary JSON files, relative to the config file.                             |
-| `api`             | table                      | API connection settings; see the `[api]` section.                                      |
-| `options`         | table                      | Defaults applied to every pass; see the `[options]` section.                           |
-| `filter`          | table                      | Deterministic source preprocessing; see the `[filter]` section.                        |
-| `prompts`         | table                      | Global prompt section overrides; see the `[prompts]` section.                          |
-| `style`           | table                      | Global style policy; see the `[style]` section.                                        |
-| `output`          | table                      | Global output policy; see the `[output]` section.                                      |
-| `pass`            | table of named pass tables | Translation passes, run in document order; see the `[pass.<name>]` section.            |
+| Key               | Type                       | Description                                                                 |
+| ----------------- | -------------------------- | --------------------------------------------------------------------------- |
+| `target_language` | string                     | Target language name, for example `"English"`. Required.                    |
+| `source_language` | string                     | Source language name. Defaults to auto-detection.                           |
+| `glossary`        | list of strings            | Paths to glossary JSON files, relative to the config file.                  |
+| `api`             | table                      | API connection settings; see the `[api]` section.                           |
+| `options`         | table                      | Defaults applied to every pass; see the `[options]` section.                |
+| `filter`          | table                      | Deterministic source preprocessing; see the `[filter]` section.             |
+| `prompts`         | table                      | Global prompt section overrides; see the `[prompts]` section.               |
+| `style`           | table                      | Global style policy; see the `[style]` section.                             |
+| `output`          | table                      | Global output policy; see the `[output]` section.                           |
+| `pass`            | table of named pass tables | Translation passes, run in document order; see the `[pass.<name>]` section. |
 
 ### `[api]`
 
-| Key          | Type    | Default  | Description                                                                                                                    |
-| ------------ | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `base_url`   | string  | —        | Root URL of an OpenAI-compatible chat completions endpoint. Required; alternatively, set `--base-url` or `TRANSLATE_BASE_URL`. |
-| `api_key`    | string  | —        | API key. Required; alternatively, set `--api-key` or `TRANSLATE_API_KEY`.                                                      |
-| `model`      | string  | —        | Default model for passes that do not set their own. Required; alternatively, set `--model` or `TRANSLATE_MODEL`.               |
-| `timeout`    | number  | `120`    | Request timeout in seconds (`--timeout` or `TRANSLATE_TIMEOUT`).                                                               |
-| `max_tokens` | integer | `100000` | Maximum tokens per request (`--maximum-tokens` or `TRANSLATE_MAX_TOKENS`).                                                     |
-| `params`     | table   | `{}`     | Extra JSON values merged into every request body, for example `stop = ["END"]`.                                                |
+| Key          | Type    | Default  | Description                                                                                                    |
+| ------------ | ------- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `base_url`   | string  | —        | Root URL of an OpenAI-compatible chat completions endpoint. Required; alternatively, set `TRANSLATE_BASE_URL`. |
+| `api_key`    | string  | —        | API key. Required; alternatively, set `TRANSLATE_API_KEY`.                                                     |
+| `model`      | string  | —        | Default model for passes that do not set their own. Required; alternatively, set `TRANSLATE_MODEL`.            |
+| `timeout`    | number  | `120`    | Request timeout in seconds (`TRANSLATE_TIMEOUT`).                                                              |
+| `max_tokens` | integer | `100000` | Maximum tokens per request (`TRANSLATE_MAX_TOKENS`).                                                           |
+| `params`     | table   | `{}`     | Extra JSON values merged into every request body, for example `stop = ["END"]`.                                |
 
-Command-line options override environment variables, which override
-config files.
+Environment variables override config files.
 
 ### `[options]`
 

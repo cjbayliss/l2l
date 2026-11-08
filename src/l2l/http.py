@@ -84,7 +84,7 @@ from l2l.text import (
     think_step,
 )
 lazy from l2l.console import Console
-lazy from l2l.settings import Config, Unset
+lazy from l2l.settings import Config
 
 
 def transient(error: TranslationError) -> bool:
@@ -1121,15 +1121,6 @@ def log_all(console: Console, messages: tuple[str, ...]) -> IO[None]:
     return io_map(fold_io(messages, step, Ok(())), lambda _: None)
 
 
-def apply_stream_override(run_context: Context, payload: JsonObject) -> JsonObject:
-    match run_context.stream:
-        case Unset():
-            return payload
-
-        case _:
-            return {**payload, "stream": run_context.stream}
-
-
 def chat(
     run_context: Context,
     system: str,
@@ -1144,10 +1135,7 @@ def chat(
     if estimated > run_context.config.maximum_tokens:
         return io_result(fail_budget(estimated, run_context.config.maximum_tokens))
 
-    payload = apply_stream_override(
-        run_context,
-        build_chat_payload(model, system, user, parameters),
-    )
+    payload = build_chat_payload(model, system, user, parameters)
     if response_format is not None:
         payload = {**payload, "response_format": dict(response_format)}
 

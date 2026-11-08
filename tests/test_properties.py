@@ -495,6 +495,12 @@ def test_table_array_guard_rejects_non_table_elements(tables: list[JsonValue]) -
     assert not is_non_empty_table_array(tables)
 
 
+def test_table_array_guard_rejects_non_list_containers() -> None:
+    assert not is_non_empty_table_array({"a": 1})
+    assert not is_non_empty_table_array("tables")
+    assert not is_non_empty_table_array(None)
+
+
 @given(st.one_of(st.booleans(), st.integers(min_value=1)))
 def test_paragraph_tri_state_guard_accepts_flags_and_positive_counts(
     value: bool | int,

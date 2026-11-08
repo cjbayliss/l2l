@@ -65,11 +65,9 @@ def run_l2l(
         [
             "--config",
             str(config_path),
-            "--cache-directory",
-            str(tmp_path / "cache"),
             *flags,
         ],
-        {},
+        {"XDG_CACHE_HOME": str(tmp_path / "cache-home")},
         io.StringIO("你好。"),
         stdout,
         stderr,
@@ -86,7 +84,7 @@ def test_run_log_captures_stream_request_and_response(tmp_path: Path) -> None:
     code, _, _ = run_l2l(write_config(tmp_path), tmp_path, http.open, ["--no-cache"])
     assert code == 0
 
-    logs = list((tmp_path / "cache" / "logs").glob("*.log"))
+    logs = list((tmp_path / "cache-home" / "l2l" / "logs").glob("*.log"))
     assert len(logs) == 1
     content = logs[0].read_text(encoding="utf-8")
     assert "REQUEST (stream)" in content
@@ -133,7 +131,7 @@ def test_run_log_captures_http_error(tmp_path: Path) -> None:
     assert code == 1
     assert len(slept) == 2
 
-    logs = list((tmp_path / "cache" / "logs").glob("*.log"))
+    logs = list((tmp_path / "cache-home" / "l2l" / "logs").glob("*.log"))
     assert len(logs) == 1
     content = logs[0].read_text(encoding="utf-8")
     assert "REQUEST (stream)" in content

@@ -35,9 +35,7 @@ from l2l.monads import (
     io_result,
     result_or_else,
 )
-from l2l.settings import UNSET, Unset
 from l2l.text import cache_path
-lazy from l2l.settings import value_if_set
 
 Clock = Callable[[], float]
 Sleep = Callable[[float], None]
@@ -96,19 +94,12 @@ def user_config_path(environment: Mapping[str, str]) -> IO[str]:
     )
 
 
-def resolve_cache_directory(
-    environment: Mapping[str, str], override: str | Unset = UNSET
-) -> IO[str]:
+def resolve_cache_directory(environment: Mapping[str, str]) -> IO[str]:
     def thunk() -> str:
-        override_value = value_if_set(override)
-        if override_value:
-            directory = override_value
-        else:
-            directory = os.path.join(
-                environment.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
-                "l2l",
-            )
-
+        directory = os.path.join(
+            environment.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+            "l2l",
+        )
         os.makedirs(directory, exist_ok=True)
         return directory
 

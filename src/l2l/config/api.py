@@ -14,7 +14,6 @@ from l2l.settings import (
     DEFAULT_MAXIMUM_TOKENS,
     DEFAULT_TIMEOUT,
     UNSET,
-    Arguments,
     Config,
     PartialApiSettings,
     Unset,
@@ -175,10 +174,8 @@ def env_string_settings(environment: Mapping[str, str]) -> PartialApiSettings:
 
 
 def optional_positive_setting(
-    value: float | None, description: str
-) -> Result[float | None, TranslationError]:
-    if value is None:
-        return Ok(None)
+    value: float, description: str
+) -> Result[float, TranslationError]:
     if value <= 0:
         return fail_config(f"{description} must be positive")
     return Ok(value)
@@ -199,7 +196,10 @@ def env_positive_setting(
     except ValueError:
         return fail_config(f"{variable} must be {kind}, got {raw!r}")
 
-    return optional_positive_setting(parsed, variable)
+    return result_map(
+        optional_positive_setting(parsed, variable),
+        lambda value: value or None,
+    )
 
 
 def env_timeout_setting(
@@ -235,38 +235,13 @@ def api_settings_from_environment(
     )
 
 
-def api_settings_from_arguments(
-    arguments: Arguments,
-) -> Result[PartialApiSettings, TranslationError]:
-    timeout = optional_positive_setting(value_if_set(arguments.timeout), "--timeout")
-    maximum_tokens = optional_positive_setting(
-        value_if_set(arguments.maximum_tokens), "--maximum-tokens"
-    )
-    return result_map(
-        result_sequence((timeout, maximum_tokens)),
-        lambda values: PartialApiSettings(
-            base_url=arguments.base_url,
-            api_key=arguments.api_key,
-            model=arguments.model,
-            timeout=values[0] if values[0] is not None else UNSET,
-            maximum_tokens=int(values[1]) if values[1] is not None else UNSET,
-        ),
-    )
-
-
 def missing_api_settings(partial: PartialApiSettings) -> tuple[str, ...]:
     return tuple(
         description
         for value, description in (
-            (
-                value_if_set(partial.base_url),
-                "api.base_url (--base-url / TRANSLATE_BASE_URL)",
-            ),
-            (
-                value_if_set(partial.api_key),
-                "api.api_key (--api-key / TRANSLATE_API_KEY)",
-            ),
-            (value_if_set(partial.model), "api.model (--model / TRANSLATE_MODEL)"),
+            (value_if_set(partial.base_url), "api.base_url (TRANSLATE_BASE_URL)"),
+            (value_if_set(partial.api_key), "api.api_key (TRANSLATE_API_KEY)"),
+            (value_if_set(partial.model), "api.model (TRANSLATE_MODEL)"),
         )
         if not value
     )
@@ -295,27 +270,21 @@ def build_config(partial: PartialApiSettings) -> Result[Config, TranslationError
 
 
 def merged_api_settings(
-    arguments: Arguments,
     environment: Mapping[str, str],
-    user_path: str,
-    user_document_result: DocumentResult,
-    selected_path: str | None,
-    selected_document_result: DocumentResult,
+    path: str,
+    document_result: DocumentResult,
 ) -> Result[Config, TranslationError]:
     def document_settings(
-        path: str | None,
         document_result: DocumentResult,
     ) -> Result[PartialApiSettings, TranslationError]:
         return result_bind(
             document_result,
-            lambda document: document_api_settings(path or "", document),
+            lambda document: document_api_settings(path, document),
         )
 
     layers = (
-        document_settings(user_path, user_document_result),
-        document_settings(selected_path, selected_document_result),
+        document_settings(document_result),
         api_settings_from_environment(environment),
-        api_settings_from_arguments(arguments),
     )
     return result_bind(
         result_sequence(layers),

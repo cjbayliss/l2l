@@ -132,25 +132,25 @@ def test_parse_filter_table_rejects_invalid_filter_specs() -> None:
         assert message in describe(result.error)
 
 
-def test_resolve_filter_settings_uses_selected_layer_then_user_layer() -> None:
-    user: DocumentResult = Ok(
+def test_resolve_filter_settings_reads_the_config_document() -> None:
+    doc: DocumentResult = Ok(
         {"filter": {"filters": [{"kind": "short_paragraphs", "minimum_characters": 3}]}}
     )
-    selected: DocumentResult = Ok({"filter": {"script": ["python3", "selected.py"]}})
-    layered = resolve_filter_settings("user", user, "selected", selected)
-    assert layered == Ok(FilterSettings(script=("python3", "selected.py")))
-    assert resolve_filter_settings("user", user, None, Ok({})) == Ok(
+    scripted: DocumentResult = Ok({"filter": {"script": ["python3", "selected.py"]}})
+    assert resolve_filter_settings("config.toml", doc) == Ok(
         FilterSettings(filters=(FilterSpec("short_paragraphs", minimum_characters=3),))
     )
-    assert resolve_filter_settings("user", Ok({}), None, Ok({})) == Ok(None)
+    assert resolve_filter_settings("config.toml", scripted) == Ok(
+        FilterSettings(script=("python3", "selected.py"))
+    )
+    assert resolve_filter_settings("config.toml", Ok({})) == Ok(None)
 
 
 def test_resolve_filter_settings_propagates_document_and_parse_errors() -> None:
     failure: DocumentResult = Err(ConfigError("bad document"))
-    assert resolve_filter_settings("user", failure, None, Ok({})) == failure
-    assert resolve_filter_settings("user", Ok({}), None, failure) == failure
+    assert resolve_filter_settings("config.toml", failure) == failure
     invalid = resolve_filter_settings(
-        "user", Ok({"filter": {"filters": ["unknown"]}}), None, Ok({})
+        "config.toml", Ok({"filter": {"filters": ["unknown"]}})
     )
     assert isinstance(invalid, Err)
     assert "duplicate_paragraphs" in describe(invalid.error)

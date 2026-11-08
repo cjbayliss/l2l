@@ -105,97 +105,14 @@ class VersionExitAction(argparse.Action):
         raise EarlyExitText("l2l " + __version__)
 
 
-def add_meta_arguments(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_argument_group("meta")
-    group.add_argument(
-        "-h",
-        "--help",
-        action=HelpExitAction,
-        nargs=0,
-        help="show this help message and exit",
-    )
-    group.add_argument(
-        "-v",
-        "--version",
-        action=VersionExitAction,
-        nargs=0,
-        help="show the version and exit",
-    )
-    group.add_argument(
-        "-V",
-        "--verbose",
-        action="store_true",
-        help="diagnostics (chunks, cache hits, timings) and LLM reasoning "
-        "traces to stderr; press Tab while running to toggle them "
-        "interactively",
-    )
-
-
-def add_configuration_arguments(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_argument_group("configuration and API")
-    group.add_argument(
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
         "-c",
         "--config",
         metavar="FILE",
-        help="TOML config file defining [api] settings and [pass.<name>] passes "
-        "(default: $TRANSLATE_CONFIG, then ./l2l.toml, then "
-        "~/.config/l2l/config.toml)",
+        help="TOML config file defining (default: $XDG_CONFIG_HOME/l2l/config.toml)",
     )
-    group.add_argument(
-        "-u",
-        "--base-url",
-        metavar="URL",
-        help="API endpoint; overrides [api] base_url and TRANSLATE_BASE_URL",
-    )
-    group.add_argument(
-        "-k",
-        "--api-key",
-        metavar="KEY",
-        help="API key; overrides [api] api_key and TRANSLATE_API_KEY",
-    )
-    group.add_argument(
-        "-m",
-        "--model",
-        metavar="MODEL",
-        help="default model; overrides [api] model and TRANSLATE_MODEL",
-    )
-    group.add_argument(
-        "-t",
-        "--timeout",
-        metavar="SECONDS",
-        type=float,
-        help="request timeout in seconds; overrides [api] timeout and "
-        "TRANSLATE_TIMEOUT",
-    )
-    group.add_argument(
-        "-T",
-        "--maximum-tokens",
-        metavar="N",
-        type=int,
-        dest="maximum_tokens",
-        help="request token budget; overrides [api] max_tokens and "
-        "TRANSLATE_MAX_TOKENS",
-    )
-    group.add_argument(
-        "-s",
-        "--stream",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="force streamed (--stream) or plain (--no-stream) responses; "
-        "default follows api.params.stream",
-    )
-    group.add_argument(
-        "--no-structured-output",
-        action="store_true",
-        dest="no_structured_output",
-        help="request glossary extraction without the JSON-schema response "
-        "format, for endpoints that do not support structured output",
-    )
-
-
-def add_translation_arguments(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_argument_group("translation behaviour")
-    group.add_argument(
+    parser.add_argument(
         "-g",
         "--glossary",
         action="append",
@@ -205,30 +122,15 @@ def add_translation_arguments(parser: argparse.ArgumentParser) -> None:
         "later files override earlier entries; generated and updated "
         "entries are written to the first file",
     )
-    group.add_argument(
-        "-l",
-        "--target-language",
-        metavar="LANG",
-        default=None,
-        help="target language; required unless target_language is set in a config file",
+    parser.add_argument(
+        "-E",
+        "--extract-glossary",
+        metavar="FILE",
+        dest="extract_glossary",
+        help="extract a starting glossary from the stdin text with one "
+        "model call, write it to FILE, and exit",
     )
-    group.add_argument(
-        "--source-language",
-        metavar="LANG",
-        dest="source_language",
-        default=None,
-        help="source language; 'auto' (default), 'guess', 'detect', and 'und' "
-        "ask the model to identify it, 'mixed' and 'mul' mean the document "
-        "mixes source languages, anything else names the language",
-    )
-    group.add_argument(
-        "-P",
-        "--ensure-paragraphs",
-        action="store_true",
-        help="after each pass, check the output paragraph count against the "
-        "source; re-run a mismatching pass with one call per paragraph",
-    )
-    group.add_argument(
+    parser.add_argument(
         "-b",
         "--best-effort",
         action="store_true",
@@ -236,20 +138,25 @@ def add_translation_arguments(parser: argparse.ArgumentParser) -> None:
         "validation after all repair attempts (default: fail the run "
         "with exit code 1)",
     )
-
-
-def add_cache_arguments(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_argument_group("cache and logs")
-    group.add_argument(
-        "--cache-directory",
-        metavar="DIR",
-        dest="cache_directory",
-        help="translation cache directory (default: $XDG_CACHE_HOME/l2l)",
+    parser.add_argument(
+        "--no-structured-output",
+        action="store_true",
+        dest="no_structured_output",
+        help="request glossary extraction without the JSON-schema response "
+        "format, for endpoints that do not support structured output",
     )
-    group.add_argument(
+    parser.add_argument(
         "--no-cache", action="store_true", help="bypass the translation cache"
     )
-    group.add_argument(
+    parser.add_argument(
+        "--prune-cache",
+        metavar="DAYS",
+        type=int,
+        dest="prune_cache",
+        help="delete cache entries older than DAYS days and exit; 0 deletes "
+        "every entry",
+    )
+    parser.add_argument(
         "--log-retention-days",
         metavar="DAYS",
         type=int,
@@ -258,42 +165,46 @@ def add_cache_arguments(parser: argparse.ArgumentParser) -> None:
         help="delete run logs older than DAYS days at startup (0 keeps "
         "every log; default: %(default)s)",
     )
-    group.add_argument(
+    parser.add_argument(
         "-p",
         "--print-log-path",
         action="store_true",
         dest="print_log_path",
         help="print the run log's path to stderr at startup",
     )
-
-
-def add_mode_arguments(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_argument_group("modes")
-    group.add_argument(
+    parser.add_argument(
+        "-C",
         "--check-config",
         action="store_true",
         help="print the resolved configuration and exit without translating",
     )
-    group.add_argument(
+    parser.add_argument(
         "-n",
         "--dry-run",
         action="store_true",
         help="print the per-pass call plan and exit without calling the endpoint",
     )
-    group.add_argument(
-        "--extract-glossary",
-        metavar="FILE",
-        dest="extract_glossary",
-        help="extract a starting glossary from the stdin text with one "
-        "model call, write it to FILE, and exit",
+    parser.add_argument(
+        "-h",
+        "--help",
+        action=HelpExitAction,
+        nargs=0,
+        help="show this help message and exit",
     )
-    group.add_argument(
-        "--prune-cache",
-        metavar="DAYS",
-        type=int,
-        dest="prune_cache",
-        help="delete cache entries older than DAYS days and exit; "
-        "0 deletes every entry",
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="diagnostics (chunks, cache hits, timings) and LLM reasoning "
+        "traces to stderr; press Tab while running to toggle them "
+        "interactively",
+    )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action=VersionExitAction,
+        nargs=0,
+        help="show the version and exit",
     )
 
 
@@ -305,11 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
         add_help=False,
         allow_abbrev=False,
     )
-    add_meta_arguments(parser)
-    add_configuration_arguments(parser)
-    add_translation_arguments(parser)
-    add_cache_arguments(parser)
-    add_mode_arguments(parser)
+    add_arguments(parser)
     return parser
 
 
@@ -319,26 +226,16 @@ def arguments_from_namespace(parsed: argparse.Namespace) -> Arguments:
 
     return Arguments(
         config=provided(parsed.config),
-        base_url=provided(parsed.base_url),
-        api_key=provided(parsed.api_key),
-        model=provided(parsed.model),
-        timeout=provided(parsed.timeout),
-        maximum_tokens=provided(parsed.maximum_tokens),
         no_cache=parsed.no_cache,
-        ensure_paragraphs=parsed.ensure_paragraphs,
         verbose=parsed.verbose,
         print_log_path=parsed.print_log_path,
-        cache_directory=provided(parsed.cache_directory),
         check_config=parsed.check_config,
         dry_run=parsed.dry_run,
-        stream=provided(parsed.stream),
         prune_cache=provided(parsed.prune_cache),
         log_retention_days=parsed.log_retention_days,
         best_effort=parsed.best_effort,
         glossary=tuple(parsed.glossary),
         extract_glossary=provided(parsed.extract_glossary),
-        target_language=provided(parsed.target_language),
-        source_language=provided(parsed.source_language),
         no_structured_output=parsed.no_structured_output,
     )
 
@@ -425,10 +322,9 @@ def with_loaded_setup(
 
 def with_cache_directory(
     environment: Mapping[str, str],
-    requested: str | Unset,
     program: Callable[[str], IO[int]],
 ) -> IO[int]:
-    return io_bind(resolve_cache_directory(environment, requested), program)
+    return io_bind(resolve_cache_directory(environment), program)
 
 
 def with_tab_listener[T](
@@ -563,7 +459,6 @@ def build_context(
         log=log if log is not None else RunLog(NOTHING, clock),
         clock=clock,
         sleep=sleep,
-        stream=parsed.stream,
         best_effort=parsed.best_effort,
         glossary_entries=setup.glossary_entries,
         glossary_update_path=parsed.glossary[0] if parsed.glossary else None,
@@ -756,7 +651,7 @@ def prune_cache_program(
                 lambda pruned: report_cache_prune(console, pruned),
             )
 
-        return with_cache_directory(environment, parsed.cache_directory, prune)
+        return with_cache_directory(environment, prune)
 
     return with_console_io(stderr, with_console)
 
@@ -827,9 +722,7 @@ def run_main_program(
                         open_run_log(cache_directory, clock), run_logged_pipeline
                     )
 
-                return with_cache_directory(
-                    environment, parsed.cache_directory, run_in_cache_directory
-                )
+                return with_cache_directory(environment, run_in_cache_directory)
 
             return io_and_then(warnings, io_bind(now(clock), with_started))
 
