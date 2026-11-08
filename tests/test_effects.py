@@ -1,6 +1,5 @@
 import os
 import sys
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import TextIO, cast, final
 lazy from pathlib import Path
@@ -19,14 +18,13 @@ from l2l.effects import (
     file_age,
     load_json,
     load_toml,
-    log_paths,
     path_is_directory,
-    prune_old_logs,
     read_text_file,
     remove_file,
     replace_file,
     resolve_cache_directory,
     run_filter_script,
+    run_log_paths,
     run_process,
     stream_isatty,
     user_config_path,
@@ -153,14 +151,17 @@ def test_cache_entry_paths_reports_scan_failures(
     assert "could not list entries in" in describe(outcome.error)
 
 
-def test_log_paths_tolerates_missing_directories_and_lists_logs(tmp_path: Path) -> None:
-    assert log_paths(str(tmp_path / "absent")).run() == ()
+def test_run_log_paths_tolerates_missing_directories_and_lists_logs(
+    tmp_path: Path,
+) -> None:
+    assert run_log_paths(str(tmp_path / "absent")).run() == Ok(())
     logs = tmp_path / "logs"
     logs.mkdir()
     (logs / "run.log").write_text("log", encoding="utf-8")
     (logs / "run.log.tmp").write_text("partial", encoding="utf-8")
-    paths = log_paths(str(tmp_path)).run()
-    assert [path.endswith("run.log") for path in paths] == [True]
+    paths = run_log_paths(str(tmp_path)).run()
+    assert isinstance(paths, Ok)
+    assert [path.endswith("run.log") for path in paths.value] == [True]
 
 
 def test_file_age_and_removal_report_failures(
@@ -256,23 +257,6 @@ def test_path_is_directory_distinguishes_files(tmp_path: Path) -> None:
     assert path_is_directory(str(target)).run() is False
     assert path_is_directory(str(tmp_path)).run() is True
     assert path_is_directory(str(tmp_path / "absent")).run() is False
-
-
-def test_prune_old_logs_removes_only_stale_logs(tmp_path: Path) -> None:
-    logs = tmp_path / "logs"
-    logs.mkdir()
-    old = logs / "old.log"
-    old.write_text("stale", encoding="utf-8")
-    fresh = logs / "fresh.log"
-    fresh.write_text("keep", encoding="utf-8")
-    month_ago = time.time() - 40 * 86400
-    os.utime(old, (month_ago, month_ago))
-
-    assert prune_old_logs(str(tmp_path), 30, time.time).run() == 1
-    assert not old.exists()
-    assert fresh.exists()
-    assert prune_old_logs(str(tmp_path), 0, time.time).run() == 1
-    assert not fresh.exists()
 
 
 def test_run_filter_script_pipes_utf8_text_through_command() -> None:

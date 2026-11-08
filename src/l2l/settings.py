@@ -151,7 +151,7 @@ class Arguments:
     check_config: bool = False
     dry_run: bool = False
     prune_cache: int | Unset = UNSET
-    log_retention_days: int = 30
+    prune_logs: int | Unset = UNSET
     best_effort: bool = False
     glossary: tuple[str, ...] = ()
     extract_glossary: str | Unset = UNSET

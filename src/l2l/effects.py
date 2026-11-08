@@ -29,11 +29,8 @@ from l2l.monads import (
     Nothing,
     Ok,
     Result,
-    fold_io,
     io_bind,
-    io_map,
     io_result,
-    result_or_else,
 )
 from l2l.text import cache_path
 
@@ -378,43 +375,31 @@ def cache_entry_paths(
     return IO(thunk)
 
 
-def log_paths(cache_directory: str) -> IO[tuple[str, ...]]:
-    def thunk() -> tuple[str, ...]:
-        try:
-            entries = tuple(os.scandir(os.path.join(cache_directory, "logs")))
-        except OSError:
-            return ()
+def run_log_paths(
+    cache_directory: str,
+) -> IO[Result[tuple[str, ...], TranslationError]]:
+    logs_directory = os.path.join(cache_directory, "logs")
 
-        return tuple(
-            entry.path
-            for entry in entries
-            if entry.is_file() and entry.name.endswith(".log")
+    def thunk() -> Result[tuple[str, ...], TranslationError]:
+        try:
+            entries = tuple(os.scandir(logs_directory))
+        except FileNotFoundError:
+            return Ok(())
+        except OSError as error:
+            return fail_file_error(logs_directory, "list entries in", str(error))
+
+        return Ok(
+            tuple(
+                entry.path
+                for entry in entries
+                if entry.is_file() and entry.name.endswith(".log")
+            )
         )
 
     return IO(thunk)
 
 
-LOG_SECONDS_PER_DAY: Final = 86400.0
-
-
-def prune_old_logs(cache_directory: str, keep_days: int, clock: Clock) -> IO[int]:
-    horizon = keep_days * LOG_SECONDS_PER_DAY
-
-    def with_now(now_value: float) -> IO[int]:
-        def step(count: int, path: str) -> IO[Result[int, TranslationError]]:
-            return io_map(
-                remove_file_if_older(path, now_value, horizon),
-                lambda removal: count_removed_file(count, removal),
-            )
-
-        return io_map(
-            io_bind(
-                log_paths(cache_directory), lambda paths: fold_io(paths, step, Ok(0))
-            ),
-            lambda pruned: result_or_else(pruned, lambda: 0),
-        )
-
-    return io_bind(now(clock), with_now)
+SECONDS_PER_DAY: Final = 86400.0
 
 
 def count_removed_file(

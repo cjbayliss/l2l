@@ -14,7 +14,7 @@ from l2l.config import load_setup
 from l2l.console import Console, StatusLine, toggle_verbose
 from l2l.context import Context, HttpRequest, HttpResponse, OpenHTTP
 from l2l.effects import (
-    LOG_SECONDS_PER_DAY,
+    SECONDS_PER_DAY,
     RunLog,
     Sleep,
     cache_entry_paths,
@@ -22,12 +22,12 @@ from l2l.effects import (
     count_removed_file,
     now,
     open_run_log,
-    prune_old_logs,
     read_stdin,
     remove_file,
     remove_file_if_older,
     resolve_cache_directory,
     run_filter_script,
+    run_log_paths,
     stream_isatty,
     time_sleep,
     user_state_glossary_path,
@@ -165,13 +165,11 @@ def add_arguments(parser: argparse.ArgumentParser, default_glossary: str) -> Non
         "every entry",
     )
     parser.add_argument(
-        "--log-retention-days",
+        "--prune-logs",
         metavar="DAYS",
         type=int,
-        dest="log_retention_days",
-        default=30,
-        help="delete run logs older than DAYS days at startup (0 keeps "
-        "every log; default: %(default)s)",
+        dest="prune_logs",
+        help="delete run logs older than DAYS days and exit; 0 deletes every log",
     )
     parser.add_argument(
         "-p",
@@ -256,7 +254,7 @@ def arguments_from_namespace(parsed: argparse.Namespace) -> Arguments:
         check_config=parsed.check_config,
         dry_run=parsed.dry_run,
         prune_cache=provided(parsed.prune_cache),
-        log_retention_days=parsed.log_retention_days,
+        prune_logs=provided(parsed.prune_logs),
         best_effort=parsed.best_effort,
         glossary=tuple(parsed.glossary),
         extract_glossary=provided(parsed.extract_glossary),
@@ -273,6 +271,7 @@ def active_mode_flags(parsed: Arguments) -> tuple[str, ...]:
         for flag_name, is_active in (
             ("--check-config", parsed.check_config),
             ("--prune-cache", not isinstance(parsed.prune_cache, Unset)),
+            ("--prune-logs", not isinstance(parsed.prune_logs, Unset)),
             ("--extract-glossary", not isinstance(parsed.extract_glossary, Unset)),
             ("--dry-run", parsed.dry_run),
         )
@@ -376,18 +375,6 @@ def announce_run_log(parsed: Arguments, console: Console, log: RunLog) -> IO[Non
     )
 
 
-def prune_old_run_logs(
-    parsed: Arguments, cache_directory: str, clock: Callable[[], float]
-) -> IO[None]:
-    return io_when_unit(
-        parsed.log_retention_days > 0,
-        io_map(
-            prune_old_logs(cache_directory, parsed.log_retention_days, clock),
-            lambda _: None,
-        ),
-    )
-
-
 def main(
     arguments: Sequence[str],
     environment: Mapping[str, str],
@@ -418,6 +405,9 @@ def main(
 
         if not isinstance(parsed.prune_cache, Unset):
             return prune_cache_program(parsed, environment, stderr, clock)
+
+        if not isinstance(parsed.prune_logs, Unset):
+            return prune_logs_program(parsed, environment, stderr, clock)
 
         if not isinstance(parsed.extract_glossary, Unset):
             glossary_output_path = parsed.extract_glossary
@@ -597,7 +587,7 @@ def check_config_program(
     return with_console_io(stderr, with_console)
 
 
-def prune_cache_entry(
+def prune_entry(
     clock: Callable[[], float],
     days: int,
     count: int,
@@ -611,7 +601,7 @@ def prune_cache_entry(
     return io_bind(
         now(clock),
         lambda now_value: io_map(
-            remove_file_if_older(path, now_value, days * LOG_SECONDS_PER_DAY),
+            remove_file_if_older(path, now_value, days * SECONDS_PER_DAY),
             lambda removal: count_removed_file(count, removal),
         ),
     )
@@ -660,7 +650,7 @@ def prune_cache_program(
                     case Ok(paths):
                         return fold_io(
                             paths,
-                            lambda count, path: prune_cache_entry(
+                            lambda count, path: prune_entry(
                                 clock, retention_days, count, path
                             ),
                             Ok(0),
@@ -669,6 +659,65 @@ def prune_cache_program(
             return io_bind(
                 io_bind(cache_entry_paths(directory), with_entry_paths),
                 lambda pruned: report_cache_prune(console, pruned),
+            )
+
+        return with_cache_directory(environment, prune)
+
+    return with_console_io(stderr, with_console)
+
+
+def report_log_prune(
+    console: Console, pruned: Result[int, TranslationError]
+) -> IO[int]:
+    match pruned:
+        case Err(error):
+            return report_error_and_exit(console, error, 2)
+
+        case Ok(count):
+            noun = "log" if count == 1 else "logs"
+            return report_message_and_exit(
+                console, f"l2l: pruned {count} run {noun}", 0
+            )
+
+
+def prune_logs_program(
+    parsed: Arguments,
+    environment: Mapping[str, str],
+    stderr: TextIO,
+    clock: Callable[[], float],
+) -> IO[int]:
+    days = value_if_set(parsed.prune_logs)
+
+    def with_console(console: Console) -> IO[int]:
+        if days is None or days < 0:
+            return report_message_and_exit(
+                console,
+                "l2l: --prune-logs requires a non-negative number of days",
+                2,
+            )
+
+        retention_days = days
+
+        def prune(cache_directory: str) -> IO[int]:
+            def with_log_paths(
+                scanned: Result[tuple[str, ...], TranslationError],
+            ) -> IO[Result[int, TranslationError]]:
+                match scanned:
+                    case Err(error):
+                        return io_result(Err(error))
+
+                    case Ok(paths):
+                        return fold_io(
+                            paths,
+                            lambda count, path: prune_entry(
+                                clock, retention_days, count, path
+                            ),
+                            Ok(0),
+                        )
+
+            return io_bind(
+                io_bind(run_log_paths(cache_directory), with_log_paths),
+                lambda pruned: report_log_prune(console, pruned),
             )
 
         return with_cache_directory(environment, prune)
@@ -712,29 +761,26 @@ def run_main_program(
                     def run_logged_pipeline(log: RunLog) -> IO[int]:
                         return io_and_then(
                             announce_run_log(parsed, console, log),
-                            io_and_then(
-                                prune_old_run_logs(parsed, cache_directory, clock),
-                                with_tab_listener(
-                                    console,
-                                    run_pipeline(
-                                        build_context(
-                                            parsed,
-                                            setup,
-                                            console,
-                                            clock,
-                                            open_http,
-                                            sleep,
-                                            cache_directory=cache_directory,
-                                            use_cache=not parsed.no_cache,
-                                            log=log,
-                                        ),
-                                        setup.passes,
-                                        source_text,
-                                        started,
-                                        stdout,
+                            with_tab_listener(
+                                console,
+                                run_pipeline(
+                                    build_context(
+                                        parsed,
+                                        setup,
+                                        console,
+                                        clock,
+                                        open_http,
+                                        sleep,
+                                        cache_directory=cache_directory,
+                                        use_cache=not parsed.no_cache,
+                                        log=log,
                                     ),
-                                    close_run_log(log),
+                                    setup.passes,
+                                    source_text,
+                                    started,
+                                    stdout,
                                 ),
+                                close_run_log(log),
                             ),
                         )
 

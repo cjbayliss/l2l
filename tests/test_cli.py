@@ -1118,6 +1118,10 @@ def test_parse_arguments_rejects_invalid_or_conflicting_modes() -> None:
             "cannot be combined with",
         ),
         (["-c", "cfg.toml", "--prune-cache", "7", "--dry-run"], "cannot be combined"),
+        (
+            ["-c", "cfg.toml", "--prune-logs", "7", "--dry-run"],
+            "cannot be combined",
+        ),
     )
     for arguments, fragment in invalid_argument_groups:
         result = cli.parse_arguments(arguments, {}).run()
@@ -1129,6 +1133,7 @@ def test_parse_arguments_accepts_single_modes() -> None:
     for arguments in (
         ["-c", "cfg.toml", "--check-config"],
         ["-c", "cfg.toml", "--prune-cache", "7"],
+        ["-c", "cfg.toml", "--prune-logs", "7"],
         ["-c", "cfg.toml", "--extract-glossary", "glossary.json"],
         ["-c", "cfg.toml", "--dry-run"],
     ):
@@ -1166,37 +1171,50 @@ def test_main_rejects_dry_run_with_extract_glossary_without_http(
     assert "l2l: --extract-glossary cannot be combined with --dry-run" in stderr
 
 
-def test_main_log_retention_days_prunes_old_logs(tmp_path: Path) -> None:
-    config_path = write_config(tmp_path)
-    cache_directory = tmp_path / "xdg-cache" / "l2l"
-    logs = cache_directory / "logs"
+@pytest.mark.parametrize(
+    ("days", "pruned_count", "fresh_kept"),
+    [(7, 1, True), (0, 2, False)],
+)
+def test_prune_logs_removes_old_logs(
+    tmp_path: Path, days: int, pruned_count: int, fresh_kept: bool
+) -> None:
+    logs = tmp_path / "xdg-cache" / "l2l" / "logs"
     logs.mkdir(parents=True)
-    ancient = logs / "ancient.log"
-    ancient.write_text("old", encoding="utf-8")
-    month_ago = time.time() - 40 * 86400
-    os.utime(ancient, (month_ago, month_ago))
+    stale = logs / "stale.log"
+    stale.write_text("old", encoding="utf-8")
+    month_ago = time.time() - 30 * 86400
+    os.utime(stale, (month_ago, month_ago))
+    fresh = logs / "fresh.log"
+    fresh.write_text("new", encoding="utf-8")
 
-    chunks = with_usage(stream_chunks("Hello."), USAGE)
-    http = FakeHttp([FakeStreamResponse(chunks)])
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    code, _, stderr = run_l2l(
+        tmp_path,
         [
             "-c",
-            str(config_path),
-            "--no-cache",
-            "--log-retention-days",
-            "30",
+            str(tmp_path),
+            "--prune-logs",
+            str(days),
         ],
-        cache_environment(tmp_path),
-        io.StringIO("你好。"),
-        stdout,
-        stderr,
-        time.time,
-        http.open,
-    ).run()
+    )
     assert code == 0
-    assert not ancient.exists()
-    assert len(list(logs.glob("*.log"))) == 1
+    # "run log" matches both the singular and plural forms of the message.
+    assert f"pruned {pruned_count} run log" in stderr
+    assert not stale.exists()
+    assert fresh.exists() is fresh_kept
+
+
+def test_prune_logs_rejects_negative_days(tmp_path: Path) -> None:
+    code, _, stderr = run_l2l(
+        tmp_path,
+        [
+            "-c",
+            str(tmp_path),
+            "--prune-logs",
+            "-1",
+        ],
+    )
+    assert code == 2
+    assert "non-negative" in stderr
 
 
 def test_cli_exits_with_program_code(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1245,13 +1263,8 @@ def test_parse_args_defaults_and_short_flags() -> None:
     assert defaults.config == "cfg.toml"
     assert defaults.no_cache
     assert defaults.verbose
-    assert defaults.log_retention_days == 30
-    assert (
-        cli.parse_args(
-            ["-c", "cfg.toml", "--log-retention-days", "0"]
-        ).log_retention_days
-        == 0
-    )
+    assert isinstance(defaults.prune_logs, Unset)
+    assert cli.parse_args(["-c", "cfg.toml", "--prune-logs", "0"]).prune_logs == 0
 
     arguments = cli.parse_args(
         [
