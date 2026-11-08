@@ -233,7 +233,7 @@ def test_pass_draft_from() -> None:
     result = pass_draft_from("f", "p", {"mode": "weird"}, "inst")
     assert isinstance(result, Err)
     assert (
-        "f: [pass.p]: mode must be analysis, translate, or "
+        "f: [pass.p]: mode must be analysis, translate, review, or "
         "update_glossary" in describe(result.error)
     )
 
@@ -689,9 +689,17 @@ def test_pass_draft_from_parses_paragraphs_per_call() -> None:
             "f", "p", {"mode": mode, "paragraphs_per_call": 2}, None
         )
         assert isinstance(result, Err)
-        assert "paragraphs_per_call applies only to translate passes" in describe(
-            result.error
+        assert (
+            "paragraphs_per_call applies only to translate and review passes"
+            in describe(result.error)
         )
+
+    for mode in ("translate", "review"):
+        result = pass_draft_from(
+            "f", "p", {"mode": mode, "paragraphs_per_call": 2}, None
+        )
+        assert isinstance(result, Ok)
+        assert result.value.paragraphs_per_call == 2
 
 
 def test_pass_draft_from_rejects_removed_mode_names() -> None:
@@ -699,7 +707,7 @@ def test_pass_draft_from_rejects_removed_mode_names() -> None:
         result = pass_draft_from("f", "p", {"mode": mode}, "inst")
         assert isinstance(result, Err)
         assert (
-            "f: [pass.p]: mode must be analysis, translate, or "
+            "f: [pass.p]: mode must be analysis, translate, review, or "
             "update_glossary" in describe(result.error)
         )
 
@@ -1676,7 +1684,7 @@ def test_style_patch_on_instruction_pass_fails_at_finalization() -> None:
     assert isinstance(result, Err)
     assert (
         "per-pass prompt, style, or output settings apply "
-        "only to built-in rendered translate or analysis passes"
+        "only to built-in rendered translate, review, or analysis passes"
         in describe(result.error)
     )
 

@@ -269,14 +269,14 @@ def pass_draft_from(
     mode = parse_pass_mode(table.get("mode", "translate"))
     if mode is None:
         return fail_config(
-            f"{path}: [pass.{name}]: mode must be analysis, translate, or "
-            "update_glossary"
+            f"{path}: [pass.{name}]: mode must be analysis, translate, review, "
+            "or update_glossary"
         )
 
     if prompts and (instruction is not None or mode == "update_glossary"):
         return fail_config(
             f"{path}: [pass.{name}]: per-pass prompt overrides apply only to "
-            "built-in rendered translate or analysis passes"
+            "built-in rendered translate, review, or analysis passes"
         )
 
     paragraphs_per_call_value = table.get("paragraphs_per_call")
@@ -294,10 +294,10 @@ def pass_draft_from(
             "integer (0 groups by token budget)"
         )
 
-    if paragraphs_per_call is not UNSET and mode != "translate":
+    if paragraphs_per_call is not UNSET and mode not in ("translate", "review"):
         return fail_config(
             f"{path}: [pass.{name}]: paragraphs_per_call applies only "
-            "to translate passes"
+            "to translate and review passes"
         )
 
     ascii_value = table.get("ascii")
@@ -431,7 +431,7 @@ def load_instruction_text(
     has_file = "instruction_file" in table
     mode = table.get("mode", "translate")
     if not has_inline and not has_file:
-        if mode in ("translate", "update_glossary", "analysis"):
+        if mode in ("translate", "review", "update_glossary", "analysis"):
             return io_result(Ok(None))
 
         return io_result(
@@ -756,10 +756,10 @@ def pass_style_patch(
     if "style" not in table:
         return Ok(StylePolicyPatch())
 
-    if instruction is not None or mode != "translate":
+    if instruction is not None or mode not in ("translate", "review"):
         return fail_config(
             f"{path}: [pass.{name}]: per-pass style applies only to built-in "
-            "rendered translate passes"
+            "rendered translate and review passes"
         )
 
     return parse_style_table(
@@ -841,10 +841,10 @@ def pass_output_patch(
     if "output" not in table:
         return Ok(OutputPolicyPatch())
 
-    if instruction is not None or mode != "translate":
+    if instruction is not None or mode not in ("translate", "review"):
         return fail_config(
             f"{path}: [pass.{name}]: per-pass output applies only to built-in "
-            "rendered translate passes"
+            "rendered translate and review passes"
         )
 
     return parse_output_table(

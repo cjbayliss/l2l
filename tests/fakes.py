@@ -24,6 +24,7 @@ from l2l.monads import (
 from l2l.settings import (
     Config,
     PassDefinition,
+    PassMode,
     build_settings,
     paragraph_tolerance,
 )
@@ -55,12 +56,14 @@ def translate_pass(
 
 
 def single_paragraph_pass(
-    name: str = "translate", retranslate_untranslated: bool = False
+    name: str = "translate",
+    retranslate_untranslated: bool = False,
+    mode: PassMode = "translate",
 ) -> PassDefinition:
     return PassDefinition(
         name,
         "T.",
-        "translate",
+        mode,
         {},
         None,
         False,

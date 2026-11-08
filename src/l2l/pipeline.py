@@ -444,7 +444,7 @@ def conclude_state(
         case "analysis" | "update_glossary":
             return io_result(Ok(state))
 
-        case "translate":
+        case "translate" | "review":
             if pass_definition.retranslate_untranslated:
                 return retranslate_state(
                     run_context,
@@ -1447,7 +1447,7 @@ def run_pass_attempt(
 ) -> IO[StateResult]:
     pass_definition = execution.pass_definition
     retry: PassRetry | None = None
-    if retry_attempt == 0 and pass_definition.mode == "translate":
+    if retry_attempt == 0 and pass_definition.mode in ("translate", "review"):
         retry_state = state
 
         def retry_once(accumulated: Usage, retry_started: float) -> IO[StateResult]:
@@ -1574,7 +1574,7 @@ def run_pass(
         case "update_glossary":
             return run_update_glossary_pass(execution, state, started_at)
 
-        case "translate":
+        case "translate" | "review":
             return run_text_pass(execution, state, started_at)
 
 

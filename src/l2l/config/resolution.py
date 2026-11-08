@@ -154,12 +154,13 @@ def resolve_passes(
     return result_bind_io(document_result, resolve)
 
 
-def selected_pass_role(
-    pass_draft: PassDraft, seen_text_pass: bool
-) -> PromptRole | None:
+def selected_pass_role(pass_draft: PassDraft) -> PromptRole | None:
     match pass_draft.mode:
         case "translate":
-            return "reviewer" if seen_text_pass else "translator"
+            return "translator"
+
+        case "review":
+            return "reviewer"
 
         case "analysis":
             return "analyser"
@@ -171,21 +172,7 @@ def selected_pass_role(
 def selected_pass_roles(
     pass_drafts: tuple[PassDraft, ...],
 ) -> tuple[PromptRole | None, ...]:
-    def select_remaining(
-        remaining: tuple[PassDraft, ...], seen_text_pass: bool = False
-    ) -> tuple[PromptRole | None, ...]:
-        if not remaining:
-            return ()
-
-        current, *rest = remaining
-        return (
-            selected_pass_role(current, seen_text_pass),
-            *select_remaining(
-                tuple(rest), seen_text_pass or current.mode == "translate"
-            ),
-        )
-
-    return select_remaining(pass_drafts)
+    return tuple(selected_pass_role(pass_draft) for pass_draft in pass_drafts)
 
 
 def finalized_pass_definition(
@@ -274,8 +261,8 @@ def finalize_pass_draft(
         ):
             return fail_config(
                 f"pass [{pass_draft.name}]: per-pass prompt, style, or output "
-                "settings apply only to built-in rendered translate or "
-                "analysis passes"
+                "settings apply only to built-in rendered translate, review, "
+                "or analysis passes"
             )
 
         warnings: list[str] = []

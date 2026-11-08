@@ -380,7 +380,7 @@ def plan_violation(
         case "update_glossary":
             return None
 
-        case "translate":
+        case "translate" | "review":
             allowance = prompt_allowance(
                 run_context, pass_definition, earlier_pass_modes
             )
@@ -590,7 +590,7 @@ def plan_unit_calls(
 
         previous_group = work_groups[index - 1]
         match pass_definition.mode:
-            case "translate":
+            case "translate" | "review":
                 return suffix_within_token_budget(
                     previous_group[-TRANSLATED_CONTEXT_PARAGRAPH_COUNT:],
                     TRANSLATED_CONTEXT_TOKEN_BUDGET,

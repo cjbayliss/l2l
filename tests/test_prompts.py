@@ -236,13 +236,15 @@ def test_selected_pass_roles_across_modes() -> None:
         PassDraft("analyse", "analysis", "Analyse.", {}, UNSET, False),
         PassDraft("glossary", "update_glossary", None, {}, UNSET, False),
         PassDraft("first", "translate", None, {}, UNSET, False),
-        PassDraft("second", "translate", None, {}, UNSET, False),
+        PassDraft("second", "review", None, {}, UNSET, False),
+        PassDraft("third", "translate", None, {}, UNSET, False),
     )
     assert selected_pass_roles(drafts) == (
         "analyser",
         None,
         "translator",
         "reviewer",
+        "translator",
     )
 
 
@@ -304,9 +306,15 @@ def test_omitted_text_pass_renders_built_in() -> None:
     assert finalized.prompt_section_origins["accuracy"] == "built-in"
 
 
-def test_later_text_pass_renders_reviewer() -> None:
+def test_review_pass_renders_reviewer_and_later_translate_passes_stay_translator() -> (
+    None
+):
     finalized = finalize_passes(
-        (omitted_draft("translate"), omitted_draft("translate")),
+        (
+            omitted_draft("translate"),
+            omitted_draft("review"),
+            omitted_draft("translate"),
+        ),
         "English",
         "auto",
         {},
@@ -316,7 +324,7 @@ def test_later_text_pass_renders_reviewer() -> None:
     )
     assert isinstance(finalized, Ok)
     roles = tuple(definition.prompt_role for definition in finalized.value.passes)
-    assert roles == ("translator", "reviewer")
+    assert roles == ("translator", "reviewer", "translator")
 
 
 def test_analysis_without_instruction_renders_the_analyser() -> None:
@@ -350,7 +358,7 @@ def test_finalize_passes_renders_every_omitted_text_pass() -> None:
     )
     assert isinstance(finalized, Ok)
     assert finalized.value.passes[0].instruction == "Translate to {target_language}."
-    assert finalized.value.passes[1].prompt_role == "reviewer"
+    assert finalized.value.passes[1].prompt_role == "translator"
 
 
 def test_incomplete_section_mappings_are_rejected() -> None:

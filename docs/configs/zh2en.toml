@@ -26,6 +26,6 @@ reasoning.effort = "high"
 [pass.review]
 ascii = true
 retranslate_untranslated = true
-mode = "translate"
+mode = "review"
 [pass.review.params]
 reasoning.effort = "high"

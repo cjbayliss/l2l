@@ -1699,7 +1699,7 @@ def test_run_pipeline_updates_glossary_mid_run(tmp_path: Path) -> None:
             update_pass(target_language="Chinese"),
             PassDefinition("prep", "Brief.", "analysis", {}, None, False),
             translate_pass(),
-            single_paragraph_pass("review"),
+            single_paragraph_pass("review", mode="review"),
         ),
         "你好南京大观园。",
         0.0,

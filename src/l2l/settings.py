@@ -53,10 +53,11 @@ class Config:
     parameters: Mapping[str, JsonValue]
 
 
-type PassMode = Literal["analysis", "translate", "update_glossary"]
+type PassMode = Literal["analysis", "translate", "review", "update_glossary"]
 PASS_MODES: Final[tuple[PassMode, ...]] = (
     "analysis",
     "translate",
+    "review",
     "update_glossary",
 )
 

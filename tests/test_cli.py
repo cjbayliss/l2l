@@ -1568,7 +1568,7 @@ def test_check_config_shows_prompt_override_origins_and_warnings(
         + "\n[prompts]\n"
         'style = ""\n'
         "\n[pass.review]\n"
-        'mode = "translate"\n'
+        'mode = "review"\n'
         "\n[pass.review.prompts]\n"
         'accuracy = { file = "accuracy.txt" }\n',
     )
