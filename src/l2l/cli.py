@@ -26,12 +26,19 @@ from l2l.effects import (
     remove_file,
     remove_file_if_older,
     resolve_cache_directory,
+    run_filter_script,
     stream_isatty,
     time_sleep,
     write_stdout,
     write_text_file,
 )
-from l2l.errors import TranslationError, describe, fail_config
+from l2l.errors import TranslationError, describe, fail_config, fail_filter
+from l2l.filtering import (
+    FilterOutcome,
+    filter_paragraphs,
+    normalized_paragraph,
+    removal_counts,
+)
 from l2l.glossary import (
     entries_to_json_text,
     extraction_user_message,
@@ -566,6 +573,68 @@ def build_context(
     )
 
 
+def report_filter_outcome(console: Console, outcome: FilterOutcome) -> IO[None]:
+    summaries = (
+        console.log(
+            f"filter {kind!r}: removed {count} of "
+            f"{outcome.paragraph_count} paragraph(s)"
+        )
+        for kind, count in removal_counts(outcome.removals)
+    )
+    details = (
+        console.log_verbose(
+            f"filter {removal.kind!r}: removed paragraph {removal.index + 1}: "
+            f"{normalized_paragraph(removal.text)!r}"
+        )
+        for removal in outcome.removals
+    )
+    return reduce(io_and_then, (*summaries, *details), io_pure(None))
+
+
+def filter_source_text(
+    setup: Setup, console: Console, text: str
+) -> IO[Result[str, TranslationError]]:
+    settings = setup.filter
+    if settings is None:
+        return io_result(Ok(text))
+
+    scripted: IO[Result[str, TranslationError]] = (
+        run_filter_script(settings.script, text)
+        if settings.script is not None
+        else io_result(Ok(text))
+    )
+
+    def after_script(
+        script_result: Result[str, TranslationError],
+    ) -> IO[Result[str, TranslationError]]:
+        match script_result:
+            case Err(error):
+                return io_result(Err(error))
+            case Ok(script_text):
+                outcome = filter_paragraphs(script_text, settings.filters)
+                filtered = (
+                    Ok(outcome.text)
+                    if outcome.text.strip()
+                    else fail_filter(
+                        "filtering removed all text; refusing to translate an "
+                        "empty document"
+                    )
+                )
+                script_report = (
+                    console.log(
+                        f"filter script: {len(text)} -> {len(script_text)} character(s)"
+                    )
+                    if settings.script is not None
+                    else io_pure(None)
+                )
+                reports = io_and_then(
+                    script_report, report_filter_outcome(console, outcome)
+                )
+                return io_map(reports, lambda _: filtered)
+
+    return io_bind(scripted, after_script)
+
+
 def dry_run_program(
     parsed: Arguments,
     setup: Setup,
@@ -706,55 +775,74 @@ def run_main_program(
         return io_pure(0)
 
     def run_with_setup(setup: Setup, console: Console) -> IO[int]:
-        warnings = log_setup_warnings(console, setup)
-        if parsed.dry_run:
-            return io_and_then(
-                warnings,
-                dry_run_program(
-                    parsed, setup, console, clock, open_http, sleep, text, stdout
-                ),
-            )
-
-        def with_started(started: float) -> IO[int]:
-            def run_in_cache_directory(cache_directory: str) -> IO[int]:
-                def run_logged_pipeline(log: RunLog) -> IO[int]:
-                    return io_and_then(
-                        announce_run_log(parsed, console, log),
-                        io_and_then(
-                            prune_old_run_logs(parsed, cache_directory, clock),
-                            with_tab_listener(
-                                console,
-                                run_pipeline(
-                                    build_context(
-                                        parsed,
-                                        setup,
-                                        console,
-                                        clock,
-                                        open_http,
-                                        sleep,
-                                        cache_directory=cache_directory,
-                                        use_cache=not parsed.no_cache,
-                                        log=log,
-                                    ),
-                                    setup.passes,
-                                    text,
-                                    started,
-                                    stdout,
-                                ),
-                                close_run_log(log),
-                            ),
-                        ),
-                    )
-
-                return io_bind(
-                    open_run_log(cache_directory, clock), run_logged_pipeline
+        def run_with_source(source_text: str) -> IO[int]:
+            warnings = log_setup_warnings(console, setup)
+            if parsed.dry_run:
+                return io_and_then(
+                    warnings,
+                    dry_run_program(
+                        parsed,
+                        setup,
+                        console,
+                        clock,
+                        open_http,
+                        sleep,
+                        source_text,
+                        stdout,
+                    ),
                 )
 
-            return with_cache_directory(
-                environment, parsed.cache_directory, run_in_cache_directory
-            )
+            def with_started(started: float) -> IO[int]:
+                def run_in_cache_directory(cache_directory: str) -> IO[int]:
+                    def run_logged_pipeline(log: RunLog) -> IO[int]:
+                        return io_and_then(
+                            announce_run_log(parsed, console, log),
+                            io_and_then(
+                                prune_old_run_logs(parsed, cache_directory, clock),
+                                with_tab_listener(
+                                    console,
+                                    run_pipeline(
+                                        build_context(
+                                            parsed,
+                                            setup,
+                                            console,
+                                            clock,
+                                            open_http,
+                                            sleep,
+                                            cache_directory=cache_directory,
+                                            use_cache=not parsed.no_cache,
+                                            log=log,
+                                        ),
+                                        setup.passes,
+                                        source_text,
+                                        started,
+                                        stdout,
+                                    ),
+                                    close_run_log(log),
+                                ),
+                            ),
+                        )
 
-        return io_and_then(warnings, io_bind(now(clock), with_started))
+                    return io_bind(
+                        open_run_log(cache_directory, clock), run_logged_pipeline
+                    )
+
+                return with_cache_directory(
+                    environment, parsed.cache_directory, run_in_cache_directory
+                )
+
+            return io_and_then(warnings, io_bind(now(clock), with_started))
+
+        def with_filtered_text(
+            filtered: Result[str, TranslationError],
+        ) -> IO[int]:
+            match filtered:
+                case Err(error):
+                    return report_error_and_exit(console, error, 1)
+                case Ok(filtered_text):
+                    return run_with_source(filtered_text)
+
+        return io_bind(filter_source_text(setup, console, text), with_filtered_text)
 
     def with_console(console: Console) -> IO[int]:
         return with_loaded_setup(

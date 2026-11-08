@@ -84,6 +84,7 @@ both contribute glossary paths.
 | `glossary`        | list of strings | Paths to glossary JSON files, relative to the config file.                             |
 | `api`             | table           | API connection settings; see the `[api]` section.                                      |
 | `options`         | table           | Defaults applied to every pass; see the `[options]` section.                           |
+| `filter`          | table           | Deterministic source preprocessing; see the `[filter]` section.                        |
 | `prompts`         | table           | Global prompt section overrides; see the `[prompts]` section.                          |
 | `style`           | table           | Global style policy; see the `[style]` section.                                        |
 | `output`          | table           | Global output policy; see the `[output]` section.                                      |
@@ -112,6 +113,35 @@ Defaults for every pass; each pass can override them.
 | `ascii`                    | boolean                     | `false` | Restrict output to ASCII. The target language must use a Latin script.                                |
 | `ensure_paragraphs`        | boolean or positive integer | `false` | Ask the model to preserve paragraph structure; an integer sets the allowed paragraph-count tolerance. |
 | `retranslate_untranslated` | boolean                     | `false` | Re-translate chunks the model left untranslated instead of keeping them.                              |
+
+### `[filter]`
+
+Deterministic preprocessing applied before the passes run; the filtered
+text becomes the source text for every pass. At least one key is
+required.
+
+| Key       | Type                       | Default | Description                                                                                                                                                                 |
+| --------- | -------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `script`  | string or string array     | —       | External filter command (prefer the array form; a string is split shell-style, never run through a shell), given UTF-8 source on stdin, returning filtered UTF-8 on stdout. |
+| `filters` | array of strings or tables | —       | Built-in paragraph filters, applied to the script output in list order.                                                                                                     |
+
+- `"duplicate_paragraphs"`: removes repeated paragraphs after
+  normalizing whitespace, keeping the first occurrence.
+- `{ kind = "pattern", pattern = "..." }`: removes paragraphs matching
+  the regular expression.
+- `{ kind = "short_paragraphs", minimum_characters = 4 }`: removes
+  paragraphs shorter than `minimum_characters`, measured after
+  whitespace normalization.
+
+```toml
+[filter]
+script = ["python3", "scripts/clean_chapter.py"]
+filters = [
+  "duplicate_paragraphs",
+  { kind = "pattern", pattern = '下一章|advertisement' },
+  { kind = "short_paragraphs", minimum_characters = 4 },
+]
+```
 
 ### `[[pass]]`
 

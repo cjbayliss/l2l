@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 lazy from collections.abc import Mapping
 
 from l2l.config.api import merged_api_settings
@@ -12,7 +13,11 @@ from l2l.config.glossaries import (
 from l2l.config.languages import resolve_source_language, resolve_target_language
 from l2l.config.models import DocumentResult, Glossaries, ResolvedPasses, SetupResult
 from l2l.config.parsing import apply_default_options
-from l2l.config.resolution import finalize_passes, resolve_passes
+from l2l.config.resolution import (
+    finalize_passes,
+    resolve_filter_settings,
+    resolve_passes,
+)
 from l2l.effects import user_config_path
 from l2l.errors import TranslationError, fail_config
 from l2l.languages import expected_target_scripts, scripts_description
@@ -25,6 +30,7 @@ from l2l.monads import (
     io_pair,
     io_result,
     result_bind,
+    result_map,
 )
 from l2l.settings import (
     Arguments,
@@ -166,11 +172,22 @@ def assemble_setup(
                         ),
                         lambda setup: result_bind(
                             glossaries,
-                            lambda resolved_glossaries: (
+                            lambda resolved_glossaries: result_bind(
                                 require_glossary_for_update_passes(
                                     arguments.glossary,
                                     setup_with_glossary(setup, resolved_glossaries),
-                                )
+                                ),
+                                lambda complete_setup: result_map(
+                                    resolve_filter_settings(
+                                        user_path,
+                                        user_document,
+                                        selected_path,
+                                        selected_document,
+                                    ),
+                                    lambda filter_settings: replace(
+                                        complete_setup, filter=filter_settings
+                                    ),
+                                ),
                             ),
                         ),
                     ),

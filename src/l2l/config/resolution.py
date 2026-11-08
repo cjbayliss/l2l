@@ -12,6 +12,7 @@ from l2l.config.parsing import (
     document_passes,
     document_prompt_overrides,
     document_style_patch,
+    parse_filter_table,
     parse_options_table,
 )
 from l2l.errors import TranslationError, fail_config
@@ -53,6 +54,7 @@ from l2l.settings import (
     paragraph_tolerance,
     value_if_set,
 )
+lazy from l2l.filtering import FilterSettings
 lazy from l2l.json_values import JsonObject
 
 
@@ -72,6 +74,48 @@ def document_layers(
     )
 
 
+def first_layer_with(
+    layers: tuple[tuple[str | None, JsonObject], ...], key: str
+) -> tuple[str | None, JsonObject] | None:
+    for path, document in layers:
+        if key in document:
+            return path, document
+
+    return None
+
+
+def resolve_filter_settings(
+    user_path: str,
+    user_document_result: DocumentResult,
+    selected_path: str | None,
+    selected_document_result: DocumentResult,
+) -> Result[FilterSettings | None, TranslationError]:
+    def resolve(
+        user_document: JsonObject, selected_document: JsonObject
+    ) -> Result[FilterSettings | None, TranslationError]:
+        layers = document_layers(
+            user_path, user_document, selected_path, selected_document
+        )
+        source = first_layer_with(layers, "filter")
+        if source is None:
+            return Ok(None)
+
+        filter_path, filter_document = source
+        # result_map widens Ok[FilterSettings] to the optional settings type.
+        return result_map(
+            parse_filter_table(filter_path or "", filter_document["filter"]),
+            lambda settings: settings,
+        )
+
+    return result_bind(
+        user_document_result,
+        lambda user_document: result_bind(
+            selected_document_result,
+            lambda selected_document: resolve(user_document, selected_document),
+        ),
+    )
+
+
 def resolve_passes(
     user_path: str,
     user_document_result: DocumentResult,
@@ -82,8 +126,8 @@ def resolve_passes(
         documents: tuple[JsonObject, JsonObject],
     ) -> IO[Result[ResolvedPasses, TranslationError]]:
         layers = document_layers(user_path, documents[0], selected_path, documents[1])
-        pass_sources = tuple(layer for layer in layers if "pass" in layer[1])
-        if not pass_sources:
+        pass_source = first_layer_with(layers, "pass")
+        if pass_source is None:
             config_hint = selected_path or user_path or "a config file (see --help)"
             return io_result(
                 fail_config(
@@ -92,13 +136,14 @@ def resolve_passes(
                 )
             )
 
-        option_sources = tuple(layer for layer in layers if "options" in layer[1])
-        options: Result[OptionDefaults, TranslationError]
-        if option_sources:
-            option_path, option_document = option_sources[0]
-            options = parse_options_table(option_path or "", option_document["options"])
-        else:
-            options = Ok(OptionDefaults())
+        option_source = first_layer_with(layers, "options")
+        options: Result[OptionDefaults, TranslationError] = (
+            Ok(OptionDefaults())
+            if option_source is None
+            else parse_options_table(
+                option_source[0] or "", option_source[1]["options"]
+            )
+        )
 
         def merged_global_prompts(
             layer_prompts: tuple[
@@ -171,7 +216,7 @@ def resolve_passes(
                 )
             )
 
-        pass_path, pass_document = pass_sources[0]
+        pass_path, pass_document = pass_source
         return io_bind(
             io_pair(
                 io_pair(

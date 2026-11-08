@@ -3,6 +3,7 @@ from l2l.errors import (
     AsciiError,
     BudgetError,
     ConfigError,
+    FilterError,
     HttpError,
     InvalidOutputError,
     MissingSettings,
@@ -15,6 +16,7 @@ from l2l.errors import (
     fail_ascii_collapse,
     fail_budget,
     fail_config,
+    fail_filter,
     fail_http,
     fail_invalid_output,
     fail_missing_settings,
@@ -35,6 +37,14 @@ def test_fail_config_and_missing_settings() -> None:
     assert isinstance(missing, Err)
     assert missing.error == MissingSettings(("api.model", "api.api_key"))
     assert "api.model, api.api_key" in describe(missing.error)
+
+
+def test_describe_filter_error() -> None:
+    failure = fail_filter("script exited with status 7; stderr: broken")
+    assert failure == Err(FilterError("script exited with status 7; stderr: broken"))
+    assert describe(failure.error) == (
+        "l2l: filter: script exited with status 7; stderr: broken"
+    )
 
 
 def test_describe_http_and_budget_errors() -> None:

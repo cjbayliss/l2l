@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -12,7 +13,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, TextIO, final
 
-from l2l.errors import TranslationError, fail_config, fail_file_error
+from l2l.errors import (
+    TranslationError,
+    fail_config,
+    fail_file_error,
+    fail_filter,
+)
 from l2l.json_values import JsonObject, JsonValue, is_json_object
 from l2l.monads import (
     IO,
@@ -149,6 +155,50 @@ def read_text_file(path: str, description: str) -> IO[Result[str, TranslationErr
                 return Ok(handle.read())
         except OSError as error:
             return fail_file_error(path, "read " + description, str(error))
+
+    return IO(thunk)
+
+
+FILTER_SCRIPT_TIMEOUT_SECONDS: Final = 120.0
+
+
+def run_filter_script(
+    command: tuple[str, ...], text: str
+) -> IO[Result[str, TranslationError]]:
+    def thunk() -> Result[str, TranslationError]:
+        rendered_command = shlex.join(command)
+        try:
+            # The [filter] setting explicitly authorizes this command execution.
+            completed = subprocess.run(  # noqa: S603
+                command,
+                input=text,
+                capture_output=True,
+                encoding="utf-8",
+                timeout=FILTER_SCRIPT_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return fail_filter(
+                f"script {rendered_command!r} timed out after "
+                f"{FILTER_SCRIPT_TIMEOUT_SECONDS:g} seconds"
+            )
+        except FileNotFoundError:
+            return fail_filter(f"script command not found: {command[0]!r}")
+        except UnicodeError as error:
+            return fail_filter(
+                f"script {rendered_command!r} did not produce valid UTF-8: {error}"
+            )
+        except OSError as error:
+            return fail_filter(f"could not run script {rendered_command!r}: {error}")
+
+        if completed.returncode != 0:
+            stderr = completed.stderr.strip() or "no stderr output"
+            return fail_filter(
+                f"script {rendered_command!r} exited with status "
+                f"{completed.returncode}; stderr: {stderr}"
+            )
+
+        return Ok(completed.stdout)
 
     return IO(thunk)
 

@@ -99,6 +99,12 @@ class FileError:
     detail: str
 
 
+@final
+@dataclass(frozen=True, slots=True)
+class FilterError:
+    problem: str
+
+
 type SetupError = ConfigError | MissingSettings
 type TranslationError = (
     SetupError
@@ -112,6 +118,7 @@ type TranslationError = (
     | InvalidOutputError
     | GlossaryReplyError
     | FileError
+    | FilterError
 )
 
 
@@ -170,6 +177,10 @@ def fail_invalid_output(
 
 def fail_file_error(path: str, operation: str, detail: str) -> Err[TranslationError]:
     return Err(FileError(path, operation, detail))
+
+
+def fail_filter(problem: str) -> Err[TranslationError]:
+    return Err(FilterError(problem))
 
 
 def describe_http(error: HttpError) -> str:
@@ -262,6 +273,9 @@ def describe(error: TranslationError) -> str:
 
         case FileError():
             return f"l2l: could not {error.operation} {error.path}: {error.detail}"
+
+        case FilterError():
+            return f"l2l: filter: {error.problem}"
 
         case _:
             assert_never(error)

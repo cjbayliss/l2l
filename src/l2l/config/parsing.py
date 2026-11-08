@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shlex
 from dataclasses import replace
 from types import MappingProxyType
 from typing import Final
@@ -9,11 +11,14 @@ lazy from collections.abc import Mapping
 from l2l.config.values import is_paragraph_tri_state
 from l2l.effects import read_text_file
 from l2l.errors import TranslationError, fail_config
+from l2l.filtering import FILTER_KINDS, FilterSettings, FilterSpec, parse_filter_kind
 from l2l.glossary import GLOSSARY_ENTRY_TYPES
 from l2l.json_values import (
     is_json_object,
     is_non_empty_string,
+    is_non_empty_string_array,
     is_non_empty_table_array,
+    is_object_list,
     is_string_array,
     is_string_keyed_table,
 )
@@ -27,6 +32,8 @@ from l2l.monads import (
     io_result,
     io_traverse,
     result_bind,
+    result_map,
+    result_sequence,
 )
 from l2l.prompts import (
     PROMPT_SECTION_NAMES,
@@ -98,6 +105,154 @@ def parse_options_table(
             ensure_paragraphs_explicit="ensure_paragraphs" in table,
         )
     )
+
+
+def parse_filter_script(
+    path: str, value: object
+) -> Result[tuple[str, ...], TranslationError]:
+    if is_non_empty_string_array(value) and value:
+        return Ok(tuple(value))
+
+    if is_non_empty_string(value):
+        try:
+            command = tuple(shlex.split(value))
+        except ValueError as error:
+            return fail_config(f"{path}: [filter] script is not valid syntax: {error}")
+
+        if command:
+            return Ok(command)
+
+    return fail_config(
+        f"{path}: [filter] script must be a non-empty command string or "
+        "a non-empty array of non-empty strings"
+    )
+
+
+def parse_pattern_filter(
+    path: str, table: Mapping[str, object]
+) -> Result[FilterSpec, TranslationError]:
+    if "pattern" not in table:
+        return fail_config(f"{path}: [filter] pattern filter requires pattern")
+
+    pattern_value = table["pattern"]
+    if not is_non_empty_string(pattern_value):
+        return fail_config(f"{path}: [filter] pattern must be a non-empty string")
+
+    try:
+        pattern = re.compile(pattern_value)
+    except re.error as error:
+        return fail_config(f"{path}: [filter] pattern is invalid: {error}")
+
+    return Ok(FilterSpec("pattern", pattern=pattern))
+
+
+def parse_short_paragraphs_filter(
+    path: str, table: Mapping[str, object]
+) -> Result[FilterSpec, TranslationError]:
+    if "minimum_characters" not in table:
+        return fail_config(
+            f"{path}: [filter] short_paragraphs filter requires minimum_characters"
+        )
+
+    minimum = table["minimum_characters"]
+    if not isinstance(minimum, int) or isinstance(minimum, bool) or minimum < 1:
+        return fail_config(
+            f"{path}: [filter] minimum_characters must be a positive integer"
+        )
+
+    return Ok(FilterSpec("short_paragraphs", minimum_characters=minimum))
+
+
+def parse_filter_table_spec(
+    path: str, table: Mapping[str, object]
+) -> Result[FilterSpec, TranslationError]:
+    kind = parse_filter_kind(table.get("kind"))
+    if kind is None:
+        return fail_config(
+            "{}: [filter] filter kind must be one of: {}".format(
+                path, ", ".join(FILTER_KINDS)
+            )
+        )
+
+    allowed = {
+        "duplicate_paragraphs": {"kind"},
+        "pattern": {"kind", "pattern"},
+        "short_paragraphs": {"kind", "minimum_characters"},
+    }[kind]
+    unknown = sorted(set(table) - allowed)
+    if unknown:
+        return fail_config(
+            "{}: [filter] {}: unknown or inapplicable key(s): {}".format(
+                path, kind, ", ".join(unknown)
+            )
+        )
+
+    match kind:
+        case "duplicate_paragraphs":
+            return Ok(FilterSpec(kind))
+        case "pattern":
+            return parse_pattern_filter(path, table)
+        case "short_paragraphs":
+            return parse_short_paragraphs_filter(path, table)
+
+
+def parse_filter_spec(
+    path: str, value: object, index: int
+) -> Result[FilterSpec, TranslationError]:
+    if is_string_keyed_table(value):
+        return parse_filter_table_spec(path, value)
+
+    if isinstance(value, str) and parse_filter_kind(value) == "duplicate_paragraphs":
+        return Ok(FilterSpec("duplicate_paragraphs"))
+
+    return fail_config(
+        f"{path}: [filter] filters entry {index + 1} must be "
+        '"duplicate_paragraphs" or a table with a valid kind and its options'
+    )
+
+
+def parse_filter_table(
+    path: str, table: object
+) -> Result[FilterSettings, TranslationError]:
+    if not is_string_keyed_table(table):
+        return fail_config(f"{path}: [filter] must be a table")
+
+    unknown = sorted(set(table) - {"script", "filters"})
+    if unknown:
+        return fail_config(
+            "{}: [filter]: unknown key(s): {} (expected: script, filters)".format(
+                path, ", ".join(unknown)
+            )
+        )
+
+    filters_value = table.get("filters", [])
+    if not is_object_list(filters_value):
+        return fail_config(f"{path}: [filter] filters must be an array")
+    if "filters" in table and not filters_value:
+        return fail_config(f"{path}: [filter] filters must not be empty")
+
+    script_value = table.get("script")
+    if script_value is None and not filters_value:
+        return fail_config(
+            f"{path}: [filter] requires at least one of script or filters"
+        )
+
+    specs = result_sequence(
+        parse_filter_spec(path, value, index)
+        for index, value in enumerate(filters_value)
+    )
+
+    def build(
+        command: tuple[str, ...] | None,
+    ) -> Result[FilterSettings, TranslationError]:
+        return result_map(
+            specs, lambda parsed_specs: FilterSettings(command, parsed_specs)
+        )
+
+    if script_value is None:
+        return build(None)
+
+    return result_bind(parse_filter_script(path, script_value), build)
 
 
 def pass_draft_from(

@@ -23,6 +23,7 @@ from l2l.prompts import (
     StylePolicyPatch,
 )
 from l2l.text import CACHE_SALT_VERSION
+lazy from l2l.filtering import FilterSettings
 lazy from l2l.json_values import JsonValue
 
 type ParagraphTriState = bool | int
@@ -176,6 +177,7 @@ class Setup:
     target_language: str
     source_language: str
     config_warnings: tuple[str, ...] = ()
+    filter: FilterSettings | None = None
     glossary_paths: tuple[str, ...] = ()
     glossary_entries: tuple[GlossaryEntry, ...] = ()
 

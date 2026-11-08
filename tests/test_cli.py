@@ -382,6 +382,100 @@ def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:
     assert "TOTAL" in stderr.getvalue()
 
 
+def test_built_in_filters_remove_paragraphs_before_translation(
+    tmp_path: Path,
+) -> None:
+    config_path = write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text()
+        + '\n[filter]\nfilters = ["duplicate_paragraphs", '
+        + '{ kind = "pattern", pattern = "^Drop" }, '
+        + '{ kind = "short_paragraphs", minimum_characters = 2 }]\n'
+    )
+    chunks: list[JsonObject] = [
+        *stream_chunks("Hello one.\n\nHello two."),
+        {"choices": [{"delta": {}}], "usage": USAGE},
+    ]
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cli.main(
+        [
+            "-c",
+            str(config_path),
+            "--cache-directory",
+            str(tmp_path / "cache"),
+            "--no-cache",
+            "--verbose",
+        ],
+        {},
+        io.StringIO("Keep one\n\nDrop 12\n\nKeep one\n\nx\n\nKeep two"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert code == 0
+    assert stdout.getvalue() == "Hello one.\n\nHello two.\n"
+    assert len(http.requests) == 1
+    request_text = http.requests[0].body.decode("utf-8")
+    assert "Keep one" in request_text
+    assert "Keep two" in request_text
+    assert "Drop 12" not in request_text
+    log = stderr.getvalue()
+    assert "filter 'duplicate_paragraphs': removed 1 of 5 paragraph(s)" in log
+    assert "filter 'pattern': removed 1 of 5 paragraph(s)" in log
+    assert "filter 'short_paragraphs': removed 1 of 5 paragraph(s)" in log
+    assert "removed paragraph 3: 'Keep one'" in log
+
+
+def test_filter_script_runs_before_dry_run_planning(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    script = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read().replace('noise', ''))",
+    ]
+    config_path.write_text(
+        config_path.read_text() + "\n[filter]\nscript = " + json.dumps(script) + "\n"
+    )
+    code, stdout, stderr = run_l2l(
+        tmp_path, ["-c", str(config_path), "--dry-run"], "keep noise"
+    )
+    assert code == 0
+    assert "filter script: 10 -> 5 character(s)" in stderr
+    assert "source: 5 character(s), 1 paragraph(s)" in stdout
+    assert "noise" not in stdout
+
+
+def test_filter_errors_are_fatal(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path)
+    script = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write('broken filter'); sys.exit(7)",
+    ]
+    config_path.write_text(
+        config_path.read_text() + "\n[filter]\nscript = " + json.dumps(script) + "\n"
+    )
+    code, stdout, stderr = run_l2l(tmp_path, ["-c", str(config_path)])
+    assert code == 1
+    assert stdout == ""
+    assert "exited with status 7" in stderr
+    assert "stderr: broken filter" in stderr
+
+    config_path.write_text(
+        CONFIG_TEXT
+        + '\n[filter]\nfilters = [{ kind = "pattern", pattern = ".*" }]\n'
+    )
+    code, stdout, stderr = run_l2l(
+        tmp_path, ["-c", str(config_path), "--dry-run"], "Everything must go"
+    )
+    assert code == 1
+    assert stdout == ""
+    assert "filtering removed all text" in stderr
+    assert "refusing to translate an empty document" in stderr
+
+
 def test_validation_mode_controls_the_cli_outcome(tmp_path: Path) -> None:
     bad = "One.\n\nTwo."
     chunks: list[JsonObject] = [

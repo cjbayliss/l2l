@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import TextIO, cast, final
@@ -6,6 +7,7 @@ lazy from pathlib import Path
 
 lazy import pytest
 
+from l2l import effects
 from l2l.effects import (
     append_text_file,
     cache_entry_paths,
@@ -24,12 +26,13 @@ from l2l.effects import (
     remove_file,
     replace_file,
     resolve_cache_directory,
+    run_filter_script,
     run_process,
     stream_isatty,
     user_config_path,
     write_text_file,
 )
-from l2l.errors import FileError, describe
+from l2l.errors import FileError, FilterError, describe
 from l2l.monads import NOTHING, Err, Just, Ok
 from l2l.text import cache_path
 
@@ -274,3 +277,55 @@ def test_prune_old_logs_removes_only_stale_logs(tmp_path: Path) -> None:
     assert fresh.exists()
     assert prune_old_logs(str(tmp_path), 0, time.time).run() == 1
     assert not fresh.exists()
+
+
+def test_run_filter_script_pipes_utf8_text_through_command() -> None:
+    command = (
+        sys.executable,
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read().replace('noise', ''))",
+    )
+    result = run_filter_script(command, "keep noise 世界").run()
+    assert result == Ok("keep  世界")
+
+
+def test_run_filter_script_reports_failures(tmp_path: Path) -> None:
+    command = (
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write('bad chapter'); sys.exit(7)",
+    )
+    result = run_filter_script(command, "text").run()
+    assert isinstance(result, Err)
+    assert isinstance(result.error, FilterError)
+    assert "status 7" in describe(result.error)
+    assert "bad chapter" in describe(result.error)
+
+    silent = run_filter_script(
+        (sys.executable, "-c", "import sys; sys.exit(3)"), "text"
+    ).run()
+    assert isinstance(silent, Err)
+    assert "no stderr output" in describe(silent.error)
+
+    missing = run_filter_script((str(tmp_path / "missing-command"),), "text").run()
+    assert isinstance(missing, Err)
+    assert "command not found" in describe(missing.error)
+
+    denied = run_filter_script((str(tmp_path),), "text").run()
+    assert isinstance(denied, Err)
+    assert "could not run script" in describe(denied.error)
+
+
+def test_run_filter_script_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(effects, "FILTER_SCRIPT_TIMEOUT_SECONDS", 0.01)
+    command = (sys.executable, "-c", "import time; time.sleep(1)")
+    result = run_filter_script(command, "text").run()
+    assert isinstance(result, Err)
+    assert "timed out after 0.01 seconds" in describe(result.error)
+
+
+def test_run_filter_script_rejects_invalid_utf8_output() -> None:
+    command = (sys.executable, "-c", "import os; os.write(1, b'\\xff')")
+    result = run_filter_script(command, "text").run()
+    assert isinstance(result, Err)
+    assert "did not produce valid UTF-8" in describe(result.error)

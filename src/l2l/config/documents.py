@@ -42,6 +42,7 @@ def validate_document(
             "options",
             "pass",
             "glossary",
+            "filter",
             "target_language",
             "source_language",
             "prompts",
@@ -52,7 +53,8 @@ def validate_document(
     if unknown:
         return fail_config(
             "{}: unknown top-level key(s): {} (expected [api], [options], "
-            "glossary, target_language, source_language, [prompts], [style], "
+            "glossary, target_language, source_language, [filter], [prompts], "
+            "[style], "
             "[output], "
             "[[pass]])".format(path, ", ".join(unknown))
         )
