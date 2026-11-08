@@ -72,7 +72,11 @@ ACCURACY_SECTION_TEXT: Final = (
     "speakers; never flip who does what in contrastive sentences.\n"
     "- Render idioms by meaning with matching force, and use the same "
     "rendering for a recurring term on every occurrence, including "
-    "callbacks."
+    "callbacks.\n"
+    "- Render every negative, conditional, and rhetorical sentence with "
+    "the source's polarity: never drop a negation, never turn negative "
+    "into affirmative or the reverse, and never soften a denial into a "
+    "hedge."
 )
 
 FLUENCY_SECTION_TEXT: Final = (
@@ -81,7 +85,11 @@ FLUENCY_SECTION_TEXT: Final = (
     "{target_language} word, not the closest-looking one.\n"
     "- No source punctuation artefacts: render tildes, separating dashes, "
     "and similar marks naturally in {target_language} instead of copying "
-    "them."
+    "them.\n"
+    "- No inserted em or en dashes: recast what reads as a dash separator "
+    "or a dash-wrapped aside with the commas, colons, parentheses, or "
+    "sentence breaks natural to {target_language}; keep dashes only where "
+    "the source itself uses them."
 )
 
 CONTEXT_HANDLING_SECTION_TEXT: Final = (
@@ -95,7 +103,10 @@ OUTPUT_RULES_SECTION_TEXT: Final = (
     "text. If a title is present, render it fully at the top; never "
     "truncate it or add words it does not carry. If the source is "
     "ambiguous, pick the most contextually plausible reading and "
-    "continue; never mark uncertainty."
+    "continue; never mark uncertainty. Output plain prose: no markdown "
+    "bold or italic markers, heading hashes, bullet or numbered lists, "
+    "code fences, inline backticks, links, or images; keep markdown only "
+    "where the source itself uses it."
 )
 
 EXACT_PARAGRAPH_RULE_TEXT: Final = (
@@ -155,13 +166,18 @@ REVIEWER_ROLE_TEXT: Final = (
 REVIEWER_TASK_TEXT: Final = (
     "Produce the final translation: keep what the draft already gets "
     "right and repair the rest. When no draft is present, translate the "
-    "source yourself under the same rules."
+    "source yourself under the same rules. Before finalising, compare "
+    "every sentence with the source for the three failure classes: "
+    "subject attribution (who acts, speaks, accuses, or rebukes), "
+    "negation polarity, and vocative attachment; repair any mismatch."
 )
 
 REVIEWER_OUTPUT_RULES_TEXT: Final = (
     "Reply with the corrected translation only: no notes, no change "
     "list, no diff or markup, and none of the source, brief, or draft "
-    "echoed back. If a draft paragraph still reads as the source "
+    "echoed back. Strip any markdown formatting the draft introduced: "
+    "keep markdown only where the source itself uses it. If a draft "
+    "paragraph still reads as the source "
     "instead of translating it, translate that paragraph in full. If "
     "the source is ambiguous, commit to the most contextually plausible "
     "reading and continue; never mark uncertainty."
@@ -189,7 +205,8 @@ ANALYSER_ACCURACY_SECTION_TEXT: Final = (
     "the most contextually plausible reading and state it as fact. "
     "Record every place the source omits the subject: say exactly who "
     "acts or speaks. Never drift between pronouns for one character, "
-    "including non-human speakers."
+    "including non-human speakers. Record every negation a translator "
+    "could plausibly drop or flip."
 )
 
 ANALYSER_OPENING_LINE: Final = "Preparation brief (reference only):"
