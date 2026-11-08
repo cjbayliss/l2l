@@ -33,8 +33,7 @@ CONFIG_TEXT = (
     'api_key = "secret-key"\n'
     'model = "m"\n'
     "max_tokens = 1000\n"
-    "\n[[pass]]\n"
-    'name = "translate"\n'
+    "\n[pass.translate]\n"
     'mode = "chunk"\n'
     'instruction = "Translate to {target_language}."'
 )
@@ -464,8 +463,7 @@ def test_filter_errors_are_fatal(tmp_path: Path) -> None:
     assert "stderr: broken filter" in stderr
 
     config_path.write_text(
-        CONFIG_TEXT
-        + '\n[filter]\nfilters = [{ kind = "pattern", pattern = ".*" }]\n'
+        CONFIG_TEXT + '\n[filter]\nfilters = [{ kind = "pattern", pattern = ".*" }]\n'
     )
     code, stdout, stderr = run_l2l(
         tmp_path, ["-c", str(config_path), "--dry-run"], "Everything must go"
@@ -774,13 +772,11 @@ def test_extract_glossary_ignores_pipeline_passes(tmp_path: Path) -> None:
 
 
 UPDATE_GLOSSARY_CONFIG_TEXT = CONFIG_TEXT.replace(
-    '\n[[pass]]\nname = "translate"\nmode = "chunk"\n'
+    '\n[pass.translate]\nmode = "chunk"\n'
     'instruction = "Translate to {target_language}."',
-    "\n[[pass]]\n"
-    'name = "glossary"\n'
+    "\n[pass.glossary]\n"
     'mode = "update_glossary"\n'
-    "\n[[pass]]\n"
-    'name = "translate"\n'
+    "\n[pass.translate]\n"
     'mode = "chunk"\n'
     'instruction = "Translate to {target_language}."',
 )
@@ -1529,10 +1525,9 @@ def test_check_config_shows_prompt_override_origins_and_warnings(
         CONFIG_TEXT.replace('instruction = "Translate to {target_language}."', "")
         + "\n[prompts]\n"
         'style = ""\n'
-        "\n[[pass]]\n"
-        'name = "review"\n'
+        "\n[pass.review]\n"
         'mode = "paragraph"\n'
-        "\n[pass.prompts]\n"
+        "\n[pass.review.prompts]\n"
         'accuracy = { file = "accuracy.txt" }\n',
     )
     (tmp_path / "accuracy.txt").write_text("Only keep the meaning exact.\n")
@@ -1549,7 +1544,7 @@ def test_check_config_shows_prompt_override_origins_and_warnings(
 def test_per_pass_prompts_on_legacy_instruction_fail_config(tmp_path: Path) -> None:
     config_path = tmp_path / "legacy.toml"
     config_path.write_text(
-        CONFIG_TEXT + "\n[pass.prompts]\n" + 'style = "Short sentences."\n'
+        CONFIG_TEXT + "\n[pass.translate.prompts]\n" + 'style = "Short sentences."\n'
     )
     code, _stdout, stderr = run_l2l(
         tmp_path, ["-c", str(config_path), "--check-config"]
@@ -1581,8 +1576,7 @@ def test_check_config_shows_resolved_style_and_guidance(tmp_path: Path) -> None:
         "\n[style]\n"
         'formality = "informal"\n'
         'honorifics = "titles"\n'
-        "\n[[pass]]\n"
-        'name = "translate"\n'
+        "\n[pass.translate]\n"
         'mode = "chunk"\n'
         "\n[output]\n"
         'paragraphs = "approximate"\n'

@@ -17,8 +17,8 @@ from l2l.json_values import (
     is_json_object,
     is_non_empty_string,
     is_non_empty_string_array,
-    is_non_empty_table_array,
     is_object_list,
+    is_object_table,
     is_string_array,
     is_string_keyed_table,
 )
@@ -269,13 +269,13 @@ def pass_draft_from(
     mode = parse_pass_mode(table.get("mode", "chunk"))
     if mode is None:
         return fail_config(
-            f"{path}: [[pass]] {name}: mode must be analysis, chunk, paragraph, or "
+            f"{path}: [pass.{name}]: mode must be analysis, chunk, paragraph, or "
             "update_glossary"
         )
 
     if prompts and (instruction is not None or mode == "update_glossary"):
         return fail_config(
-            f"{path}: [[pass]] {name}: per-pass prompt overrides apply only to "
+            f"{path}: [pass.{name}]: per-pass prompt overrides apply only to "
             "built-in rendered chunk, paragraph, or analysis passes"
         )
 
@@ -285,7 +285,7 @@ def pass_draft_from(
     elif isinstance(ascii_value, bool):
         ascii_setting = ascii_value
     else:
-        return fail_config(f"{path}: [[pass]] {name}: ascii must be true or false")
+        return fail_config(f"{path}: [pass.{name}]: ascii must be true or false")
 
     ensure_paragraphs_value = table.get("ensure_paragraphs")
     if ensure_paragraphs_value is None:
@@ -294,7 +294,7 @@ def pass_draft_from(
         ensure_paragraphs_setting = ensure_paragraphs_value
     else:
         return fail_config(
-            f"{path}: [[pass]] {name}: ensure_paragraphs must be true, false, "
+            f"{path}: [pass.{name}]: ensure_paragraphs must be true, false, "
             "or a positive integer"
         )
 
@@ -305,7 +305,7 @@ def pass_draft_from(
         retranslate_setting = retranslate_value
     else:
         return fail_config(
-            f"{path}: [[pass]] {name}: retranslate_untranslated must be true or false"
+            f"{path}: [pass.{name}]: retranslate_untranslated must be true or false"
         )
 
     model_value = table.get("model")
@@ -314,7 +314,7 @@ def pass_draft_from(
     elif is_non_empty_string(model_value):
         model = model_value.strip()
     else:
-        return fail_config(f"{path}: [[pass]] {name}: model must be a non-empty string")
+        return fail_config(f"{path}: [pass.{name}]: model must be a non-empty string")
 
     target_language_value = table.get("target_language")
     if target_language_value is None:
@@ -323,34 +323,34 @@ def pass_draft_from(
         target_language = target_language_value.strip()
     else:
         return fail_config(
-            f"{path}: [[pass]] {name}: target_language must be a non-empty string"
+            f"{path}: [pass.{name}]: target_language must be a non-empty string"
         )
 
     if "include_types" in table and mode != "update_glossary":
         return fail_config(
-            f"{path}: [[pass]] {name}: include_types applies only "
+            f"{path}: [pass.{name}]: include_types applies only "
             "to update_glossary passes"
         )
 
     include_types_value = table.get("include_types", [])
     if not is_string_array(include_types_value):
         return fail_config(
-            f"{path}: [[pass]] {name}: include_types must be a list of strings"
+            f"{path}: [pass.{name}]: include_types must be a list of strings"
         )
 
     if any(value not in GLOSSARY_ENTRY_TYPES for value in include_types_value):
         return fail_config(
-            "{}: [[pass]] {}: include_types entries must be chosen from: {}".format(
+            "{}: [pass.{}]: include_types entries must be chosen from: {}".format(
                 path, name, ", ".join(GLOSSARY_ENTRY_TYPES)
             )
         )
 
     parameters_value = table.get("params", {})
     if not is_string_keyed_table(parameters_value):
-        return fail_config(f"{path}: [[pass]] {name}: params must be a table")
+        return fail_config(f"{path}: [pass.{name}]: params must be a table")
     if not is_json_object(parameters_value):
         return fail_config(
-            f"{path}: [[pass]] {name}: params must contain only JSON values"
+            f"{path}: [pass.{name}]: params must contain only JSON values"
         )
 
     return Ok(
@@ -414,7 +414,7 @@ def load_instruction_text(
 
         return io_result(
             fail_config(
-                f"{path}: [[pass]] {name}: exactly one of instruction_file "
+                f"{path}: [pass.{name}]: exactly one of instruction_file "
                 "or instruction is required"
             )
         )
@@ -422,7 +422,7 @@ def load_instruction_text(
     if has_file == has_inline:
         return io_result(
             fail_config(
-                f"{path}: [[pass]] {name}: exactly one of instruction_file "
+                f"{path}: [pass.{name}]: exactly one of instruction_file "
                 "or instruction is required"
             )
         )
@@ -431,7 +431,7 @@ def load_instruction_text(
         instruction_value = table["instruction"]
         if not is_non_empty_string(instruction_value):
             return io_result(
-                fail_config(f"{path}: [[pass]] {name}: instruction is empty")
+                fail_config(f"{path}: [pass.{name}]: instruction is empty")
             )
 
         return io_result(Ok(instruction_value.strip()))
@@ -439,10 +439,10 @@ def load_instruction_text(
     instruction_file_value = table["instruction_file"]
     if not is_non_empty_string(instruction_file_value):
         return io_result(
-            fail_config(f"{path}: [[pass]] {name}: instruction_file must be a path")
+            fail_config(f"{path}: [pass.{name}]: instruction_file must be a path")
         )
 
-    description = f"{path}: [[pass]] {name}: instruction file"
+    description = f"{path}: [pass.{name}]: instruction file"
     file_path = os.path.join(base_directory, instruction_file_value)
 
     def checked(
@@ -453,7 +453,7 @@ def load_instruction_text(
             if stripped:
                 return Ok(stripped)
 
-            return fail_config(f"{path}: [[pass]] {name}: instruction file is empty")
+            return fail_config(f"{path}: [pass.{name}]: instruction file is empty")
 
         return result_bind(text_result, check)
 
@@ -736,14 +736,14 @@ def pass_style_patch(
 
     if instruction is not None or mode not in ("chunk", "paragraph"):
         return fail_config(
-            f"{path}: [[pass]] {name}: per-pass style applies only to built-in "
+            f"{path}: [pass.{name}]: per-pass style applies only to built-in "
             "rendered chunk or paragraph passes"
         )
 
     return parse_style_table(
         path,
         table["style"],
-        f"[[pass]] {name}: [pass.style]",
+        f"[pass.{name}]: [pass.style]",
     )
 
 
@@ -821,14 +821,14 @@ def pass_output_patch(
 
     if instruction is not None or mode not in ("chunk", "paragraph"):
         return fail_config(
-            f"{path}: [[pass]] {name}: per-pass output applies only to built-in "
+            f"{path}: [pass.{name}]: per-pass output applies only to built-in "
             "rendered chunk or paragraph passes"
         )
 
     return parse_output_table(
         path,
         table["output"],
-        f"[[pass]] {name}: [pass.output]",
+        f"[pass.{name}]: [pass.output]",
     )
 
 
@@ -860,33 +860,28 @@ def pass_prompt_overrides(
         path,
         table["prompts"],
         base_directory,
-        f"[[pass]] {name}: [pass.prompts]",
+        f"[pass.{name}]: [pass.prompts]",
         "pass-inline",
         "pass-file",
     )
 
 
 def parse_pass_table(
-    path: str, table: object, base_directory: str
+    path: str, name: str, table: object, base_directory: str
 ) -> IO[Result[PassDraft, TranslationError]]:
     if not is_string_keyed_table(table):
-        return io_result(fail_config(f"{path}: [[pass]] entries must be tables"))
+        return io_result(fail_config(f"{path}: [pass.{name}] must be a table"))
 
     unknown = sorted(set(table) - set(PASS_KEYS))
     if unknown:
         return io_result(
             fail_config(
-                "{}: [[pass]]: unknown key(s): {}".format(path, ", ".join(unknown))
+                "{}: [pass.{}]: unknown key(s): {}".format(
+                    path, name, ", ".join(unknown)
+                )
             )
         )
 
-    name_value = table.get("name")
-    if not is_non_empty_string(name_value):
-        return io_result(
-            fail_config(f"{path}: [[pass]]: name must be a non-empty string")
-        )
-
-    name = name_value.strip()
     mode = table.get("mode", "chunk")
 
     return io_bind(
@@ -927,14 +922,25 @@ def document_passes(
     if entries is None:
         return io_result(Ok(()))
 
-    if not is_non_empty_table_array(entries):
+    if not is_object_table(entries) or not entries:
         return io_result(
-            fail_config(f"{path}: [[pass]] must define one or more pass tables")
+            fail_config(
+                f"{path}: [pass] must be a table of one or more named pass tables "
+                "([pass.<name>])"
+            )
         )
 
-    return io_traverse(
-        entries,
-        lambda entry: parse_pass_table(
-            path, entry, os.path.dirname(os.path.abspath(path))
-        ),
-    )
+    def draft(
+        name_table: tuple[object, object],
+    ) -> IO[Result[PassDraft, TranslationError]]:
+        name_value, table = name_table
+        if not is_non_empty_string(name_value):
+            return io_result(
+                fail_config(f"{path}: [pass]: pass names must be non-empty strings")
+            )
+
+        return parse_pass_table(
+            path, name_value, table, os.path.dirname(os.path.abspath(path))
+        )
+
+    return io_traverse(entries.items(), draft)

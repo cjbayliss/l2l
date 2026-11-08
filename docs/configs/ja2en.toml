@@ -11,11 +11,10 @@ max_tokens = 100000
 provider = { allow_fallbacks = true, sort = { by = "throughput" } }
 stop = ["END"]
 
-[[pass]]
-name = "translate"
+[pass.translate]
 mode = "chunk"
 model = "z-ai/glm-5.3-flash"
-[pass.params]
+[pass.translate.params]
 reasoning_effort = "high"
 
 [options]

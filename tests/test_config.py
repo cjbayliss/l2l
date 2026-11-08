@@ -257,7 +257,7 @@ def test_pass_draft_from() -> None:
     result = pass_draft_from("f", "p", {"mode": "weird"}, "inst")
     assert isinstance(result, Err)
     assert (
-        "f: [[pass]] p: mode must be analysis, chunk, paragraph, or "
+        "f: [pass.p]: mode must be analysis, chunk, paragraph, or "
         "update_glossary" in describe(result.error)
     )
 
@@ -284,8 +284,8 @@ def test_pass_draft_from() -> None:
 
     result = parse_pass_table(
         "f",
+        "p",
         {
-            "name": "p",
             "mode": "chunk",
             "target_language": "French",
             "instruction": "inst",
@@ -341,7 +341,7 @@ def test_pass_draft_from() -> None:
         )
 
     result = parse_pass_table(
-        "f", {"name": "p", "mode": "chunk", "strict_fidelity": True}, "."
+        "f", "p", {"mode": "chunk", "strict_fidelity": True}, "."
     ).run()
     assert isinstance(result, Err)
     assert "unknown key(s): strict_fidelity" in describe(result.error)
@@ -566,16 +566,17 @@ def test_cache_key_variants() -> None:
 
 
 def test_parse_pass_table_and_inline_instruction() -> None:
-    parsed = parse_pass_table("f", {"name": "p", "instruction": " do "}, ".").run()
+    parsed = parse_pass_table("f", "p", {"instruction": " do "}, ".").run()
     assert isinstance(parsed, Ok)
+    assert parsed.value.name == "p"
     assert parsed.value.instruction == "do"
-    omitted = parse_pass_table("f", {"name": "p"}, ".").run()
+    omitted = parse_pass_table("f", "p", {}, ".").run()
     assert isinstance(omitted, Ok)
     assert omitted.value.instruction is None
-    table = {"name": "p", "mode": "analysis", "instruction": "a"}
-    conflicting = parse_pass_table("f", table, ".").run()
+    table = {"mode": "analysis", "instruction": "a"}
+    conflicting = parse_pass_table("f", "p", table, ".").run()
     assert isinstance(conflicting, Ok)
-    empty = parse_pass_table("f", {"name": "p", "mode": "analysis"}, ".").run()
+    empty = parse_pass_table("f", "p", {"mode": "analysis"}, ".").run()
     assert isinstance(empty, Ok)
     assert empty.value.instruction is None
 
@@ -599,13 +600,16 @@ def test_parse_pass_table_and_inline_instruction() -> None:
         assert "instruction is empty" in describe(result.error)
 
 
-def test_parse_pass_table_rejects_non_table_and_empty_name() -> None:
-    non_table = parse_pass_table("f", "chunk", ".").run()
+def test_parse_pass_table_rejects_non_table() -> None:
+    non_table = parse_pass_table("f", "p", "chunk", ".").run()
     assert isinstance(non_table, Err)
-    assert "entries must be tables" in describe(non_table.error)
-    empty_name = parse_pass_table("f", {"name": "  ", "instruction": "i"}, ".").run()
-    assert isinstance(empty_name, Err)
-    assert "name must be a non-empty string" in describe(empty_name.error)
+    assert "[pass.p] must be a table" in describe(non_table.error)
+
+
+def test_document_passes_rejects_empty_pass_name() -> None:
+    result = document_passes("f", {"pass": {"": {"instruction": "i"}}}).run()
+    assert isinstance(result, Err)
+    assert "pass names must be non-empty strings" in describe(result.error)
 
 
 def test_document_passes_without_tables_yields_no_passes() -> None:
@@ -615,7 +619,7 @@ def test_document_passes_without_tables_yields_no_passes() -> None:
 def test_resolve_passes_requires_pass_table() -> None:
     result = resolve_passes("user", ok_document({"api": {}}), None, Ok({})).run()
     assert isinstance(result, Err)
-    assert "no [[pass]] tables" in describe(result.error)
+    assert "no [pass.<name>] tables" in describe(result.error)
 
 
 def test_resolve_passes_selection_and_options() -> None:
@@ -623,7 +627,7 @@ def test_resolve_passes_selection_and_options() -> None:
         {
             "api": {},
             "options": {"ascii": True},
-            "pass": [{"name": "p", "instruction": "i"}],
+            "pass": {"p": {"instruction": "i"}},
         }
     )
     result = resolve_passes("user", user, None, Ok({})).run()
@@ -746,11 +750,45 @@ def test_pass_draft_from_validates_include_types() -> None:
         assert "include_types" in describe(result.error)
 
 
-def test_document_passes_rejects_bad_entry_lists() -> None:
-    for entries in ("nope", [], [{"name": "p", "instruction": "i"}, 3]):
+def test_document_passes_rejects_bad_pass_tables() -> None:
+    bad_tables: list[tuple[object, str]] = [
+        ("nope", "[pass] must be a table"),
+        ([], "[pass] must be a table"),
+        ({"p": "chunk"}, "[pass.p] must be a table"),
+    ]
+    for entries, expected in bad_tables:
         result = document_passes("f", {"pass": entries}).run()
         assert isinstance(result, Err)
-        assert "[[pass]]" in describe(result.error)
+        assert expected in describe(result.error)
+
+
+def test_document_passes_preserves_document_order() -> None:
+    result = document_passes(
+        "f",
+        {
+            "pass": {
+                "c": {"mode": "analysis"},
+                "a": {"instruction": "i-a"},
+                "b": {"instruction": "i-b"},
+            }
+        },
+    ).run()
+    assert isinstance(result, Ok)
+    assert [draft.name for draft in result.value] == ["c", "a", "b"]
+
+
+def test_document_passes_rejects_name_key() -> None:
+    result = document_passes(
+        "f", {"pass": {"p": {"name": "p", "instruction": "i"}}}
+    ).run()
+    assert isinstance(result, Err)
+    assert "unknown key(s): name" in describe(result.error)
+
+
+def test_document_passes_rejects_legacy_array_format() -> None:
+    result = document_passes("f", {"pass": [{"name": "p", "instruction": "i"}]}).run()
+    assert isinstance(result, Err)
+    assert "[pass] must be a table" in describe(result.error)
 
 
 def test_load_instruction_text_rejects_bad_file_settings(
@@ -767,7 +805,7 @@ def test_load_instruction_text_rejects_bad_file_settings(
     ).run()
     assert isinstance(result, Err)
     assert isinstance(result.error, FileError)
-    assert "could not read f: [[pass]] p: instruction file" in describe(result.error)
+    assert "could not read f: [pass.p]: instruction file" in describe(result.error)
 
 
 def test_load_instruction_text_reads_a_non_empty_instruction_file(
@@ -853,8 +891,7 @@ SELECTED_CONFIG_TEXT = (
     'base_url = "http://endpoint.test/v1"\n'
     'api_key = "key"\n'
     'model = "m"\n'
-    "\n[[pass]]\n"
-    'name = "translate"\n'
+    "\n[pass.translate]\n"
     'mode = "chunk"\n'
     'instruction = "Translate."\n'
 )
@@ -1142,7 +1179,7 @@ def test_load_setup_accepts_update_glossary_pass_with_cli_glossary(
     config_path.write_text(
         SELECTED_CONFIG_TEXT.replace(
             'mode = "chunk"', 'mode = "update_glossary"'
-        ).replace('name = "translate"', 'name = "glossary"'),
+        ).replace("[pass.translate]", "[pass.glossary]"),
         encoding="utf-8",
     )
     (tmp_path / "selected-glossary.json").write_text(
@@ -1411,13 +1448,13 @@ def test_prompt_override_empty_inline_removal_is_kept() -> None:
 def test_resolve_passes_merges_global_prompts_selected_over_user() -> None:
     user = ok_document(
         {
-            "pass": [{"name": "p", "instruction": "i"}],
+            "pass": {"p": {"instruction": "i"}},
             "prompts": {"accuracy": "FROM USER", "fluency": "USER FLUENCY"},
         }
     )
     selected = ok_document(
         {
-            "pass": [{"name": "p", "instruction": "i"}],
+            "pass": {"p": {"instruction": "i"}},
             "prompts": {"accuracy": "FROM SELECTED"},
         }
     )
@@ -2021,8 +2058,7 @@ def test_analysis_pass_without_instruction_loads_and_renders_analyser(
         'base_url = "http://endpoint.test/v1"\n'
         'api_key = "secret-key"\n'
         'model = "m"\n'
-        "\n[[pass]]\n"
-        'name = "prepare"\n'
+        "\n[pass.prepare]\n"
         'mode = "analysis"\n'
     )
     arguments = Arguments(config=str(config_path))

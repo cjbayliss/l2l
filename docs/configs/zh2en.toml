@@ -11,24 +11,21 @@ max_tokens = 100000
 provider = { allow_fallbacks = true, sort = { by = "throughput" } }
 stop = ["END"]
 
-[[pass]]
-name = "analyse"
+[pass.analyse]
 mode = "analysis"
-[pass.params]
+[pass.analyse.params]
 reasoning.effort = "high"
 
-[[pass]]
-name = "translate"
+[pass.translate]
 ascii = true
 retranslate_untranslated = true
 mode = "chunk"
-[pass.params]
+[pass.translate.params]
 reasoning.effort = "high"
 
-[[pass]]
-name = "review"
+[pass.review]
 ascii = true
 retranslate_untranslated = true
 mode = "chunk"
-[pass.params]
+[pass.review.params]
 reasoning.effort = "high"

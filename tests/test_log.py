@@ -41,8 +41,7 @@ CONFIG_TEXT = (
     'api_key = "secret-key"\n'
     'model = "m"\n'
     "max_tokens = 1000\n"
-    "\n[[pass]]\n"
-    'name = "translate"\n'
+    "\n[pass.translate]\n"
     'mode = "chunk"\n'
     'instruction = "Translate."'
 )

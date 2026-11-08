@@ -137,7 +137,7 @@ def add_configuration_arguments(parser: argparse.ArgumentParser) -> None:
         "-c",
         "--config",
         metavar="FILE",
-        help="TOML config file defining [api] settings and [[pass]] passes "
+        help="TOML config file defining [api] settings and [pass.<name>] passes "
         "(default: $TRANSLATE_CONFIG, then ./l2l.toml, then "
         "~/.config/l2l/config.toml)",
     )

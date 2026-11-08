@@ -42,7 +42,7 @@ Run `l2l --help` for more information.
 ## Configuration
 
 l2l is configured with a TOML file. At minimum you need an `[api]` table
-and one `[[pass]]` table:
+and one `[pass.<name>]` table:
 
 ```toml
 target_language = "English"
@@ -53,8 +53,7 @@ base_url = "https://openrouter.ai/api/v1"
 api_key = "sk-..." # or set TRANSLATE_API_KEY
 model = "z-ai/glm-5.3-flash"
 
-[[pass]]
-name = "translate"
+[pass.translate]
 mode = "chunk"
 ```
 
@@ -77,18 +76,18 @@ both contribute glossary paths.
 
 ### Top-level options
 
-| Key               | Type            | Description                                                                            |
-| ----------------- | --------------- | -------------------------------------------------------------------------------------- |
-| `target_language` | string          | Target language name, for example `"English"`. Required (or pass `--target-language`). |
-| `source_language` | string          | Source language name. Defaults to auto-detection.                                      |
-| `glossary`        | list of strings | Paths to glossary JSON files, relative to the config file.                             |
-| `api`             | table           | API connection settings; see the `[api]` section.                                      |
-| `options`         | table           | Defaults applied to every pass; see the `[options]` section.                           |
-| `filter`          | table           | Deterministic source preprocessing; see the `[filter]` section.                        |
-| `prompts`         | table           | Global prompt section overrides; see the `[prompts]` section.                          |
-| `style`           | table           | Global style policy; see the `[style]` section.                                        |
-| `output`          | table           | Global output policy; see the `[output]` section.                                      |
-| `pass`            | array of tables | Translation passes, run in order; see the `[[pass]]` section.                          |
+| Key               | Type                       | Description                                                                            |
+| ----------------- | -------------------------- | -------------------------------------------------------------------------------------- |
+| `target_language` | string                     | Target language name, for example `"English"`. Required (or pass `--target-language`). |
+| `source_language` | string                     | Source language name. Defaults to auto-detection.                                      |
+| `glossary`        | list of strings            | Paths to glossary JSON files, relative to the config file.                             |
+| `api`             | table                      | API connection settings; see the `[api]` section.                                      |
+| `options`         | table                      | Defaults applied to every pass; see the `[options]` section.                           |
+| `filter`          | table                      | Deterministic source preprocessing; see the `[filter]` section.                        |
+| `prompts`         | table                      | Global prompt section overrides; see the `[prompts]` section.                          |
+| `style`           | table                      | Global style policy; see the `[style]` section.                                        |
+| `output`          | table                      | Global output policy; see the `[output]` section.                                      |
+| `pass`            | table of named pass tables | Translation passes, run in document order; see the `[pass.<name>]` section.            |
 
 ### `[api]`
 
@@ -143,11 +142,20 @@ filters = [
 ]
 ```
 
-### `[[pass]]`
+### `[pass.<name>]`
+
+Example:
+
+```toml
+[pass.glossary]
+mode = "update_glossary"
+
+[pass.translate]
+mode = "chunk"
+```
 
 | Key                        | Type                        | Default       | Description                                                                                                                                                                                     |
 | -------------------------- | --------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                     | string                      | —             | Unique pass name. Required.                                                                                                                                                                     |
 | `mode`                     | string                      | `"chunk"`     | One of `analysis` (extract guidance from the source), `chunk` (translate chunk by chunk), `paragraph` (translate whole paragraphs), or `update_glossary` (extract or refresh glossary entries). |
 | `instruction`              | string                      | —             | Inline instruction replacing the built-in prompt. Exactly one of `instruction` / `instruction_file`; optional for built-in modes.                                                               |
 | `instruction_file`         | string                      | —             | Path to an instruction file, relative to the config file.                                                                                                                                       |

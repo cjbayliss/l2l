@@ -263,7 +263,6 @@ API_SETTING_KEYS: Final = (
     "params",
 )
 PASS_KEYS: Final = (
-    "name",
     "instruction",
     "instruction_file",
     "mode",

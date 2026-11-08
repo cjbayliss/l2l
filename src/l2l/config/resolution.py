@@ -131,7 +131,7 @@ def resolve_passes(
             config_hint = selected_path or user_path or "a config file (see --help)"
             return io_result(
                 fail_config(
-                    f"no [[pass]] tables found; define at least one pass in "
+                    f"no [pass.<name>] tables found; define at least one pass in "
                     f"{config_hint}"
                 )
             )

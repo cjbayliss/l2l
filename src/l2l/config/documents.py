@@ -56,7 +56,7 @@ def validate_document(
             "glossary, target_language, source_language, [filter], [prompts], "
             "[style], "
             "[output], "
-            "[[pass]])".format(path, ", ".join(unknown))
+            "[pass.<name>])".format(path, ", ".join(unknown))
         )
 
     glossary = document.get("glossary")
