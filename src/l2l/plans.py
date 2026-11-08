@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from itertools import accumulate, chain, takewhile
+from itertools import accumulate, takewhile
 from typing import Final, final
 lazy from collections.abc import Mapping
 
@@ -32,6 +32,7 @@ from l2l.text import (
     estimate_tokens,
     make_chunks,
     non_ascii_sample,
+    paragraph_groups,
     regroup_by_plan,
     separator_at,
     split_paragraphs,
@@ -207,22 +208,19 @@ def plan_information_message(
     work_paragraphs: tuple[str, ...],
     work_groups: tuple[tuple[str, ...], ...],
 ) -> str:
-    match pass_definition.mode:
-        case "paragraph":
-            return (
-                f"l2l: [{pass_definition.name}] {len(work_groups)} paragraph(s), "
-                "one call per paragraph"
-            )
-
-        case _:
-            return (
-                f"l2l: [{pass_definition.name}] {len(work_paragraphs)} paragraph(s) "
-                f"in {len(work_groups)} chunk(s)"
-            )
+    per_call_note = (
+        f", up to {pass_definition.paragraphs_per_call} paragraph(s) per call"
+        if pass_definition.paragraphs_per_call >= 1
+        else ""
+    )
+    return (
+        f"l2l: [{pass_definition.name}] {len(work_paragraphs)} paragraph(s) "
+        f"in {len(work_groups)} call(s){per_call_note}"
+    )
 
 
 def resolve_work_groups(
-    mode: PassMode,
+    paragraphs_per_call: int,
     work_paragraphs: tuple[str, ...],
     plan: tuple[tuple[str, ...], ...],
     pass_name: str,
@@ -236,12 +234,7 @@ def resolve_work_groups(
         f"l2l: [{pass_name}] paragraph count changed by a previous pass; "
         "grouping working text independently"
     )
-    match mode:
-        case "paragraph":
-            return tuple((paragraph,) for paragraph in work_paragraphs), warning
-
-        case _:
-            return make_chunks(work_paragraphs, budget), warning
+    return paragraph_groups(work_paragraphs, paragraphs_per_call, budget), warning
 
 
 type ChunkPlan = tuple[tuple[str, ...], ...]
@@ -387,7 +380,7 @@ def plan_violation(
         case "update_glossary":
             return None
 
-        case "chunk" | "paragraph":
+        case "translate":
             allowance = prompt_allowance(
                 run_context, pass_definition, earlier_pass_modes
             )
@@ -589,8 +582,6 @@ def plan_unit_calls(
         ),
         run_context.source_language,
     )
-    flat_plan = tuple(chain.from_iterable(plan))
-    plan_starts = tuple(accumulate(map(len, plan), initial=0))
     working_text_is_translated = earlier_passes_translated_text(earlier_pass_modes)
 
     def rolling_translated_context(index: int) -> tuple[str, ...]:
@@ -599,37 +590,10 @@ def plan_unit_calls(
 
         previous_group = work_groups[index - 1]
         match pass_definition.mode:
-            case "paragraph":
-                return suffix_within_token_budget(
-                    previous_group[-1:], TRANSLATED_CONTEXT_TOKEN_BUDGET
-                )
-
-            case "chunk":
+            case "translate":
                 return suffix_within_token_budget(
                     previous_group[-TRANSLATED_CONTEXT_PARAGRAPH_COUNT:],
                     TRANSLATED_CONTEXT_TOKEN_BUDGET,
-                )
-
-            case _:
-                return ()
-
-    def neighbour_context(
-        index: int, translated_context: tuple[str, ...]
-    ) -> tuple[str, ...]:
-        match pass_definition.mode:
-            case "paragraph":
-                if index >= len(plan):
-                    return ()
-
-                start = plan_starts[index]
-                end = plan_starts[index + 1]
-                preceding_source = (
-                    flat_plan[start - 1 : start]
-                    if start > 0 and not translated_context
-                    else ()
-                )
-                return preceding_source + (
-                    flat_plan[end : end + 1] if end < len(flat_plan) else ()
                 )
 
             case _:
@@ -647,7 +611,7 @@ def plan_unit_calls(
             len(work_groups),
             "\n\n".join(plan[index]) if index < len(plan) else "",
             "\n\n".join(work_group),
-            neighbour_context(index, translated_context),
+            (),
             analysis,
             translated_context,
         )

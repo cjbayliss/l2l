@@ -233,7 +233,7 @@ def test_pass_draft_from() -> None:
     result = pass_draft_from("f", "p", {"mode": "weird"}, "inst")
     assert isinstance(result, Err)
     assert (
-        "f: [pass.p]: mode must be analysis, chunk, paragraph, or "
+        "f: [pass.p]: mode must be analysis, translate, or "
         "update_glossary" in describe(result.error)
     )
 
@@ -262,7 +262,7 @@ def test_pass_draft_from() -> None:
         "f",
         "p",
         {
-            "mode": "chunk",
+            "mode": "translate",
             "target_language": "French",
             "instruction": "inst",
         },
@@ -271,23 +271,25 @@ def test_pass_draft_from() -> None:
     assert isinstance(result, Ok)
     assert result.value.target_language == "French"
 
-    result = pass_draft_from("f", "p", {"mode": "chunk", "params": {"t": 1}}, "inst")
+    result = pass_draft_from(
+        "f", "p", {"mode": "translate", "params": {"t": 1}}, "inst"
+    )
     assert isinstance(result, Ok)
-    assert result.value.mode == "chunk"
+    assert result.value.mode == "translate"
     assert result.value.model is UNSET
     assert result.value.ascii is UNSET
     assert result.value.ensure_paragraphs is UNSET
     assert result.value.retranslate_untranslated is UNSET
 
     result = pass_draft_from(
-        "f", "p", {"mode": "chunk", "retranslate_untranslated": True}, "inst"
+        "f", "p", {"mode": "translate", "retranslate_untranslated": True}, "inst"
     )
     assert isinstance(result, Ok)
     assert result.value.retranslate_untranslated is True
 
     for bad in ("yes", 0, -1, 1.5):
         result = pass_draft_from(
-            "f", "p", {"mode": "chunk", "retranslate_untranslated": bad}, "inst"
+            "f", "p", {"mode": "translate", "retranslate_untranslated": bad}, "inst"
         )
         assert isinstance(result, Err)
         assert "retranslate_untranslated must be true or false" in describe(
@@ -295,20 +297,20 @@ def test_pass_draft_from() -> None:
         )
 
     result = pass_draft_from(
-        "f", "p", {"mode": "chunk", "ensure_paragraphs": True}, "inst"
+        "f", "p", {"mode": "translate", "ensure_paragraphs": True}, "inst"
     )
     assert isinstance(result, Ok)
     assert result.value.ensure_paragraphs is True
 
     result = pass_draft_from(
-        "f", "p", {"mode": "chunk", "ensure_paragraphs": 3}, "inst"
+        "f", "p", {"mode": "translate", "ensure_paragraphs": 3}, "inst"
     )
     assert isinstance(result, Ok)
     assert result.value.ensure_paragraphs == 3
 
     for bad in ("yes", 0, -1, 1.5):
         result = pass_draft_from(
-            "f", "p", {"mode": "chunk", "ensure_paragraphs": bad}, "inst"
+            "f", "p", {"mode": "translate", "ensure_paragraphs": bad}, "inst"
         )
         assert isinstance(result, Err)
         assert (
@@ -317,7 +319,7 @@ def test_pass_draft_from() -> None:
         )
 
     result = parse_pass_table(
-        "f", "p", {"mode": "chunk", "strict_fidelity": True}, "."
+        "f", "p", {"mode": "translate", "strict_fidelity": True}, "."
     ).run()
     assert isinstance(result, Err)
     assert "unknown key(s): strict_fidelity" in describe(result.error)
@@ -325,8 +327,8 @@ def test_pass_draft_from() -> None:
 
 def test_apply_default_options() -> None:
     passes = (
-        PassDraft("a", "chunk", "i", {}, UNSET, UNSET, UNSET, UNSET),
-        PassDraft("b", "chunk", "i", {}, UNSET, True, False, True),
+        PassDraft("a", "translate", "i", {}, UNSET, UNSET, UNSET, UNSET),
+        PassDraft("b", "translate", "i", {}, UNSET, True, False, True),
     )
     applied = apply_default_options(
         passes,
@@ -376,9 +378,9 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
                 global_style_patch=StylePolicyPatch(),
                 global_output_patch=OutputPolicyPatch(),
                 pass_drafts=(
-                    PassDraft("unset", "chunk", "i", {}, UNSET, UNSET, UNSET),
-                    PassDraft("explicit", "chunk", "i", {}, UNSET, UNSET, False),
-                    PassDraft("forced", "chunk", "i", {}, UNSET, UNSET, True),
+                    PassDraft("unset", "translate", "i", {}, UNSET, UNSET, UNSET),
+                    PassDraft("explicit", "translate", "i", {}, UNSET, UNSET, False),
+                    PassDraft("forced", "translate", "i", {}, UNSET, UNSET, True),
                 ),
             )
         )
@@ -405,14 +407,16 @@ def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
 
 def test_resolve_call_settings() -> None:
     config = Config("u", "k", "default-model", 1.0, 100, {"a": 1})
-    pass_definition = PassDefinition("p", "i", "chunk", {"b": 2}, "pass-model", False)
+    pass_definition = PassDefinition(
+        "p", "i", "translate", {"b": 2}, "pass-model", False
+    )
     model, parameters = resolve_call_settings(config, pass_definition)
     assert model == "pass-model"
     assert parameters == {"a": 1, "b": 2}
 
 
 def test_pass_salt_includes_glossary_and_effective_language() -> None:
-    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
+    pass_definition = PassDefinition("p", "i", "translate", {}, None, False)
     assert pass_salt(pass_definition) == (
         CACHE_SALT_VERSION + "\x00p\x00i\x00\x00\x00[]\n"
     )
@@ -433,12 +437,12 @@ def test_pass_salt_includes_glossary_and_effective_language() -> None:
 
 
 def test_pass_and_retranslation_salts_normalize_language() -> None:
-    for mode in ("analysis", "chunk", "paragraph", "update_glossary"):
+    for mode in ("analysis", "translate", "update_glossary"):
         pass_definition = PassDefinition("p", "i", mode, {}, None, False)
         assert pass_salt(pass_definition, effective_language="Chinese") != pass_salt(
             pass_definition, effective_language="French"
         )
-    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
+    pass_definition = PassDefinition("p", "i", "translate", {}, None, False)
     assert pass_salt(pass_definition, effective_language="Chinese") == pass_salt(
         pass_definition, effective_language="chinese"
     )
@@ -454,7 +458,7 @@ def test_pass_and_retranslation_salts_normalize_language() -> None:
 
 
 def test_pass_salt_distinguishes_source_language_from_target() -> None:
-    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
+    pass_definition = PassDefinition("p", "i", "translate", {}, None, False)
     chinese_source = pass_salt(pass_definition, source_language="Chinese")
     assert chinese_source != pass_salt(pass_definition)
     assert pass_salt(pass_definition, source_language=" MUL ") == pass_salt(
@@ -484,7 +488,7 @@ def test_pass_salt_distinguishes_source_language_from_target() -> None:
 
 
 def test_cache_salts_follow_the_documented_version_bump() -> None:
-    pass_definition = PassDefinition("p", "i", "chunk", {}, None, False)
+    pass_definition = PassDefinition("p", "i", "translate", {}, None, False)
     current = pass_salt(
         pass_definition,
         effective_language="English",
@@ -498,7 +502,7 @@ def test_cache_salts_follow_the_documented_version_bump() -> None:
 
 def test_effective_target_language_prefers_the_pass_override() -> None:
     pass_definition = PassDefinition(
-        "p", "i", "chunk", {}, None, False, target_language="Chinese"
+        "p", "i", "translate", {}, None, False, target_language="Chinese"
     )
     assert (
         effective_target_language("English", pass_definition.target_language)
@@ -507,7 +511,7 @@ def test_effective_target_language_prefers_the_pass_override() -> None:
     assert (
         effective_target_language(
             "English",
-            PassDefinition("p", "i", "chunk", {}, None, False).target_language,
+            PassDefinition("p", "i", "translate", {}, None, False).target_language,
         )
         == "English"
     )
@@ -561,7 +565,7 @@ def test_parse_pass_table_and_inline_instruction() -> None:
 
 
 def test_parse_pass_table_rejects_non_table() -> None:
-    non_table = parse_pass_table("f", "p", "chunk", ".").run()
+    non_table = parse_pass_table("f", "p", "translate", ".").run()
     assert isinstance(non_table, Err)
     assert "[pass.p] must be a table" in describe(non_table.error)
 
@@ -632,7 +636,7 @@ def test_setup_report_lists_api_and_passes() -> None:
         ),
         passes=(
             PassDefinition(
-                "translate", "T.", "chunk", {"reasoning": "high"}, None, True, False
+                "translate", "T.", "translate", {"reasoning": "high"}, None, True, False
             ),
         ),
         ensure_paragraphs=False,
@@ -645,7 +649,7 @@ def test_setup_report_lists_api_and_passes() -> None:
     assert "api.api_key: secr...ey" in report
     assert '"temperature": 1' in report
     assert (
-        "pass 1/1 [translate]: mode=chunk ascii=True ensure_paragraphs=False"
+        "pass 1/1 [translate]: mode=translate ascii=True ensure_paragraphs=False"
         " retranslate_untranslated=None model=<default> instruction=2 chars"
         " target_language=English scripts=Latin"
         " uses_target_language_placeholder=False" in report
@@ -653,16 +657,87 @@ def test_setup_report_lists_api_and_passes() -> None:
     assert "options.ensure_paragraphs: True" in report
 
 
+def test_pass_draft_from_parses_paragraphs_per_call() -> None:
+    absent = pass_draft_from("f", "p", {"instruction": "i"}, None)
+    assert isinstance(absent, Ok)
+    assert absent.value.paragraphs_per_call is UNSET
+
+    zero = pass_draft_from(
+        "f", "p", {"mode": "translate", "paragraphs_per_call": 0}, "inst"
+    )
+    assert isinstance(zero, Ok)
+    assert zero.value.paragraphs_per_call == 0
+
+    batched = pass_draft_from(
+        "f", "p", {"mode": "translate", "paragraphs_per_call": 3}, "inst"
+    )
+    assert isinstance(batched, Ok)
+    assert batched.value.paragraphs_per_call == 3
+
+    for bad in (-1, True, 1.5, "all", "3"):
+        result = pass_draft_from(
+            "f", "p", {"mode": "translate", "paragraphs_per_call": bad}, "inst"
+        )
+        assert isinstance(result, Err)
+        assert (
+            "paragraphs_per_call must be a non-negative integer "
+            "(0 groups by token budget)" in describe(result.error)
+        )
+
+    for mode in ("analysis", "update_glossary"):
+        result = pass_draft_from(
+            "f", "p", {"mode": mode, "paragraphs_per_call": 2}, None
+        )
+        assert isinstance(result, Err)
+        assert "paragraphs_per_call applies only to translate passes" in describe(
+            result.error
+        )
+
+
+def test_pass_draft_from_rejects_removed_mode_names() -> None:
+    for mode in ("chunk", "paragraph"):
+        result = pass_draft_from("f", "p", {"mode": mode}, "inst")
+        assert isinstance(result, Err)
+        assert (
+            "f: [pass.p]: mode must be analysis, translate, or "
+            "update_glossary" in describe(result.error)
+        )
+
+
+def test_finalized_pass_definition_forwards_paragraphs_per_call() -> None:
+    draft = PassDraft(
+        "p",
+        "translate",
+        None,
+        {},
+        UNSET,
+        False,
+        paragraphs_per_call=3,
+    )
+    result = finalize_pass_draft(
+        draft,
+        "translator",
+        "English",
+        "Chinese",
+        {},
+        StylePolicyPatch(),
+        OutputPolicyPatch(),
+        None,
+    )
+    assert isinstance(result, Ok)
+    assert result.value[0].paragraphs_per_call == 3
+
+
 def test_pass_draft_from_rejects_bad_fields() -> None:
-    result = pass_draft_from("f", "p", {"mode": "chunk", "ascii": "yes"}, "i")
+    result = pass_draft_from("f", "p", {"mode": "translate", "ascii": "yes"}, "i")
     assert isinstance(result, Err)
     assert "ascii must be true or false" in describe(result.error)
 
-    result = pass_draft_from("f", "p", {"mode": "chunk", "model": "  "}, "i")
+    result = pass_draft_from("f", "p", {"mode": "translate", "model": "  "}, "i")
     assert isinstance(result, Err)
     assert "model must be a non-empty string" in describe(result.error)
 
-    result = pass_draft_from("f", "p", {"mode": "chunk", "params": 3}, "i")
+    result = pass_draft_from("f", "p", {"mode": "translate", "params": 3}, "i")
     assert isinstance(result, Err)
     assert "params must be a table" in describe(result.error)
 
@@ -672,7 +747,7 @@ def test_pass_draft_from_accepts_valid_fields() -> None:
         "f",
         "p",
         {
-            "mode": "chunk",
+            "mode": "translate",
             "ascii": True,
             "model": " m1 ",
             "target_language": " ja ",
@@ -695,7 +770,7 @@ def test_pass_draft_from_validates_include_types() -> None:
     assert result.value.include_types == ("character",)
 
     result = pass_draft_from(
-        "f", "p", {"mode": "chunk", "include_types": ["character"]}, "i"
+        "f", "p", {"mode": "translate", "include_types": ["character"]}, "i"
     )
     assert isinstance(result, Err)
     assert "include_types applies only to update_glossary passes" in describe(
@@ -724,7 +799,7 @@ def test_document_passes_rejects_bad_pass_tables() -> None:
     bad_tables: list[tuple[object, str]] = [
         ("nope", "[pass] must be a table"),
         ([], "[pass] must be a table"),
-        ({"p": "chunk"}, "[pass.p] must be a table"),
+        ({"p": "translate"}, "[pass.p] must be a table"),
     ]
     for entries, expected in bad_tables:
         result = document_passes("f", {"pass": entries}).run()
@@ -815,7 +890,7 @@ def test_resolve_config_path_default_is_xdg_user_config(tmp_path: Path) -> None:
         user_path
     )
     # the local ./l2l.toml file is no longer a config source
-    (tmp_path / "l2l.toml").write_text('[pass.x]\nmode = "chunk"\n')
+    (tmp_path / "l2l.toml").write_text('[pass.x]\nmode = "translate"\n')
     assert resolve_config_path(UNSET, {"XDG_CONFIG_HOME": str(user_root)}).run() == str(
         user_path
     )
@@ -844,7 +919,7 @@ SELECTED_CONFIG_TEXT = (
     'api_key = "key"\n'
     'model = "m"\n'
     "\n[pass.translate]\n"
-    'mode = "chunk"\n'
+    'mode = "translate"\n'
     'instruction = "Translate."\n'
 )
 
@@ -1058,7 +1133,7 @@ def test_load_setup_accepts_update_glossary_pass_with_cli_glossary(
     config_path = tmp_path / "book.toml"
     config_path.write_text(
         SELECTED_CONFIG_TEXT.replace(
-            'mode = "chunk"', 'mode = "update_glossary"'
+            'mode = "translate"', 'mode = "update_glossary"'
         ).replace("[pass.translate]", "[pass.glossary]"),
         encoding="utf-8",
     )
@@ -1080,7 +1155,7 @@ def test_load_setup_rejects_update_glossary_pass_without_cli_glossary(
 ) -> None:
     config_path = tmp_path / "book.toml"
     config_path.write_text(
-        SELECTED_CONFIG_TEXT.replace('mode = "chunk"', 'mode = "update_glossary"'),
+        SELECTED_CONFIG_TEXT.replace('mode = "translate"', 'mode = "update_glossary"'),
         encoding="utf-8",
     )
     (tmp_path / "selected-glossary.json").write_text(
@@ -1107,7 +1182,7 @@ def test_setup_report_lists_glossary_when_configured() -> None:
             maximum_tokens=1000,
             parameters={},
         ),
-        passes=(PassDefinition("translate", "T.", "chunk", {}, None, True, False),),
+        passes=(PassDefinition("translate", "T.", "translate", {}, None, True, False),),
         ensure_paragraphs=False,
         target_language="English",
         source_language="auto",
@@ -1130,7 +1205,7 @@ def test_setup_report_omits_glossary_when_unconfigured() -> None:
             maximum_tokens=1000,
             parameters={},
         ),
-        passes=(PassDefinition("translate", "T.", "chunk", {}, None, True, False),),
+        passes=(PassDefinition("translate", "T.", "translate", {}, None, True, False),),
         ensure_paragraphs=False,
         target_language="English",
         source_language="auto",
@@ -1154,7 +1229,7 @@ def make_setup_for_warnings(
 
 
 def test_validate_ascii_target_language() -> None:
-    ascii_pass = (PassDefinition("p", "i", "chunk", {}, None, True),)
+    ascii_pass = (PassDefinition("p", "i", "translate", {}, None, True),)
     for language in ("English", "Spanish", "English (US)", "Zorblaxian"):
         assert isinstance(
             validate_ascii_target_language(
@@ -1178,7 +1253,7 @@ def test_validate_ascii_target_language() -> None:
             "English",
             (
                 PassDefinition(
-                    "p", "i", "chunk", {}, None, True, target_language="Japanese"
+                    "p", "i", "translate", {}, None, True, target_language="Japanese"
                 ),
             ),
         )
@@ -1196,7 +1271,7 @@ def test_setup_warnings_report_unknown_languages() -> None:
 
 def test_setup_warnings_report_instructions_without_the_language() -> None:
     without_language = make_setup_for_warnings(
-        "English", (PassDefinition("p", "T.", "chunk", {}, None, False),)
+        "English", (PassDefinition("p", "T.", "translate", {}, None, False),)
     )
     assert any(
         "does not mention the target language" in warning
@@ -1207,7 +1282,7 @@ def test_setup_warnings_report_instructions_without_the_language() -> None:
         "English",
         (
             PassDefinition(
-                "p", "Translate into {target_language}.", "chunk", {}, None, False
+                "p", "Translate into {target_language}.", "translate", {}, None, False
             ),
         ),
     )
@@ -1215,7 +1290,7 @@ def test_setup_warnings_report_instructions_without_the_language() -> None:
 
     named = make_setup_for_warnings(
         "English",
-        (PassDefinition("p", "Translate into English.", "chunk", {}, None, False),),
+        (PassDefinition("p", "Translate into English.", "translate", {}, None, False),),
     )
     assert setup_warnings(named) == ()
 
@@ -1372,7 +1447,7 @@ def render_finalized(
 def test_per_pass_prompts_override_sections_and_keep_unrelated_globals() -> None:
     draft = PassDraft(
         "p",
-        "chunk",
+        "translate",
         None,
         {},
         UNSET,
@@ -1393,7 +1468,7 @@ def test_per_pass_prompts_override_sections_and_keep_unrelated_globals() -> None
 
 
 def test_global_prompts_replace_sections_in_rendered_passes() -> None:
-    draft = PassDraft("p", "chunk", None, {}, UNSET, False)
+    draft = PassDraft("p", "translate", None, {}, UNSET, False)
     result = finalize_pass_draft(
         draft,
         "translator",
@@ -1420,7 +1495,7 @@ def test_global_prompts_replace_sections_in_rendered_passes() -> None:
 def test_empty_override_on_empty_static_section_warns_as_no_op() -> None:
     style_only = PassDraft(
         "p",
-        "chunk",
+        "translate",
         None,
         {},
         UNSET,
@@ -1435,7 +1510,7 @@ def test_empty_override_on_empty_static_section_warns_as_no_op() -> None:
 
     accuracy_only = PassDraft(
         "p",
-        "chunk",
+        "translate",
         None,
         {},
         UNSET,
@@ -1450,7 +1525,7 @@ def test_empty_override_on_empty_static_section_warns_as_no_op() -> None:
 
 
 def test_global_prompts_warn_once_per_affected_legacy_pass() -> None:
-    legacy = PassDraft("legacy", "chunk", "Translate.", {}, UNSET, False)
+    legacy = PassDraft("legacy", "translate", "Translate.", {}, UNSET, False)
     result = finalize_pass_draft(
         legacy,
         None,
@@ -1489,7 +1564,7 @@ def test_global_prompts_warn_once_per_affected_legacy_pass() -> None:
 
 def test_setup_report_includes_config_warnings() -> None:
     setup = make_setup_for_warnings(
-        "English", (PassDefinition("p", "i", "chunk", {}, None, False),)
+        "English", (PassDefinition("p", "i", "translate", {}, None, False),)
     )
     assert "something odd happened" not in setup_warnings(setup)
     warned = replace(setup, config_warnings=("something odd happened",))
@@ -1550,7 +1625,7 @@ def test_style_patch_merges_field_wise_and_resolves() -> None:
 
 def test_pass_style_errors_outside_rendered_text_passes() -> None:
     legacy = pass_style_patch(
-        "f", "p", {"style": {"formality": "formal"}}, "inst", "chunk"
+        "f", "p", {"style": {"formality": "formal"}}, "inst", "translate"
     )
     assert isinstance(legacy, Err)
     assert "per-pass style applies only to" in describe(legacy.error)
@@ -1564,7 +1639,7 @@ def test_pass_style_errors_outside_rendered_text_passes() -> None:
     assert isinstance(glossary, Err)
 
     rendered = pass_style_patch(
-        "f", "p", {"style": {"formality": "formal"}}, None, "chunk"
+        "f", "p", {"style": {"formality": "formal"}}, None, "translate"
     )
     assert isinstance(rendered, Ok)
 
@@ -1601,7 +1676,7 @@ def test_style_patch_on_instruction_pass_fails_at_finalization() -> None:
     assert isinstance(result, Err)
     assert (
         "per-pass prompt, style, or output settings apply "
-        "only to built-in rendered chunk, paragraph, or analysis passes"
+        "only to built-in rendered translate or analysis passes"
         in describe(result.error)
     )
 
@@ -1623,7 +1698,7 @@ def test_style_precedence_defaults_user_selected_per_pass() -> None:
 def test_style_policy_flows_into_finalized_passes() -> None:
     draft = PassDraft(
         "p",
-        "chunk",
+        "translate",
         None,
         {},
         UNSET,
@@ -1647,7 +1722,7 @@ def test_style_policy_flows_into_finalized_passes() -> None:
 
 
 def test_global_style_warns_when_unused_by_roles() -> None:
-    legacy = PassDraft("legacy", "chunk", "Translate.", {}, UNSET, False)
+    legacy = PassDraft("legacy", "translate", "Translate.", {}, UNSET, False)
     result = finalize_pass_draft(
         legacy,
         None,
@@ -1664,7 +1739,7 @@ def test_global_style_warns_when_unused_by_roles() -> None:
     assert "style settings do not apply" in warnings[0]
     assert "legacy" in warnings[0]
 
-    rendered = PassDraft("p", "chunk", None, {}, UNSET, False)
+    rendered = PassDraft("p", "translate", None, {}, UNSET, False)
     result = finalize_pass_draft(
         rendered,
         "translator",
@@ -1682,7 +1757,7 @@ def test_global_style_warns_when_unused_by_roles() -> None:
 def test_honorifics_warns_for_unsupported_sources() -> None:
     draft = PassDraft(
         "p",
-        "chunk",
+        "translate",
         None,
         {},
         UNSET,
@@ -1707,7 +1782,7 @@ def test_honorifics_warns_for_unsupported_sources() -> None:
 
     japanese = PassDraft(
         "p",
-        "chunk",
+        "translate",
         None,
         {},
         UNSET,
@@ -1759,7 +1834,7 @@ def test_parse_output_table_validates_keys_and_values() -> None:
 
 
 def test_pass_output_errors_outside_rendered_text_passes() -> None:
-    legacy = pass_output_patch("f", "p", {"output": {}}, "inst", "chunk")
+    legacy = pass_output_patch("f", "p", {"output": {}}, "inst", "translate")
     assert isinstance(legacy, Err)
     assert "per-pass output applies only to" in describe(legacy.error)
 
@@ -1767,7 +1842,7 @@ def test_pass_output_errors_outside_rendered_text_passes() -> None:
     assert isinstance(analysis, Err)
 
     rendered = pass_output_patch(
-        "f", "p", {"output": {"maximum_characters": 40}}, None, "chunk"
+        "f", "p", {"output": {"maximum_characters": 40}}, None, "translate"
     )
     assert isinstance(rendered, Ok)
 
@@ -1775,36 +1850,17 @@ def test_pass_output_errors_outside_rendered_text_passes() -> None:
 def test_resolved_paragraph_tolerances_matrix() -> None:
     exact = OutputPolicy()
     approximate = OutputPolicy(paragraphs="approximate")
-    assert resolved_paragraph_tolerances("chunk", None, exact) == (None, None, "exact")
-    assert resolved_paragraph_tolerances("paragraph", None, exact) == (
-        0,
-        None,
-        "exact",
-    )
-    assert resolved_paragraph_tolerances("chunk", None, approximate) == (
-        1,
-        1,
-        "approximate",
-    )
-    assert resolved_paragraph_tolerances("paragraph", None, approximate) == (
-        1,
-        1,
-        "approximate",
-    )
-    assert resolved_paragraph_tolerances("chunk", True, approximate) == (
-        0,
-        0,
-        "exact",
-    )
-    assert resolved_paragraph_tolerances("chunk", 2, exact) == (2, 2, "approximate")
-    assert resolved_paragraph_tolerances("paragraph", 2, exact) == (0, 2, "approximate")
-    assert resolved_paragraph_tolerances("chunk", False, exact) == (None, None, "exact")
+    assert resolved_paragraph_tolerances(None, exact) == (None, None, "exact")
+    assert resolved_paragraph_tolerances(None, approximate) == (1, 1, "approximate")
+    assert resolved_paragraph_tolerances(True, approximate) == (0, 0, "exact")
+    assert resolved_paragraph_tolerances(2, exact) == (2, 2, "approximate")
+    assert resolved_paragraph_tolerances(False, exact) == (None, None, "exact")
 
 
 def test_explicit_ensure_paragraphs_wins_over_approximate_output() -> None:
     draft = PassDraft(
         "p",
-        "chunk",
+        "translate",
         None,
         {},
         UNSET,
@@ -1833,7 +1889,7 @@ def test_explicit_ensure_paragraphs_wins_over_approximate_output() -> None:
 def test_approximate_output_renders_tolerance_one_and_salt_changes() -> None:
     relaxed = PassDraft(
         "p",
-        "chunk",
+        "translate",
         None,
         {},
         UNSET,
@@ -1864,7 +1920,7 @@ def test_approximate_output_renders_tolerance_one_and_salt_changes() -> None:
 def test_maximum_characters_renders_and_salts() -> None:
     limited = PassDraft(
         "p",
-        "chunk",
+        "translate",
         None,
         {},
         UNSET,
@@ -1892,7 +1948,7 @@ def test_maximum_characters_renders_and_salts() -> None:
     )
     assert output_policy_salt_component(finalized) != ""
     legacy_result = finalize_pass_draft(
-        PassDraft("legacy", "chunk", "T.", {}, UNSET, False),
+        PassDraft("legacy", "translate", "T.", {}, UNSET, False),
         None,
         "English",
         "auto",
@@ -1906,7 +1962,7 @@ def test_maximum_characters_renders_and_salts() -> None:
 
 
 def test_global_output_warns_when_unused() -> None:
-    legacy = PassDraft("legacy", "chunk", "Translate.", {}, UNSET, False)
+    legacy = PassDraft("legacy", "translate", "Translate.", {}, UNSET, False)
     result = finalize_pass_draft(
         legacy,
         None,

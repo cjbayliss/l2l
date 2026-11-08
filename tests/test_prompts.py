@@ -223,7 +223,7 @@ def test_paragraph_rule_is_generated_not_static() -> None:
 
 def legacy_draft() -> PassDraft:
     return PassDraft(
-        "translate", "chunk", "Translate to {target_language}.", {}, UNSET, False
+        "translate", "translate", "Translate to {target_language}.", {}, UNSET, False
     )
 
 
@@ -235,8 +235,8 @@ def test_selected_pass_roles_across_modes() -> None:
     drafts = (
         PassDraft("analyse", "analysis", "Analyse.", {}, UNSET, False),
         PassDraft("glossary", "update_glossary", None, {}, UNSET, False),
-        PassDraft("first", "chunk", None, {}, UNSET, False),
-        PassDraft("second", "paragraph", None, {}, UNSET, False),
+        PassDraft("first", "translate", None, {}, UNSET, False),
+        PassDraft("second", "translate", None, {}, UNSET, False),
     )
     assert selected_pass_roles(drafts) == (
         "analyser",
@@ -249,7 +249,10 @@ def test_selected_pass_roles_across_modes() -> None:
 def test_explicit_instruction_bytes_pass_through_unchanged() -> None:
     for draft, expected in (
         (legacy_draft(), "Translate to {target_language}."),
-        (PassDraft("translate", "chunk", "From file.", {}, UNSET, False), "From file."),
+        (
+            PassDraft("translate", "translate", "From file.", {}, UNSET, False),
+            "From file.",
+        ),
     ):
         result = finalize_pass_draft(
             draft,
@@ -284,7 +287,7 @@ def test_update_glossary_omitted_instruction_stays_dedicated() -> None:
 
 def test_omitted_text_pass_renders_built_in() -> None:
     result = finalize_pass_draft(
-        omitted_draft("chunk"),
+        omitted_draft("translate"),
         "translator",
         "English",
         "Chinese",
@@ -303,7 +306,7 @@ def test_omitted_text_pass_renders_built_in() -> None:
 
 def test_later_text_pass_renders_reviewer() -> None:
     finalized = finalize_passes(
-        (omitted_draft("chunk"), omitted_draft("paragraph")),
+        (omitted_draft("translate"), omitted_draft("translate")),
         "English",
         "auto",
         {},
@@ -337,7 +340,7 @@ def test_analysis_without_instruction_renders_the_analyser() -> None:
 
 def test_finalize_passes_renders_every_omitted_text_pass() -> None:
     finalized = finalize_passes(
-        (legacy_draft(), omitted_draft("paragraph")),
+        (legacy_draft(), omitted_draft("translate")),
         "English",
         "auto",
         {},

@@ -54,7 +54,6 @@ api_key = "sk-..." # or set TRANSLATE_API_KEY
 model = "z-ai/glm-5.3-flash"
 
 [pass.translate]
-mode = "chunk"
 ```
 
 Save it to `$XDG_CONFIG_HOME/l2l/config.toml`, or pass it explicitly
@@ -137,23 +136,23 @@ Example:
 mode = "update_glossary"
 
 [pass.translate]
-mode = "chunk"
 ```
 
-| Key                        | Type                        | Default       | Description                                                                                                                                                                                     |
-| -------------------------- | --------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mode`                     | string                      | `"chunk"`     | One of `analysis` (extract guidance from the source), `chunk` (translate chunk by chunk), `paragraph` (translate whole paragraphs), or `update_glossary` (extract or refresh glossary entries). |
-| `instruction`              | string                      | —             | Inline instruction replacing the built-in prompt. Exactly one of `instruction` / `instruction_file`; optional for built-in modes.                                                               |
-| `instruction_file`         | string                      | —             | Path to an instruction file, relative to the config file.                                                                                                                                       |
-| `model`                    | string                      | `[api] model` | Model override for this pass.                                                                                                                                                                   |
-| `params`                   | table                       | `{}`          | Extra request-body values for this pass.                                                                                                                                                        |
-| `ascii`                    | boolean                     | `[options]`   | Per-pass ASCII restriction.                                                                                                                                                                     |
-| `ensure_paragraphs`        | boolean or positive integer | `[options]`   | Per-pass paragraph preservation.                                                                                                                                                                |
-| `retranslate_untranslated` | boolean                     | `[options]`   | Per-pass retranslation of untranslated chunks.                                                                                                                                                  |
-| `target_language`          | string                      | global        | Per-pass target language override.                                                                                                                                                              |
-| `include_types`            | list of strings             | all           | For `update_glossary` passes: entry types to include, from `character`, `place`, `other`.                                                                                                       |
-| `prompts`                  | table                       | —             | Per-pass prompt section overrides; built-in rendered `chunk`/`paragraph`/`analysis` passes only.                                                                                                |
-| `style`                    | table                       | —             | Per-pass style policy; built-in rendered `chunk`/`paragraph` passes only.                                                                                                                       |
+| Key                        | Type                        | Default       | Description                                                                                                                                                                                   |
+| -------------------------- | --------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                     | string                      | `"translate"` | One of `analysis` (extract guidance from the source), `translate` (translate the text), or `update_glossary` (extract or refresh glossary entries).                                           |
+| `paragraphs_per_call`      | non-negative integer        | `0`           | For `translate` passes: number of paragraphs sent per model call. `0` groups paragraphs by token budget; `N >= 1` sends N paragraphs per call, splitting oversized batches to fit the budget. |
+| `instruction`              | string                      | —             | Inline instruction replacing the built-in prompt. Exactly one of `instruction` / `instruction_file`; optional for built-in modes.                                                             |
+| `instruction_file`         | string                      | —             | Path to an instruction file, relative to the config file.                                                                                                                                     |
+| `model`                    | string                      | `[api] model` | Model override for this pass.                                                                                                                                                                 |
+| `params`                   | table                       | `{}`          | Extra request-body values for this pass.                                                                                                                                                      |
+| `ascii`                    | boolean                     | `[options]`   | Per-pass ASCII restriction.                                                                                                                                                                   |
+| `ensure_paragraphs`        | boolean or positive integer | `[options]`   | Per-pass paragraph preservation.                                                                                                                                                              |
+| `retranslate_untranslated` | boolean                     | `[options]`   | Per-pass retranslation of untranslated chunks.                                                                                                                                                |
+| `target_language`          | string                      | global        | Per-pass target language override.                                                                                                                                                            |
+| `include_types`            | list of strings             | all           | For `update_glossary` passes: entry types to include, from `character`, `place`, `other`.                                                                                                     |
+| `prompts`                  | table                       | —             | Per-pass prompt section overrides; built-in rendered `translate`/`analysis` passes only.                                                                                                      |
+| `style`                    | table                       | —             | Per-pass style policy; built-in rendered `translate` passes only.                                                                                                                             |
 
 ### `[prompts]`
 

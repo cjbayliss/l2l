@@ -4,10 +4,10 @@ from dataclasses import replace
 
 from fakes import (
     FakeHttp,
-    chunk_pass,
     make_console,
     make_context,
-    paragraph_pass,
+    single_paragraph_pass,
+    translate_pass,
     update_pass,
 )
 
@@ -17,6 +17,7 @@ from l2l.plans import (
     TRANSLATED_CONTEXT_TOKEN_BUDGET,
     earlier_passes_translated_text,
     glossary_term_problem,
+    plan_information_message,
     plan_retranslation_calls,
     plan_unit_calls,
     resolve_work_groups,
@@ -36,7 +37,7 @@ def test_plan_unit_calls_builds_keys_and_context() -> None:
     separators = unit_separators(plan, ("s1", "s2", "s3"))
     calls = plan_unit_calls(
         run_context,
-        paragraph_pass(),
+        single_paragraph_pass(),
         plan,
         (("一。",), ("二。",), ("三。",)),
         separators,
@@ -44,12 +45,12 @@ def test_plan_unit_calls_builds_keys_and_context() -> None:
     )
     assert [call.source_chunk for call in calls] == ["一。", "二。", "三。"]
     assert [call.analysis for call in calls] == [None, None, None]
-    assert [call.context for call in calls] == [("二。",), ("一。", "三。"), ("二。",)]
+    assert [call.context for call in calls] == [(), (), ()]
     assert [call.trailing_separator for call in calls] == ["s1", "s2", ""]
     assert len({call.key for call in calls}) == 3
     briefed = plan_unit_calls(
         run_context,
-        paragraph_pass(),
+        single_paragraph_pass(),
         plan,
         (("一。",), ("二。",), ("三。",)),
         separators,
@@ -65,7 +66,7 @@ def test_plan_retranslation_calls_targets_flagged_paragraphs() -> None:
     sources = ("一。", "二。", "三。")
     calls = plan_retranslation_calls(
         run_context,
-        paragraph_pass(),
+        single_paragraph_pass(),
         sources,
         sources,
         (0, 2),
@@ -82,7 +83,7 @@ def test_plan_retranslation_calls_targets_flagged_paragraphs() -> None:
     plan = (("一。",), ("二。",), ("三。",))
     unit_calls = plan_unit_calls(
         run_context,
-        paragraph_pass(),
+        single_paragraph_pass(),
         plan,
         plan,
         unit_separators(plan, ("s1", "s2", "s3")),
@@ -96,15 +97,15 @@ def test_plan_report_lists_units_and_keys() -> None:
     console, _ = make_console()
     run_context = make_context(console, FakeHttp([]).open)
     text = "你好。\n\n世界。"
-    report = plan_report(run_context, (chunk_pass(), paragraph_pass()), text)
+    report = plan_report(run_context, (translate_pass(), single_paragraph_pass()), text)
     lines = report.splitlines()
     assert lines[0].startswith("source: 8 character(s), 2 paragraph(s)")
     assert "pass 1/2 [translate]" in lines[1]
-    assert "mode=chunk" in lines[1]
+    assert "mode=translate" in lines[1]
     assert "source budget" in lines[1]
     assert "unit 1/1: ~7 source tokens, cache key " in lines[2]
     assert "pass 2/2 [translate]" in lines[3]
-    assert "mode=paragraph, 2 unit(s)" in lines[3]
+    assert "mode=translate, 2 unit(s)" in lines[3]
     assert "unit 1/2:" in lines[4]
     assert "unit 2/2:" in lines[5]
 
@@ -122,7 +123,7 @@ def test_plan_report_reports_analysis_pass() -> None:
 def test_plan_report_exposes_budget_violations() -> None:
     console, _ = make_console()
     run_context = make_context(console, FakeHttp([]).open, maximum_tokens=200)
-    report = plan_report(run_context, (chunk_pass(),), "a" * 1200)
+    report = plan_report(run_context, (translate_pass(),), "a" * 1200)
     assert "source budget ~183 tokens" in report
     assert (
         "warning: [translate] paragraph 1 is ~300 source tokens, "
@@ -135,25 +136,27 @@ def test_plan_report_reserves_draft_space_in_later_passes() -> None:
     run_context = make_context(console, FakeHttp([]).open, maximum_tokens=400)
     paragraph = "a" * 400
     text = paragraph + "\n\n" + paragraph
-    report = plan_report(run_context, (chunk_pass(), chunk_pass("polish")), text)
+    report = plan_report(
+        run_context, (translate_pass(), translate_pass("polish")), text
+    )
     assert "pass 1/2 [translate]" in report
     assert "1 unit(s)" in report
     assert "pass 2/2 [polish]" in report
     assert "2 unit(s)" in report
 
 
-def test_resolve_work_groups_regroups_paragraph_mode_independently() -> None:
+def test_resolve_work_groups_regroups_single_paragraph_batches_independently() -> None:
     paragraphs = ("一。", "二。", "三。")
     stale_plan = (("一。", "二。"),)
-    groups, warning = resolve_work_groups("paragraph", paragraphs, stale_plan, "p", 100)
+    groups, warning = resolve_work_groups(1, paragraphs, stale_plan, "p", 100)
     assert groups == (("一。",), ("二。",), ("三。",))
     assert isinstance(warning, Just)
 
 
-def test_resolve_work_groups_rechunks_chunk_mode_independently() -> None:
+def test_resolve_work_groups_regroups_budget_batches_independently() -> None:
     paragraphs = tuple("一。" for _ in range(5))
     stale_plan = (("一。",),)
-    groups, warning = resolve_work_groups("chunk", paragraphs, stale_plan, "p", 1)
+    groups, warning = resolve_work_groups(0, paragraphs, stale_plan, "p", 1)
     assert all(len(group) == 1 for group in groups)
     assert len(groups) == 5
     assert isinstance(warning, Just)
@@ -162,9 +165,25 @@ def test_resolve_work_groups_rechunks_chunk_mode_independently() -> None:
 def test_resolve_work_groups_keeps_matching_plan() -> None:
     paragraphs = ("一。", "二。")
     plan = (("一。",), ("二。",))
-    groups, warning = resolve_work_groups("chunk", paragraphs, plan, "p", 100)
+    groups, warning = resolve_work_groups(0, paragraphs, plan, "p", 100)
     assert groups == (("一。",), ("二。",))
     assert isinstance(warning, Nothing)
+
+
+def test_plan_information_message_mentions_paragraphs_per_call() -> None:
+    budget_grouped = plan_information_message(
+        translate_pass(), ("一。", "二。", "三。"), (("一。", "二。"), ("三。",))
+    )
+    assert budget_grouped == "l2l: [translate] 3 paragraph(s) in 2 call(s)"
+
+    per_call = plan_information_message(
+        replace(translate_pass(), paragraphs_per_call=2),
+        ("一。", "二。", "三。"),
+        (("一。", "二。"), ("三。",)),
+    )
+    assert per_call == (
+        "l2l: [translate] 3 paragraph(s) in 2 call(s), up to 2 paragraph(s) per call"
+    )
 
 
 def test_plan_report_shows_update_glossary_pass() -> None:
@@ -172,7 +191,7 @@ def test_plan_report_shows_update_glossary_pass() -> None:
     run_context = make_context(console, FakeHttp([]).open)
     report = plan_report(
         run_context,
-        (update_pass(target_language="Chinese"), chunk_pass()),
+        (update_pass(target_language="Chinese"), translate_pass()),
         "你好。",
     )
     assert "pass 1/2 [glossary]" in report
@@ -275,14 +294,14 @@ def test_plan_keys_differ_by_effective_language() -> None:
         console, FakeHttp([]).open, target_language="Chinese"
     )
     english_calls = plan_unit_calls(
-        english_context, paragraph_pass(), plan, plan, separators, None
+        english_context, single_paragraph_pass(), plan, plan, separators, None
     )
     chinese_calls = plan_unit_calls(
-        chinese_context, paragraph_pass(), plan, plan, separators, None
+        chinese_context, single_paragraph_pass(), plan, plan, separators, None
     )
     overridden_calls = plan_unit_calls(
         english_context,
-        replace(paragraph_pass(), target_language="Chinese"),
+        replace(single_paragraph_pass(), target_language="Chinese"),
         plan,
         plan,
         separators,
@@ -300,10 +319,10 @@ def test_retranslation_keys_differ_by_effective_language() -> None:
         console, FakeHttp([]).open, target_language="Chinese"
     )
     english_calls = plan_retranslation_calls(
-        english_context, paragraph_pass(), sources, sources, (0,), ("s1",), None
+        english_context, single_paragraph_pass(), sources, sources, (0,), ("s1",), None
     )
     chinese_calls = plan_retranslation_calls(
-        chinese_context, paragraph_pass(), sources, sources, (0,), ("s1",), None
+        chinese_context, single_paragraph_pass(), sources, sources, (0,), ("s1",), None
     )
     assert english_calls[0].key != chinese_calls[0].key
 
@@ -318,11 +337,11 @@ def test_translated_context_helpers() -> None:
     assert not earlier_passes_translated_text(
         frozenset({"analysis", "update_glossary"})
     )
-    assert earlier_passes_translated_text(frozenset({"chunk"}))
-    assert earlier_passes_translated_text(frozenset({"analysis", "paragraph"}))
+    assert earlier_passes_translated_text(frozenset({"translate"}))
+    assert earlier_passes_translated_text(frozenset({"analysis", "translate"}))
 
 
-def test_chunk_pass_uses_previous_output_as_translated_context() -> None:
+def test_translate_pass_uses_previous_output_as_translated_context() -> None:
     console, _ = make_console()
     run_context = make_context(console, FakeHttp([]).open)
     plan = (("一。", "二。"), ("三。", "四。"))
@@ -330,18 +349,18 @@ def test_chunk_pass_uses_previous_output_as_translated_context() -> None:
     separators = unit_separators(plan, ("s1", "s2", "s3", "s4"))
     calls = plan_unit_calls(
         run_context,
-        chunk_pass(),
+        translate_pass(),
         plan,
         translated_groups,
         separators,
         None,
-        earlier_pass_modes=frozenset({"chunk"}),
+        earlier_pass_modes=frozenset({"translate"}),
     )
     assert calls[0].translated_context == ()
     assert calls[1].translated_context == ("One.", "Two.")
     first_pass = plan_unit_calls(
         run_context,
-        chunk_pass(),
+        translate_pass(),
         plan,
         translated_groups,
         separators,
@@ -351,7 +370,7 @@ def test_chunk_pass_uses_previous_output_as_translated_context() -> None:
     assert calls[1].key != first_pass[1].key
 
 
-def test_paragraph_pass_prefers_translated_preceding_paragraph() -> None:
+def test_single_paragraph_pass_uses_rolling_translated_context() -> None:
     console, _ = make_console()
     run_context = make_context(console, FakeHttp([]).open)
     plan = (("一。",), ("二。",), ("三。",))
@@ -359,14 +378,14 @@ def test_paragraph_pass_prefers_translated_preceding_paragraph() -> None:
     separators = unit_separators(plan, ("s1", "s2", "s3"))
     calls = plan_unit_calls(
         run_context,
-        paragraph_pass(),
+        single_paragraph_pass(),
         plan,
         translated_groups,
         separators,
         None,
-        earlier_pass_modes=frozenset({"paragraph"}),
+        earlier_pass_modes=frozenset({"translate"}),
     )
-    assert [call.context for call in calls] == [("二。",), ("三。",), ()]
+    assert [call.context for call in calls] == [(), (), ()]
     assert [call.translated_context for call in calls] == [
         (),
         ("One.",),
@@ -374,7 +393,7 @@ def test_paragraph_pass_prefers_translated_preceding_paragraph() -> None:
     ]
     first_pass = plan_unit_calls(
         run_context,
-        paragraph_pass(),
+        single_paragraph_pass(),
         plan,
         translated_groups,
         separators,
@@ -393,15 +412,15 @@ def test_translated_context_skips_paragraphs_over_token_budget() -> None:
     separators = unit_separators(plan, ("s1", "s2"))
     calls = plan_unit_calls(
         run_context,
-        paragraph_pass(),
+        single_paragraph_pass(),
         plan,
         translated_groups,
         separators,
         None,
-        earlier_pass_modes=frozenset({"paragraph"}),
+        earlier_pass_modes=frozenset({"translate"}),
     )
     assert calls[1].translated_context == ()
-    assert calls[1].context == (oversized,)
+    assert calls[1].context == ()
 
 
 def test_plan_keys_differ_by_source_language_but_not_auto_aliases() -> None:
@@ -415,16 +434,16 @@ def test_plan_keys_differ_by_source_language_but_not_auto_aliases() -> None:
     guess_context = make_context(console, FakeHttp([]).open, source_language="guess")
     mixed_context = make_context(console, FakeHttp([]).open, source_language="mixed")
     auto_calls = plan_unit_calls(
-        auto_context, paragraph_pass(), plan, plan, separators, None
+        auto_context, single_paragraph_pass(), plan, plan, separators, None
     )
     chinese_calls = plan_unit_calls(
-        chinese_context, paragraph_pass(), plan, plan, separators, None
+        chinese_context, single_paragraph_pass(), plan, plan, separators, None
     )
     guess_calls = plan_unit_calls(
-        guess_context, paragraph_pass(), plan, plan, separators, None
+        guess_context, single_paragraph_pass(), plan, plan, separators, None
     )
     mixed_calls = plan_unit_calls(
-        mixed_context, paragraph_pass(), plan, plan, separators, None
+        mixed_context, single_paragraph_pass(), plan, plan, separators, None
     )
     assert auto_calls[0].key != chinese_calls[0].key
     assert guess_calls[0].key == auto_calls[0].key
@@ -438,7 +457,7 @@ def test_retranslation_keys_differ_by_source_language() -> None:
     separators = ("s1",)
     auto_calls = plan_retranslation_calls(
         make_context(console, FakeHttp([]).open),
-        paragraph_pass(),
+        single_paragraph_pass(),
         sources,
         sources,
         flagged,
@@ -447,7 +466,7 @@ def test_retranslation_keys_differ_by_source_language() -> None:
     )
     chinese_calls = plan_retranslation_calls(
         make_context(console, FakeHttp([]).open, source_language="Chinese"),
-        paragraph_pass(),
+        single_paragraph_pass(),
         sources,
         sources,
         flagged,

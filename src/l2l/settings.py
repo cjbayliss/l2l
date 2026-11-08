@@ -53,11 +53,10 @@ class Config:
     parameters: Mapping[str, JsonValue]
 
 
-type PassMode = Literal["analysis", "chunk", "paragraph", "update_glossary"]
+type PassMode = Literal["analysis", "translate", "update_glossary"]
 PASS_MODES: Final[tuple[PassMode, ...]] = (
     "analysis",
-    "chunk",
-    "paragraph",
+    "translate",
     "update_glossary",
 )
 
@@ -86,6 +85,7 @@ class PassDefinition:
     output: OutputPolicy = field(default_factory=OutputPolicy)
     unit_paragraph_tolerance: int | None = None
     pass_paragraph_tolerance: int | None = None
+    paragraphs_per_call: int = 0
     prompt_role: PromptRole | None = None
     prompt_sections: tuple[PromptSectionName, ...] = ()
     prompt_omitted_sections: tuple[PromptSectionName, ...] = ()
@@ -111,6 +111,7 @@ class PassDraft:
     style_patch: StylePolicyPatch = field(default_factory=StylePolicyPatch)
     output_patch: OutputPolicyPatch = field(default_factory=OutputPolicyPatch)
     ensure_paragraphs_explicit: ParagraphTriState | Unset = UNSET
+    paragraphs_per_call: int | Unset = UNSET
 
 
 @final
@@ -266,6 +267,7 @@ PASS_KEYS: Final = (
     "include_types",
     "prompts",
     "style",
+    "paragraphs_per_call",
 )
 
 

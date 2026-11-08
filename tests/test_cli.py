@@ -34,7 +34,7 @@ CONFIG_TEXT = (
     'model = "m"\n'
     "max_tokens = 1000\n"
     "\n[pass.translate]\n"
-    'mode = "chunk"\n'
+    'mode = "translate"\n'
     'instruction = "Translate to {target_language}."'
 )
 
@@ -155,7 +155,7 @@ def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
     assert "api.model: m" in stdout
     assert "api.api_key: secr...ey" in stdout
     assert "target_language: English (scripts: Latin)" in stdout
-    assert "pass 1/1 [translate]: mode=chunk" in stdout
+    assert "pass 1/1 [translate]: mode=translate" in stdout
     assert "target_language=English scripts=Latin" in stdout
     assert "uses_target_language_placeholder=True" in stdout
 
@@ -178,7 +178,7 @@ def test_dry_run_prints_plan_without_calling_endpoint(tmp_path: Path) -> None:
     assert "source: 3 character(s), 1 paragraph(s)" in stdout
     assert (
         "pass 1/1 [translate]: target language English (scripts: Latin), "
-        "mode=chunk, 1 unit(s)" in stdout
+        "mode=translate, 1 unit(s)" in stdout
     )
     assert "unit 1/1" in stdout
     assert "cache key" in stdout
@@ -759,12 +759,12 @@ def test_extract_glossary_ignores_pipeline_passes(tmp_path: Path) -> None:
 
 
 UPDATE_GLOSSARY_CONFIG_TEXT = CONFIG_TEXT.replace(
-    '\n[pass.translate]\nmode = "chunk"\n'
+    '\n[pass.translate]\nmode = "translate"\n'
     'instruction = "Translate to {target_language}."',
     "\n[pass.glossary]\n"
     'mode = "update_glossary"\n'
     "\n[pass.translate]\n"
-    'mode = "chunk"\n'
+    'mode = "translate"\n'
     'instruction = "Translate to {target_language}."',
 )
 
@@ -1063,7 +1063,7 @@ def test_dry_run_shows_update_glossary_pass(tmp_path: Path) -> None:
     )
     assert (
         "pass 2/2 [translate]: target language English (scripts: Latin), "
-        "mode=chunk, 1 unit(s)" in stdout
+        "mode=translate, 1 unit(s)" in stdout
     )
 
 
@@ -1568,7 +1568,7 @@ def test_check_config_shows_prompt_override_origins_and_warnings(
         + "\n[prompts]\n"
         'style = ""\n'
         "\n[pass.review]\n"
-        'mode = "paragraph"\n'
+        'mode = "translate"\n'
         "\n[pass.review.prompts]\n"
         'accuracy = { file = "accuracy.txt" }\n',
     )
@@ -1622,7 +1622,7 @@ def test_check_config_shows_resolved_style_and_guidance(tmp_path: Path) -> None:
         'formality = "informal"\n'
         'honorifics = "titles"\n'
         "\n[pass.translate]\n"
-        'mode = "chunk"\n'
+        'mode = "translate"\n'
         "\n[output]\n"
         'paragraphs = "approximate"\n'
         "maximum_characters = 300\n"

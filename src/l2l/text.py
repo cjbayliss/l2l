@@ -137,6 +137,23 @@ def make_chunks(
     return group_units_to_budget(paragraphs, budget)
 
 
+def paragraph_groups(
+    paragraphs: tuple[str, ...], paragraphs_per_call: int, budget: int
+) -> tuple[tuple[str, ...], ...]:
+    if paragraphs_per_call == 0:
+        return make_chunks(paragraphs, budget)
+
+    def batch(start: int) -> tuple[tuple[str, ...], ...]:
+        batch_paragraphs = paragraphs[start : start + paragraphs_per_call]
+        return group_units_to_budget(batch_paragraphs, budget)
+
+    return tuple(
+        chain.from_iterable(
+            batch(start) for start in range(0, len(paragraphs), paragraphs_per_call)
+        )
+    )
+
+
 def split_sentences(text: str, boundary_characters: str) -> tuple[str, ...]:
     pieces = re.split(f"(?<=[{re.escape(boundary_characters)}])", text)
     trimmed = pieces[:-1] if pieces and pieces[-1] == "" else pieces

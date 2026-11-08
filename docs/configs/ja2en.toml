@@ -12,7 +12,7 @@ provider = { allow_fallbacks = true, sort = { by = "throughput" } }
 stop = ["END"]
 
 [pass.translate]
-mode = "chunk"
+mode = "translate"
 model = "z-ai/glm-5.3-flash"
 [pass.translate.params]
 reasoning_effort = "high"

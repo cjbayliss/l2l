@@ -33,6 +33,7 @@ from l2l.text import (
     letter_script,
     make_chunks,
     non_ascii_sample,
+    paragraph_groups,
     paragraph_is_in_target_script,
     parse_cost,
     parse_tokens,
@@ -65,6 +66,32 @@ def test_make_chunks_respects_budget_and_keeps_oversized_paragraphs() -> None:
     assert make_chunks(("a", "b", "c"), 2) == (("a", "b"), ("c",))
     assert make_chunks(("a", "b"), 10) == (("a", "b"),)
     assert make_chunks(("a", "longer"), 1) == (("a",), ("longer",))
+
+
+def test_paragraph_groups_follows_the_budget_when_grouping_is_zero() -> None:
+    assert paragraph_groups(("a", "b", "c"), 0, 2) == (("a", "b"), ("c",))
+    assert paragraph_groups(("a", "b"), 0, 10) == (("a", "b"),)
+
+
+def test_paragraph_groups_batches_n_paragraphs_per_call() -> None:
+    assert paragraph_groups(("a", "b", "c", "d", "e"), 2, 100) == (
+        ("a", "b"),
+        ("c", "d"),
+        ("e",),
+    )
+    assert paragraph_groups(("a", "b", "c"), 3, 100) == (("a", "b", "c"),)
+
+
+def test_paragraph_groups_splits_oversized_batches_to_the_budget() -> None:
+    assert paragraph_groups(("a", "longer", "b", "c"), 2, 2) == (
+        ("a",),
+        ("longer",),
+        ("b", "c"),
+    )
+
+
+def test_paragraph_groups_single_paragraphs_per_call() -> None:
+    assert paragraph_groups(("a", "b", "c"), 1, 100) == (("a",), ("b",), ("c",))
 
 
 def test_split_sentences() -> None:

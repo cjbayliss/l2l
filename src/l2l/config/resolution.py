@@ -158,7 +158,7 @@ def selected_pass_role(
     pass_draft: PassDraft, seen_text_pass: bool
 ) -> PromptRole | None:
     match pass_draft.mode:
-        case "chunk" | "paragraph":
+        case "translate":
             return "reviewer" if seen_text_pass else "translator"
 
         case "analysis":
@@ -181,7 +181,7 @@ def selected_pass_roles(
         return (
             selected_pass_role(current, seen_text_pass),
             *select_remaining(
-                tuple(rest), seen_text_pass or current.mode in ("chunk", "paragraph")
+                tuple(rest), seen_text_pass or current.mode == "translate"
             ),
         )
 
@@ -215,6 +215,11 @@ def finalized_pass_definition(
         output=output_policy,
         unit_paragraph_tolerance=unit_tolerance,
         pass_paragraph_tolerance=pass_tolerance,
+        paragraphs_per_call=(
+            0
+            if isinstance(pass_draft.paragraphs_per_call, Unset)
+            else pass_draft.paragraphs_per_call
+        ),
         prompt_role=prompt_role,
         prompt_sections=prompt_sections,
         prompt_omitted_sections=prompt_omitted_sections,
@@ -230,7 +235,6 @@ class FinalizedPasses:
 
 
 def resolved_paragraph_tolerances(
-    mode: str,
     explicit: bool | int | None,
     output_policy: OutputPolicy,
 ) -> tuple[int | None, int | None, OutputParagraphs]:
@@ -239,16 +243,12 @@ def resolved_paragraph_tolerances(
         effective: OutputParagraphs = (
             "approximate" if tolerance is not None and tolerance > 0 else "exact"
         )
-        return (
-            (0 if mode == "paragraph" else tolerance),
-            tolerance,
-            effective,
-        )
+        return (tolerance, tolerance, effective)
 
     if output_policy.paragraphs == "approximate":
         return (1, 1, "approximate")
 
-    return (0 if mode == "paragraph" else None, None, "exact")
+    return (None, None, "exact")
 
 
 def finalize_pass_draft(
@@ -274,8 +274,8 @@ def finalize_pass_draft(
         ):
             return fail_config(
                 f"pass [{pass_draft.name}]: per-pass prompt, style, or output "
-                "settings apply only to built-in rendered chunk, paragraph, "
-                "or analysis passes"
+                "settings apply only to built-in rendered translate or "
+                "analysis passes"
             )
 
         warnings: list[str] = []
@@ -298,7 +298,7 @@ def finalize_pass_draft(
             pass_draft.instruction if pass_draft.instruction is not None else ""
         )
         unit_tolerance, pass_tolerance, _ = resolved_paragraph_tolerances(
-            pass_draft.mode, explicit, OutputPolicy()
+            explicit, OutputPolicy()
         )
         return Ok(
             (
@@ -338,7 +338,7 @@ def finalize_pass_draft(
         effective_output_policy = OutputPolicy()
     else:
         unit_tolerance, pass_tolerance, effective_paragraphs = (
-            resolved_paragraph_tolerances(pass_draft.mode, explicit, output_policy)
+            resolved_paragraph_tolerances(explicit, output_policy)
         )
         effective_output_policy = OutputPolicy(
             paragraphs=effective_paragraphs,

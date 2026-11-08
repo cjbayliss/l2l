@@ -120,6 +120,7 @@ from l2l.text import (
     estimate_tokens,
     excerpt,
     make_chunks,
+    paragraph_groups,
     paragraph_is_in_target_script,
     paragraph_is_translatable,
     separator_at,
@@ -165,7 +166,6 @@ class PassExecution:
     source_paragraphs: tuple[str, ...]
     separators: tuple[str, ...]
     chunk_plan: PassPlan
-    paragraph_plan: tuple[tuple[str, ...], ...]
 
 
 @final
@@ -444,7 +444,7 @@ def conclude_state(
         case "analysis" | "update_glossary":
             return io_result(Ok(state))
 
-        case "chunk" | "paragraph":
+        case "translate":
             if pass_definition.retranslate_untranslated:
                 return retranslate_state(
                     run_context,
@@ -1357,17 +1357,16 @@ def run_units(
     return io_traverse(calls, unit_part)
 
 
-def text_pass_unit_plan(
+def unit_plan_for_pass(
     pass_definition: PassDefinition,
     chunk_plan: PassPlan,
-    paragraph_plan: tuple[tuple[str, ...], ...],
+    source_paragraphs: tuple[str, ...],
 ) -> tuple[tuple[str, ...], ...]:
-    match pass_definition.mode:
-        case "paragraph":
-            return paragraph_plan
-
-        case _:
-            return chunk_plan.chunks
+    return paragraph_groups(
+        source_paragraphs,
+        pass_definition.paragraphs_per_call,
+        chunk_plan.chunk_budget,
+    )
 
 
 def run_text_pass_once(
@@ -1379,13 +1378,13 @@ def run_text_pass_once(
 ) -> IO[StateResult]:
     run_context = execution.run_context
     pass_definition = execution.pass_definition
-    plan = text_pass_unit_plan(
-        pass_definition, execution.chunk_plan, execution.paragraph_plan
+    plan = unit_plan_for_pass(
+        pass_definition, execution.chunk_plan, execution.source_paragraphs
     )
 
     work_paragraphs, _ = split_paragraphs(state.text)
     work_groups, warning = resolve_work_groups(
-        pass_definition.mode,
+        pass_definition.paragraphs_per_call,
         work_paragraphs,
         plan,
         pass_definition.name,
@@ -1448,7 +1447,7 @@ def run_pass_attempt(
 ) -> IO[StateResult]:
     pass_definition = execution.pass_definition
     retry: PassRetry | None = None
-    if retry_attempt == 0 and pass_definition.mode == "chunk":
+    if retry_attempt == 0 and pass_definition.mode == "translate":
         retry_state = state
 
         def retry_once(accumulated: Usage, retry_started: float) -> IO[StateResult]:
@@ -1518,24 +1517,20 @@ def verify_paragraph_count(
     if paragraph_count_is_accepted(count, source_count, tolerance):
         return io_result(result)
 
-    match pass_definition.mode:
-        case "chunk":
-            pass
-
-        case _:
-            return io_map(
-                run_context.console.log(mismatch_message(count, "continuing")),
-                lambda _: result,
-            )
+    if pass_definition.paragraphs_per_call == 1:
+        return io_map(
+            run_context.console.log(mismatch_message(count, "continuing")),
+            lambda _: result,
+        )
 
     def retry_at(retry_started: float) -> IO[StateResult]:
-        paragraph_execution = replace(
+        unit_execution = replace(
             execution,
-            pass_definition=replace(pass_definition, mode="paragraph"),
+            pass_definition=replace(pass_definition, paragraphs_per_call=1),
         )
         return io_bind(
             run_pass_attempt(
-                paragraph_execution,
+                unit_execution,
                 replace(state, usage=result.value.usage),
                 retry_started,
             ),
@@ -1579,7 +1574,7 @@ def run_pass(
         case "update_glossary":
             return run_update_glossary_pass(execution, state, started_at)
 
-        case "chunk" | "paragraph":
+        case "translate":
             return run_text_pass(execution, state, started_at)
 
 
@@ -1639,7 +1634,6 @@ def build_pass_executions(
     separators: tuple[str, ...],
     chunk_plans: tuple[PassPlan, ...],
 ) -> tuple[PassExecution, ...]:
-    paragraph_plan = tuple((paragraph,) for paragraph in source_paragraphs)
     earlier_pass_modes = preceding_modes(pass_definitions)
     return tuple(
         PassExecution(
@@ -1649,7 +1643,6 @@ def build_pass_executions(
             source_paragraphs=source_paragraphs,
             separators=separators,
             chunk_plan=chunk_plan,
-            paragraph_plan=paragraph_plan,
         )
         for index, (pass_definition, chunk_plan) in enumerate(
             zip(pass_definitions, chunk_plans, strict=True)

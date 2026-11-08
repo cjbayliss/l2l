@@ -7,10 +7,10 @@ lazy from pathlib import Path
 from fakes import (
     FakeHttp,
     FakeStreamResponse,
-    chunk_pass,
     make_console,
     make_context,
     stream_chunks,
+    translate_pass,
     with_usage,
 )
 
@@ -65,7 +65,7 @@ def test_ascii_enforcement_reports_a_failing_repair_call() -> None:
 
     run_context = make_context(console, open_once_then_fail)
     code = run_pipeline(
-        run_context, (chunk_pass(ascii_output=True),), "文本。", 0.0, io.StringIO()
+        run_context, (translate_pass(ascii_output=True),), "文本。", 0.0, io.StringIO()
     ).run()
     assert code == 1
     logged = stderr.getvalue()
@@ -86,7 +86,7 @@ def test_ascii_enforcement_fails_fast_when_most_paragraphs_need_llm_repair() -> 
     run_context = make_context(console, http.open, target_language="Zorblaxian")
     code = run_pipeline(
         run_context,
-        (chunk_pass(ascii_output=True),),
+        (translate_pass(ascii_output=True),),
         "1。\n\n2。\n\n3。\n\n4。\n\n5。",
         0.0,
         io.StringIO(),
@@ -117,7 +117,7 @@ def test_ascii_enforcement_repairs_a_minority_of_stubborn_paragraphs() -> None:
     stdout = io.StringIO()
     code = run_pipeline(
         run_context,
-        (chunk_pass(ascii_output=True),),
+        (translate_pass(ascii_output=True),),
         "一。\n\n二。\n\n三。\n\n四。\n\n五。",
         0.0,
         stdout,
@@ -136,7 +136,7 @@ def test_run_pipeline_enforces_ascii_mechanically() -> None:
     run_context = make_context(console, http.open)
     stdout = io.StringIO()
     code = run_pipeline(
-        run_context, (chunk_pass(ascii_output=True),), "文本。", 0.0, stdout
+        run_context, (translate_pass(ascii_output=True),), "文本。", 0.0, stdout
     ).run()
     assert code == 0
     assert stdout.getvalue() == "Cafe - deja.\n"
@@ -158,7 +158,7 @@ def test_ascii_repair_cache_keys_differ_by_target_language(tmp_path: Path) -> No
             target_language=language,
         )
         result = ascii_fix_llm(
-            run_context, chunk_pass(ascii_output=True), "你好。", "Hi 中", Usage()
+            run_context, translate_pass(ascii_output=True), "你好。", "Hi 中", Usage()
         ).run()
         assert isinstance(result, Ok)
 

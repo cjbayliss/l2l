@@ -10,6 +10,7 @@ from l2l.languages import (
 )
 from l2l.messages import chunk_budget_violation_message
 from l2l.monads import Just, Maybe
+from l2l.pipeline import unit_plan_for_pass
 from l2l.plans import (
     UnitCall,
     oversized_paragraph_sizes,
@@ -104,38 +105,37 @@ def text_pass_report_lines(
     earlier_pass_modes: frozenset[PassMode],
     source_paragraphs: tuple[str, ...],
     separators: tuple[str, ...],
-    paragraph_plan: tuple[tuple[str, ...], ...],
+    unit_plan: tuple[tuple[str, ...], ...],
     header: str,
     language_note: str,
 ) -> tuple[str, ...]:
     pass_plan = plan_pass_chunks(
         run_context, pass_definition, earlier_pass_modes, source_paragraphs
     )
-    plan = paragraph_plan if pass_definition.mode == "paragraph" else pass_plan.chunks
     work_groups, warning = resolve_work_groups(
-        pass_definition.mode,
+        pass_definition.paragraphs_per_call,
         source_paragraphs,
-        plan,
+        unit_plan,
         pass_definition.name,
         pass_plan.chunk_budget,
     )
     calls = plan_unit_calls(
         run_context,
         pass_definition,
-        plan,
+        unit_plan,
         work_groups,
-        unit_separators(plan, separators),
+        unit_separators(unit_plan, separators),
         None,
         glossary=run_context.glossary_entries,
         earlier_pass_modes=earlier_pass_modes,
     )
-    is_chunk = pass_definition.mode == "chunk"
+    groups_by_budget = pass_definition.paragraphs_per_call == 0
     budget_note = (
-        f", source budget ~{pass_plan.chunk_budget} tokens" if is_chunk else ""
+        f", source budget ~{pass_plan.chunk_budget} tokens" if groups_by_budget else ""
     )
     violations = (
         oversized_paragraph_sizes(source_paragraphs, pass_plan.source_budget)
-        if is_chunk
+        if groups_by_budget
         else ()
     )
     return (
@@ -153,7 +153,6 @@ def report_pass(
     source_paragraphs: tuple[str, ...],
     separators: tuple[str, ...],
     earlier_pass_modes: frozenset[PassMode],
-    paragraph_plan: tuple[tuple[str, ...], ...],
     indexed: tuple[int, PassDefinition],
 ) -> tuple[str, ...]:
     number, pass_definition = indexed
@@ -164,13 +163,19 @@ def report_pass(
             return whole_document_pass_lines(header, language_note, pass_definition)
 
         case _:
+            pass_plan = plan_pass_chunks(
+                run_context, pass_definition, earlier_pass_modes, source_paragraphs
+            )
+            unit_plan = unit_plan_for_pass(
+                pass_definition, pass_plan, source_paragraphs
+            )
             return text_pass_report_lines(
                 run_context,
                 pass_definition,
                 earlier_pass_modes,
                 source_paragraphs,
                 separators,
-                paragraph_plan,
+                unit_plan,
                 header,
                 language_note,
             )
@@ -183,7 +188,6 @@ def plan_report(
 ) -> str:
     source_paragraphs, separators = split_paragraphs(text)
     earlier_pass_modes = preceding_modes(pass_definitions)
-    paragraph_plan = tuple((paragraph,) for paragraph in source_paragraphs)
     return "\n".join(
         (
             source_report_line(text, source_paragraphs),
@@ -198,7 +202,6 @@ def plan_report(
                     source_paragraphs,
                     separators,
                     earlier_modes,
-                    paragraph_plan,
                     indexed,
                 )
             ),

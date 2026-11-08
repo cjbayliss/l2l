@@ -19,13 +19,13 @@ reasoning.effort = "high"
 [pass.translate]
 ascii = true
 retranslate_untranslated = true
-mode = "chunk"
+mode = "translate"
 [pass.translate.params]
 reasoning.effort = "high"
 
 [pass.review]
 ascii = true
 retranslate_untranslated = true
-mode = "chunk"
+mode = "translate"
 [pass.review.params]
 reasoning.effort = "high"

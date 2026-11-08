@@ -42,7 +42,7 @@ CONFIG_TEXT = (
     'model = "m"\n'
     "max_tokens = 1000\n"
     "\n[pass.translate]\n"
-    'mode = "chunk"\n'
+    'mode = "translate"\n'
     'instruction = "Translate."'
 )
 

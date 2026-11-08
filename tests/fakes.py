@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 
-def chunk_pass(
+def translate_pass(
     name: str = "translate",
     ascii_output: bool = False,
     ensure_paragraphs: bool | int = False,
@@ -43,7 +43,7 @@ def chunk_pass(
     return PassDefinition(
         name,
         "T.",
-        "chunk",
+        "translate",
         {},
         None,
         ascii_output,
@@ -54,13 +54,13 @@ def chunk_pass(
     )
 
 
-def paragraph_pass(
+def single_paragraph_pass(
     name: str = "translate", retranslate_untranslated: bool = False
 ) -> PassDefinition:
     return PassDefinition(
         name,
         "T.",
-        "paragraph",
+        "translate",
         {},
         None,
         False,
@@ -68,6 +68,7 @@ def paragraph_pass(
         retranslate_untranslated,
         unit_paragraph_tolerance=0,
         pass_paragraph_tolerance=None,
+        paragraphs_per_call=1,
     )
 
 
