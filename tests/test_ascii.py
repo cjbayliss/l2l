@@ -16,6 +16,7 @@ from fakes import (
 
 from l2l.ascii import ascii_collapse, ascii_fix_llm, stubborn_paragraphs
 from l2l.errors import TranslationError, fail_http
+from l2l.exit_state import ExitKind, ExitState
 from l2l.monads import Ok, Result
 from l2l.pipeline import run_pipeline
 from l2l.plans import ascii_drop_warning
@@ -24,6 +25,12 @@ from l2l.text import AsciiDrop, Usage
 
 if TYPE_CHECKING:
     from l2l.context import HttpRequest, HttpResponse
+
+
+def final_message(state: ExitState) -> str:
+    assert state.message is not None
+    return state.message
+
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
 
@@ -64,13 +71,13 @@ def test_ascii_enforcement_reports_a_failing_repair_call() -> None:
         return fail_http("unreachable", "down")
 
     run_context = make_context(console, open_once_then_fail)
-    code = run_pipeline(
+    state = run_pipeline(
         run_context, (translate_pass(ascii_output=True),), "文本。", 0.0, io.StringIO()
     ).run()
-    assert code == 1
-    logged = stderr.getvalue()
-    assert "pass [translate] ascii enforcement failed" in logged
-    assert "could not reach endpoint: down" in logged
+    assert state.kind is ExitKind.RUNTIME_ERROR
+    stderr.getvalue()
+    assert "pass [translate] ascii enforcement failed" in final_message(state)
+    assert "could not reach endpoint: down" in final_message(state)
     assert len(requests) == 4
 
 
@@ -84,18 +91,18 @@ def test_ascii_enforcement_fails_fast_when_most_paragraphs_need_llm_repair() -> 
         ]
     )
     run_context = make_context(console, http.open, target_language="Zorblaxian")
-    code = run_pipeline(
+    state = run_pipeline(
         run_context,
         (translate_pass(ascii_output=True),),
         "1。\n\n2。\n\n3。\n\n4。\n\n5。",
         0.0,
         io.StringIO(),
     ).run()
-    assert code == 1
+    assert state.kind is ExitKind.RUNTIME_ERROR
     assert len(http.requests) == 1
-    logged = stderr.getvalue()
-    assert "5 of 5 paragraph(s) would need LLM ASCII repair" in logged
-    assert "untranslated text instead of translating" in logged
+    stderr.getvalue()
+    assert "5 of 5 paragraph(s) would need LLM ASCII repair" in final_message(state)
+    assert "untranslated text instead of translating" in final_message(state)
 
 
 def test_ascii_enforcement_repairs_a_minority_of_stubborn_paragraphs() -> None:
@@ -115,14 +122,14 @@ def test_ascii_enforcement_repairs_a_minority_of_stubborn_paragraphs() -> None:
     )
     run_context = make_context(console, http.open)
     stdout = io.StringIO()
-    code = run_pipeline(
+    state = run_pipeline(
         run_context,
         (translate_pass(ascii_output=True),),
         "一。\n\n二。\n\n三。\n\n四。\n\n五。",
         0.0,
         stdout,
     ).run()
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert stdout.getvalue() == (
         "Hi there.\n\nYo there.\n\nHey there.\n\nCafe.\n\nPlain.\n"
     )
@@ -135,10 +142,10 @@ def test_run_pipeline_enforces_ascii_mechanically() -> None:
     http = FakeHttp([FakeStreamResponse(chunks)])
     run_context = make_context(console, http.open)
     stdout = io.StringIO()
-    code = run_pipeline(
+    state = run_pipeline(
         run_context, (translate_pass(ascii_output=True),), "文本。", 0.0, stdout
     ).run()
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert stdout.getvalue() == "Cafe - deja.\n"
     assert len(http.requests) == 1
 

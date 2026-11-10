@@ -134,6 +134,7 @@ from l2l.text import (
 )
 lazy from l2l.console import Console
 lazy from l2l.context import Context
+lazy from l2l.exit_state import ExitKind, ExitState
 lazy from l2l.json_values import JsonValue
 
 
@@ -1656,12 +1657,12 @@ def run_pipeline(
     text: str,
     started: float,
     stdout: TextIO,
-) -> IO[int]:
+) -> IO[ExitState]:
     source_paragraphs, separators = split_paragraphs(text)
 
-    def conclude(result: StateResult) -> IO[int]:
+    def conclude(result: StateResult) -> IO[ExitState]:
         if isinstance(result, Err):
-            return io_map(run_context.console.log(describe(result.error)), lambda _: 1)
+            return io_pure(ExitState(ExitKind.RUNTIME_ERROR, describe(result.error)))
 
         return finish_output(run_context, result.value, started, stdout)
 
@@ -1700,23 +1701,23 @@ def finish_output(
     state: State,
     started: float,
     stdout: TextIO,
-) -> IO[int]:
-    def after_write(_: None) -> IO[int]:
-        def report_total(ended_at: float) -> IO[int]:
+) -> IO[ExitState]:
+    def after_write(_: None) -> IO[ExitState]:
+        def report_total(ended_at: float) -> IO[ExitState]:
             elapsed = ended_at - started
 
-            def after_done(_: None) -> IO[int]:
-                return io_map(
-                    run_context.console.log(
+            def after_done(_: None) -> IO[ExitState]:
+                return io_pure(
+                    ExitState(
+                        ExitKind.SUCCESS,
                         usage_line(
                             "TOTAL",
                             elapsed,
                             state.usage.prompt_tokens,
                             state.usage.completion_tokens,
                             state.usage.cost,
-                        )
-                    ),
-                    lambda _: 0,
+                        ),
+                    )
                 )
 
             return io_bind(

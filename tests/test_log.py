@@ -24,6 +24,7 @@ from l2l.effects import (
     run_log_write,
 )
 from l2l.errors import TranslationError, fail_http
+from l2l.exit_state import ExitKind, ExitState
 from l2l.http import chat
 from l2l.monads import NOTHING, Just, Ok, Result
 from l2l.text import Usage
@@ -59,9 +60,9 @@ def run_l2l(
     open_http: OpenHTTP,
     flags: list[str],
     sleep: Callable[[float], None] | None = None,
-) -> tuple[int, str, str]:
+) -> tuple[ExitState, str, str]:
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "--config",
             str(config_path),
@@ -75,14 +76,14 @@ def run_l2l(
         open_http,
         sleep if sleep is not None else (lambda seconds: None),
     ).run()
-    return code, stdout.getvalue(), stderr.getvalue()
+    return state, stdout.getvalue(), stderr.getvalue()
 
 
 def test_run_log_captures_stream_request_and_response(tmp_path: Path) -> None:
     chunks = with_usage(stream_chunks("Hello."), USAGE)
     http = FakeHttp([FakeStreamResponse(chunks)])
-    code, _, _ = run_l2l(write_config(tmp_path), tmp_path, http.open, ["--no-cache"])
-    assert code == 0
+    state, _, _ = run_l2l(write_config(tmp_path), tmp_path, http.open, ["--no-cache"])
+    assert state.kind is ExitKind.SUCCESS
 
     logs = list((tmp_path / "cache-home" / "l2l" / "logs").glob("*.log"))
     assert len(logs) == 1
@@ -125,10 +126,10 @@ def test_run_log_captures_http_error(tmp_path: Path) -> None:
     def record_sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    code, _, _ = run_l2l(
+    state, _, _ = run_l2l(
         write_config(tmp_path), tmp_path, open_fail, ["--no-cache"], record_sleep
     )
-    assert code == 1
+    assert state.kind is ExitKind.RUNTIME_ERROR
     assert len(slept) == 2
 
     logs = list((tmp_path / "cache-home" / "l2l" / "logs").glob("*.log"))
@@ -149,10 +150,10 @@ def test_log_path_printing_flags(tmp_path: Path) -> None:
         http = FakeHttp(
             [FakeStreamResponse(with_usage(stream_chunks("Hello."), USAGE))]
         )
-        code, _, stderr = run_l2l(
+        state, _, stderr = run_l2l(
             write_config(tmp_path), tmp_path, http.open, arguments
         )
-        assert code == 0
+        assert state.kind is ExitKind.SUCCESS
         assert ("l2l: log:" in stderr) is expected
         if expected:
             match = re.search(r"l2l: log: (\S+)", stderr)

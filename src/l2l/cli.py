@@ -70,6 +70,7 @@ from l2l.pipeline import run_pipeline
 from l2l.report import plan_report, setup_report, setup_warnings
 from l2l.settings import UNSET, Arguments, Setup, Unset, build_settings, value_if_set
 from l2l.text import Translated, Usage
+lazy from l2l.exit_state import ExitKind, ExitState, exit_code
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -311,27 +312,17 @@ def curl_open_http(environment: Mapping[str, str]) -> OpenHTTP:
     return open_with_environment
 
 
-def report_message_and_exit(console: Console, message: str, exit_code: int) -> IO[int]:
-    return io_map(console.log(message), lambda _: exit_code)
-
-
-def report_error_and_exit(
-    console: Console, error: TranslationError, exit_code: int
-) -> IO[int]:
-    return report_message_and_exit(console, describe(error), exit_code)
-
-
 def with_loaded_setup(
     parsed: Arguments,
     environment: Mapping[str, str],
     console: Console,
-    program: Callable[[Setup], IO[int]],
+    program: Callable[[Setup], IO[ExitState]],
     resolve_pipeline_passes: bool = True,
-) -> IO[int]:
-    def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[int]:
+) -> IO[ExitState]:
+    def use_setup(setup_result: Result[Setup, TranslationError]) -> IO[ExitState]:
         match setup_result:
             case Err(error):
-                return report_error_and_exit(console, error, 2)
+                return io_pure(ExitState(ExitKind.USAGE_ERROR, describe(error)))
 
             case Ok(setup):
                 return program(setup)
@@ -341,8 +332,8 @@ def with_loaded_setup(
 
 def with_cache_directory(
     environment: Mapping[str, str],
-    program: Callable[[str], IO[int]],
-) -> IO[int]:
+    program: Callable[[str], IO[ExitState]],
+) -> IO[ExitState]:
     return io_bind(resolve_cache_directory(environment), program)
 
 
@@ -384,21 +375,23 @@ def main(
     clock: Callable[[], float],
     open_http: OpenHTTP | None = None,
     sleep: Sleep = time_sleep,
-) -> IO[int]:
+) -> IO[ExitState]:
     opener = open_http if open_http is not None else curl_open_http(environment)
 
     def after_parse(
         parsed_result: ParsedArguments,
-    ) -> IO[int]:
+    ) -> IO[ExitState]:
         if isinstance(parsed_result, Err):
-            return with_console_io(
-                stderr,
-                lambda console: report_error_and_exit(console, parsed_result.error, 2),
+            return io_pure(
+                ExitState(ExitKind.USAGE_ERROR, describe(parsed_result.error))
             )
 
         parsed = parsed_result.value
         if isinstance(parsed, EarlyExitText):
-            return io_map(write_stdout(stdout, parsed.text), lambda _: 0)
+            return io_map(
+                write_stdout(stdout, parsed.text),
+                lambda _: ExitState(ExitKind.SUCCESS),
+            )
 
         if parsed.check_config:
             return check_config_program(parsed, environment, stdout, stderr, clock)
@@ -437,10 +430,10 @@ def main(
 
 def with_console_io(
     stderr: TextIO,
-    bound: Callable[[Console], IO[int]],
+    bound: Callable[[Console], IO[ExitState]],
     verbose: bool = False,
-) -> IO[int]:
-    def with_live(live: bool) -> IO[int]:
+) -> IO[ExitState]:
+    def with_live(live: bool) -> IO[ExitState]:
         return bound(
             Console(stderr, StatusLine(stderr, live), verbose=Reference(verbose))
         )
@@ -549,7 +542,7 @@ def dry_run_program(
     sleep: Sleep,
     text: str,
     stdout: TextIO,
-) -> IO[int]:
+) -> IO[ExitState]:
     planning_run_context = build_context(
         parsed, setup, console, clock, open_http, sleep
     )
@@ -557,7 +550,7 @@ def dry_run_program(
         write_stdout(
             stdout, plan_report(planning_run_context, setup.passes, text) + "\n"
         ),
-        lambda _: 0,
+        lambda _: ExitState(ExitKind.SUCCESS),
     )
 
 
@@ -575,13 +568,16 @@ def check_config_program(
     stdout: TextIO,
     stderr: TextIO,
     clock: Callable[[], float],
-) -> IO[int]:
-    def print_setup(setup: Setup) -> IO[int]:
+) -> IO[ExitState]:
+    def print_setup(setup: Setup) -> IO[ExitState]:
         report = setup_report(setup, setup.ensure_paragraphs)
         warnings = "".join(f"\nwarning: {warning}" for warning in setup_warnings(setup))
-        return io_map(write_stdout(stdout, report + warnings + "\n"), lambda _: 0)
+        return io_map(
+            write_stdout(stdout, report + warnings + "\n"),
+            lambda _: ExitState(ExitKind.SUCCESS),
+        )
 
-    def with_console(console: Console) -> IO[int]:
+    def with_console(console: Console) -> IO[ExitState]:
         return with_loaded_setup(parsed, environment, console, print_setup)
 
     return with_console_io(stderr, with_console)
@@ -607,17 +603,15 @@ def prune_entry(
     )
 
 
-def report_cache_prune(
-    console: Console, pruned: Result[int, TranslationError]
-) -> IO[int]:
+def report_cache_prune(pruned: Result[int, TranslationError]) -> IO[ExitState]:
     match pruned:
         case Err(error):
-            return report_error_and_exit(console, error, 2)
+            return io_pure(ExitState(ExitKind.USAGE_ERROR, describe(error)))
 
         case Ok(count):
             noun = "entry" if count == 1 else "entries"
-            return report_message_and_exit(
-                console, f"l2l: pruned {count} cache {noun}", 0
+            return io_pure(
+                ExitState(ExitKind.SUCCESS, f"l2l: pruned {count} cache {noun}")
             )
 
 
@@ -626,20 +620,21 @@ def prune_cache_program(
     environment: Mapping[str, str],
     stderr: TextIO,
     clock: Callable[[], float],
-) -> IO[int]:
+) -> IO[ExitState]:
     days = value_if_set(parsed.prune_cache)
 
-    def with_console(console: Console) -> IO[int]:
+    def with_console(console: Console) -> IO[ExitState]:
         if days is None or days < 0:
-            return report_message_and_exit(
-                console,
-                "l2l: --prune-cache requires a non-negative number of days",
-                2,
+            return io_pure(
+                ExitState(
+                    ExitKind.USAGE_ERROR,
+                    "l2l: --prune-cache requires a non-negative number of days",
+                )
             )
 
         retention_days = days
 
-        def prune(directory: str) -> IO[int]:
+        def prune(directory: str) -> IO[ExitState]:
             def with_entry_paths(
                 scanned: Result[tuple[str, ...], TranslationError],
             ) -> IO[Result[int, TranslationError]]:
@@ -658,7 +653,7 @@ def prune_cache_program(
 
             return io_bind(
                 io_bind(cache_entry_paths(directory), with_entry_paths),
-                lambda pruned: report_cache_prune(console, pruned),
+                lambda pruned: report_cache_prune(pruned),
             )
 
         return with_cache_directory(environment, prune)
@@ -666,17 +661,15 @@ def prune_cache_program(
     return with_console_io(stderr, with_console)
 
 
-def report_log_prune(
-    console: Console, pruned: Result[int, TranslationError]
-) -> IO[int]:
+def report_log_prune(pruned: Result[int, TranslationError]) -> IO[ExitState]:
     match pruned:
         case Err(error):
-            return report_error_and_exit(console, error, 2)
+            return io_pure(ExitState(ExitKind.USAGE_ERROR, describe(error)))
 
         case Ok(count):
             noun = "log" if count == 1 else "logs"
-            return report_message_and_exit(
-                console, f"l2l: pruned {count} run {noun}", 0
+            return io_pure(
+                ExitState(ExitKind.SUCCESS, f"l2l: pruned {count} run {noun}")
             )
 
 
@@ -685,20 +678,21 @@ def prune_logs_program(
     environment: Mapping[str, str],
     stderr: TextIO,
     clock: Callable[[], float],
-) -> IO[int]:
+) -> IO[ExitState]:
     days = value_if_set(parsed.prune_logs)
 
-    def with_console(console: Console) -> IO[int]:
+    def with_console(console: Console) -> IO[ExitState]:
         if days is None or days < 0:
-            return report_message_and_exit(
-                console,
-                "l2l: --prune-logs requires a non-negative number of days",
-                2,
+            return io_pure(
+                ExitState(
+                    ExitKind.USAGE_ERROR,
+                    "l2l: --prune-logs requires a non-negative number of days",
+                )
             )
 
         retention_days = days
 
-        def prune(cache_directory: str) -> IO[int]:
+        def prune(cache_directory: str) -> IO[ExitState]:
             def with_log_paths(
                 scanned: Result[tuple[str, ...], TranslationError],
             ) -> IO[Result[int, TranslationError]]:
@@ -717,7 +711,7 @@ def prune_logs_program(
 
             return io_bind(
                 io_bind(run_log_paths(cache_directory), with_log_paths),
-                lambda pruned: report_log_prune(console, pruned),
+                lambda pruned: report_log_prune(pruned),
             )
 
         return with_cache_directory(environment, prune)
@@ -734,12 +728,12 @@ def run_main_program(
     clock: Callable[[], float],
     open_http: OpenHTTP,
     sleep: Sleep,
-) -> IO[int]:
+) -> IO[ExitState]:
     if not text.strip():
-        return io_pure(0)
+        return io_pure(ExitState(ExitKind.SUCCESS))
 
-    def run_with_setup(setup: Setup, console: Console) -> IO[int]:
-        def run_with_source(source_text: str) -> IO[int]:
+    def run_with_setup(setup: Setup, console: Console) -> IO[ExitState]:
+        def run_with_source(source_text: str) -> IO[ExitState]:
             warnings = log_setup_warnings(console, setup)
             if parsed.dry_run:
                 return io_and_then(
@@ -756,9 +750,9 @@ def run_main_program(
                     ),
                 )
 
-            def with_started(started: float) -> IO[int]:
-                def run_in_cache_directory(cache_directory: str) -> IO[int]:
-                    def run_logged_pipeline(log: RunLog) -> IO[int]:
+            def with_started(started: float) -> IO[ExitState]:
+                def run_in_cache_directory(cache_directory: str) -> IO[ExitState]:
+                    def run_logged_pipeline(log: RunLog) -> IO[ExitState]:
                         return io_and_then(
                             announce_run_log(parsed, console, log),
                             with_tab_listener(
@@ -794,16 +788,16 @@ def run_main_program(
 
         def with_filtered_text(
             filtered: Result[str, TranslationError],
-        ) -> IO[int]:
+        ) -> IO[ExitState]:
             match filtered:
                 case Err(error):
-                    return report_error_and_exit(console, error, 1)
+                    return io_pure(ExitState(ExitKind.RUNTIME_ERROR, describe(error)))
                 case Ok(filtered_text):
                     return run_with_source(filtered_text)
 
         return io_bind(filter_source_text(setup, console, text), with_filtered_text)
 
-    def with_console(console: Console) -> IO[int]:
+    def with_console(console: Console) -> IO[ExitState]:
         return with_loaded_setup(
             parsed, environment, console, lambda setup: run_with_setup(setup, console)
         )
@@ -812,35 +806,39 @@ def run_main_program(
 
 
 def write_extracted_glossary(
-    console: Console,
     output_path: str,
     setup: Setup,
     reply_result: Result[Translated, TranslationError],
-) -> IO[int]:
+) -> IO[ExitState]:
     match reply_result:
         case Err(error):
-            return report_error_and_exit(console, error, 1)
+            return io_pure(ExitState(ExitKind.RUNTIME_ERROR, describe(error)))
 
         case Ok(reply):
             reply_entries = parse_model_glossary_reply(reply.text, output_path)
             match reply_entries:
                 case Err(error):
-                    return report_error_and_exit(console, error, 1)
+                    return io_pure(ExitState(ExitKind.RUNTIME_ERROR, describe(error)))
 
                 case Ok(entries):
                     merged = integrate_glossary_reply(setup.glossary_entries, entries)
 
-                    def report(written: Result[None, TranslationError]) -> IO[int]:
+                    def report(
+                        written: Result[None, TranslationError],
+                    ) -> IO[ExitState]:
                         match written:
                             case Err(error):
-                                return report_error_and_exit(console, error, 1)
+                                return io_pure(
+                                    ExitState(ExitKind.RUNTIME_ERROR, describe(error))
+                                )
 
                             case Ok(_):
-                                return report_message_and_exit(
-                                    console,
-                                    f"l2l: wrote {len(merged)} glossary entries "
-                                    f"to {output_path}",
-                                    0,
+                                return io_pure(
+                                    ExitState(
+                                        ExitKind.SUCCESS,
+                                        f"l2l: wrote {len(merged)} glossary entries "
+                                        f"to {output_path}",
+                                    )
                                 )
 
                     return io_bind(
@@ -858,7 +856,7 @@ def extract_glossary_program(
     clock: Callable[[], float],
     open_http: OpenHTTP,
     sleep: Sleep,
-) -> IO[int]:
+) -> IO[ExitState]:
     def extract_reply(
         run_context: Context, setup: Setup
     ) -> IO[Result[Translated, TranslationError]]:
@@ -880,12 +878,13 @@ def extract_glossary_program(
             ),
         )
 
-    def run_with_setup(console: Console, setup: Setup) -> IO[int]:
+    def run_with_setup(console: Console, setup: Setup) -> IO[ExitState]:
         if not text.strip():
-            return report_message_and_exit(
-                console,
-                "l2l: --extract-glossary requires text on stdin",
-                2,
+            return io_pure(
+                ExitState(
+                    ExitKind.USAGE_ERROR,
+                    "l2l: --extract-glossary requires text on stdin",
+                )
             )
 
         run_context = build_context(parsed, setup, console, clock, open_http, sleep)
@@ -893,13 +892,11 @@ def extract_glossary_program(
             log_setup_warnings(console, setup),
             io_bind(
                 extract_reply(run_context, setup),
-                lambda reply: write_extracted_glossary(
-                    console, output_path, setup, reply
-                ),
+                lambda reply: write_extracted_glossary(output_path, setup, reply),
             ),
         )
 
-    def with_console(console: Console) -> IO[int]:
+    def with_console(console: Console) -> IO[ExitState]:
         return with_loaded_setup(
             parsed,
             environment,
@@ -912,8 +909,9 @@ def extract_glossary_program(
 
 
 def cli() -> None:
+    state: ExitState
     try:
-        code = main(
+        state = main(
             sys.argv[1:],
             dict(os.environ),
             sys.stdin,
@@ -922,13 +920,14 @@ def cli() -> None:
             time.time,
         ).run()
     except KeyboardInterrupt:
-        print("l2l: interrupted", file=sys.stderr)
-        code = 130
+        state = ExitState(ExitKind.INTERRUPTED, "l2l: interrupted")
     except BrokenPipeError:
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        code = 141
+        state = ExitState(ExitKind.BROKEN_PIPE)
 
-    sys.exit(code)
+    if state.message is not None:
+        print(state.message, file=sys.stderr)
+    sys.exit(exit_code(state.kind))
 
 
 if __name__ == "__main__":

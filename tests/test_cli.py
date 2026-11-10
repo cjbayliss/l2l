@@ -19,12 +19,19 @@ from fakes import (
 from l2l import __version__, cli, effects, pipeline
 from l2l.config import setup as config_setup
 from l2l.errors import FileError, TranslationError, describe, fail_http
+from l2l.exit_state import ExitKind, ExitState
 from l2l.monads import IO, Err, Ok, Result, io_pure, io_result
 from l2l.settings import Arguments, Unset
 lazy from l2l.json_values import JsonObject
 
 if TYPE_CHECKING:
     from l2l.context import HttpRequest, HttpResponse
+
+
+def final_message(state: ExitState) -> str:
+    assert state.message is not None
+    return state.message
+
 
 CONFIG_TEXT = (
     'target_language = "English"\n'
@@ -68,7 +75,7 @@ def run_l2l(
     tmp_path: Path,
     arguments: list[str],
     stdin: str = "你好。",
-) -> tuple[int, str, str]:
+) -> tuple[ExitState, str, str]:
     def open_http(
         request: HttpRequest, timeout: float
     ) -> Result[HttpResponse, TranslationError]:
@@ -79,7 +86,7 @@ def run_l2l(
         "XDG_CONFIG_HOME": str(tmp_path / "xdg-config"),
         "XDG_CACHE_HOME": str(tmp_path / "xdg-cache"),
     }
-    code = cli.main(
+    state = cli.main(
         arguments,
         environment,
         io.StringIO(stdin),
@@ -88,44 +95,49 @@ def run_l2l(
         time.time,
         open_http,
     ).run()
-    return code, stdout.getvalue(), stderr.getvalue()
+    return state, stdout.getvalue(), stderr.getvalue()
 
 
 def test_empty_stdin_exits_zero_without_config(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(tmp_path, [], "")
-    assert code == 0
+    state, stdout, stderr = run_l2l(tmp_path, [], "")
+    assert state.kind is ExitKind.SUCCESS
     assert stdout == ""
     assert stderr == ""
 
 
 def test_invalid_arguments_exit_two(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(tmp_path, ["--no-such-flag"])
-    assert code == 2
+    state, stdout, _stderr = run_l2l(tmp_path, ["--no-such-flag"])
+    assert state.kind is ExitKind.USAGE_ERROR
     assert stdout == ""
-    assert "invalid arguments" in stderr
+    assert "invalid arguments" in final_message(state)
 
 
 def test_missing_config_fails_with_error(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(tmp_path, ["-c", str(tmp_path / "absent.toml")])
-    assert code == 2
+    state, stdout, _stderr = run_l2l(tmp_path, ["-c", str(tmp_path / "absent.toml")])
+    assert state.kind is ExitKind.USAGE_ERROR
     assert stdout == ""
-    assert "could not read" in stderr
+    assert "could not read" in final_message(state)
 
 
 def test_missing_target_language_exits_two(tmp_path: Path) -> None:
     config_path = tmp_path / "no-language.toml"
     config_path.write_text(CONFIG_TEXT.replace('target_language = "English"\n', ""))
-    code, stdout, stderr = run_l2l(tmp_path, ["-c", str(config_path), "--check-config"])
-    assert code == 2
+    state, stdout, _stderr = run_l2l(
+        tmp_path, ["-c", str(config_path), "--check-config"]
+    )
+    assert state.kind is ExitKind.USAGE_ERROR
     assert stdout == ""
-    assert "target language is required; set target_language in a config file" in stderr
+    assert (
+        "target language is required; set target_language in a config file"
+        in final_message(state)
+    )
 
 
 def test_check_config_prints_source_language(tmp_path: Path) -> None:
-    code, stdout, _ = run_l2l(
+    state, stdout, _ = run_l2l(
         tmp_path, ["-c", str(write_config(tmp_path)), "--check-config"]
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert "source_language: auto" in stdout
 
 
@@ -137,19 +149,19 @@ def test_config_source_language_normalizes_aliases(tmp_path: Path) -> None:
             'target_language = "English"\nsource_language = " MUL "\n',
         )
     )
-    code, stdout, _ = run_l2l(
+    state, stdout, _ = run_l2l(
         tmp_path,
         ["-c", str(config_path), "--check-config"],
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert "source_language: mixed" in stdout
 
 
 def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(
+    state, stdout, stderr = run_l2l(
         tmp_path, ["-c", str(write_config(tmp_path)), "--check-config"]
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert stderr == ""
     assert "api.base_url: http://endpoint.test/v1" in stdout
     assert "api.model: m" in stdout
@@ -163,17 +175,17 @@ def test_check_config_prints_report_and_exits(tmp_path: Path) -> None:
 def test_check_config_reports_setup_errors(tmp_path: Path) -> None:
     broken = tmp_path / "broken.toml"
     broken.write_text("[api]\nunknown_key = 1\n")
-    code, stdout, stderr = run_l2l(tmp_path, ["-c", str(broken), "--check-config"])
-    assert code == 2
+    state, stdout, _stderr = run_l2l(tmp_path, ["-c", str(broken), "--check-config"])
+    assert state.kind is ExitKind.USAGE_ERROR
     assert stdout == ""
-    assert "[api]: unknown key(s): unknown_key" in stderr
+    assert "[api]: unknown key(s): unknown_key" in final_message(state)
 
 
 def test_dry_run_prints_plan_without_calling_endpoint(tmp_path: Path) -> None:
-    code, stdout, stderr = run_l2l(
+    state, stdout, stderr = run_l2l(
         tmp_path, ["-c", str(write_config(tmp_path)), "--dry-run"]
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert stderr == ""
     assert "source: 3 character(s), 1 paragraph(s)" in stdout
     assert (
@@ -200,7 +212,7 @@ def test_prune_cache_removes_entries(
     fresh = cache_directory / "fresh.txt"
     fresh.write_text("new")
 
-    code, _, stderr = run_l2l(
+    state, _, _stderr = run_l2l(
         tmp_path,
         [
             "-c",
@@ -209,15 +221,15 @@ def test_prune_cache_removes_entries(
             str(days),
         ],
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     # "entr" matches both the singular and plural forms of the message.
-    assert f"pruned {pruned_count} cache entr" in stderr
+    assert f"pruned {pruned_count} cache entr" in final_message(state)
     assert not stale.exists()
     assert fresh.exists() is fresh_kept
 
 
 def test_prune_cache_rejects_negative_days(tmp_path: Path) -> None:
-    code, _, stderr = run_l2l(
+    state, _, _stderr = run_l2l(
         tmp_path,
         [
             "-c",
@@ -226,8 +238,8 @@ def test_prune_cache_rejects_negative_days(tmp_path: Path) -> None:
             "-1",
         ],
     )
-    assert code == 2
-    assert "non-negative" in stderr
+    assert state.kind is ExitKind.USAGE_ERROR
+    assert "non-negative" in final_message(state)
 
 
 def test_prune_cache_reports_scan_failure(
@@ -245,7 +257,7 @@ def test_prune_cache_reports_scan_failure(
 
     monkeypatch.setattr(cli, "cache_entry_paths", refusing_cache_entry_paths)
 
-    code, _, stderr = run_l2l(
+    state, _, stderr = run_l2l(
         tmp_path,
         [
             "-c",
@@ -254,8 +266,8 @@ def test_prune_cache_reports_scan_failure(
             "7",
         ],
     )
-    assert code == 2
-    assert "could not list entries in" in stderr
+    assert state.kind is ExitKind.USAGE_ERROR
+    assert "could not list entries in" in final_message(state)
     assert "pruned" not in stderr
 
 
@@ -275,7 +287,7 @@ def test_prune_cache_reports_age_failure(
 
     monkeypatch.setattr(effects, "file_age", failing_file_age)
 
-    code, _, stderr = run_l2l(
+    state, _, stderr = run_l2l(
         tmp_path,
         [
             "-c",
@@ -284,8 +296,8 @@ def test_prune_cache_reports_age_failure(
             "7",
         ],
     )
-    assert code == 2
-    assert "could not read the age of" in stderr
+    assert state.kind is ExitKind.USAGE_ERROR
+    assert "could not read the age of" in final_message(state)
     assert "pruned" not in stderr
 
 
@@ -304,7 +316,7 @@ def test_prune_cache_reports_removal_failure(
 
     monkeypatch.setattr(effects, "remove_file", failing_remove)
 
-    code, _, stderr = run_l2l(
+    state, _, stderr = run_l2l(
         tmp_path,
         [
             "-c",
@@ -313,8 +325,8 @@ def test_prune_cache_reports_removal_failure(
             "7",
         ],
     )
-    assert code == 2
-    assert "could not remove" in stderr
+    assert state.kind is ExitKind.USAGE_ERROR
+    assert "could not remove" in final_message(state)
     assert "pruned" not in stderr
 
 
@@ -329,7 +341,7 @@ def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:
     ]
     http = FakeHttp([FakeStreamResponse(chunks)])
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(write_config(tmp_path)),
@@ -342,12 +354,12 @@ def test_end_to_end_translation_writes_stdout(tmp_path: Path) -> None:
         time.time,
         http.open,
     ).run()
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert stdout.getvalue() == "Hello.\n"
     assert len(http.requests) == 1
     assert "Starting pass 1/1 [translate]..." in stderr.getvalue()
     assert "Done: " in stderr.getvalue()
-    assert "TOTAL" in stderr.getvalue()
+    assert "TOTAL" in final_message(state)
 
 
 def test_built_in_filters_remove_paragraphs_before_translation(
@@ -366,7 +378,7 @@ def test_built_in_filters_remove_paragraphs_before_translation(
     ]
     http = FakeHttp([FakeStreamResponse(chunks)])
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(config_path),
@@ -380,7 +392,7 @@ def test_built_in_filters_remove_paragraphs_before_translation(
         time.time,
         http.open,
     ).run()
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert stdout.getvalue() == "Hello one.\n\nHello two.\n"
     assert len(http.requests) == 1
     request_text = http.requests[0].body.decode("utf-8")
@@ -404,10 +416,10 @@ def test_filter_script_runs_before_dry_run_planning(tmp_path: Path) -> None:
     config_path.write_text(
         config_path.read_text() + "\n[filter]\nscript = " + json.dumps(script) + "\n"
     )
-    code, stdout, stderr = run_l2l(
+    state, stdout, stderr = run_l2l(
         tmp_path, ["-c", str(config_path), "--dry-run"], "keep noise"
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert "filter script: 10 -> 5 character(s)" in stderr
     assert "source: 5 character(s), 1 paragraph(s)" in stdout
     assert "noise" not in stdout
@@ -423,22 +435,22 @@ def test_filter_errors_are_fatal(tmp_path: Path) -> None:
     config_path.write_text(
         config_path.read_text() + "\n[filter]\nscript = " + json.dumps(script) + "\n"
     )
-    code, stdout, stderr = run_l2l(tmp_path, ["-c", str(config_path)])
-    assert code == 1
+    state, stdout, _stderr = run_l2l(tmp_path, ["-c", str(config_path)])
+    assert state.kind is ExitKind.RUNTIME_ERROR
     assert stdout == ""
-    assert "exited with status 7" in stderr
-    assert "stderr: broken filter" in stderr
+    assert "exited with status 7" in final_message(state)
+    assert "stderr: broken filter" in final_message(state)
 
     config_path.write_text(
         CONFIG_TEXT + '\n[filter]\nfilters = [{ kind = "pattern", pattern = ".*" }]\n'
     )
-    code, stdout, stderr = run_l2l(
+    state, stdout, _stderr = run_l2l(
         tmp_path, ["-c", str(config_path), "--dry-run"], "Everything must go"
     )
-    assert code == 1
+    assert state.kind is ExitKind.RUNTIME_ERROR
     assert stdout == ""
-    assert "filtering removed all text" in stderr
-    assert "refusing to translate an empty document" in stderr
+    assert "filtering removed all text" in final_message(state)
+    assert "refusing to translate an empty document" in final_message(state)
 
 
 def test_validation_mode_controls_the_cli_outcome(tmp_path: Path) -> None:
@@ -449,9 +461,14 @@ def test_validation_mode_controls_the_cli_outcome(tmp_path: Path) -> None:
     ]
     config_path = tmp_path / "ensure.toml"
     config_path.write_text(CONFIG_TEXT + "\n[options]\nensure_paragraphs = true\n")
-    for best_effort, expected_code, expected_output, expected_log in (
-        (False, 1, "", "still failed validation after 2 repair attempt(s)"),
-        (True, 0, bad + "\n", "Keeping the last reply, uncached"),
+    for best_effort, expected_kind, expected_output, expected_log in (
+        (
+            False,
+            ExitKind.RUNTIME_ERROR,
+            "",
+            "still failed validation after 2 repair attempt(s)",
+        ),
+        (True, ExitKind.SUCCESS, bad + "\n", "Keeping the last reply, uncached"),
     ):
         http = FakeHttp([FakeStreamResponse(chunks)])
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -460,7 +477,7 @@ def test_validation_mode_controls_the_cli_outcome(tmp_path: Path) -> None:
             str(config_path),
             "--no-cache",
         ] + (["--best-effort"] if best_effort else [])
-        code = cli.main(
+        state = cli.main(
             arguments,
             {},
             io.StringIO("你好。"),
@@ -469,11 +486,14 @@ def test_validation_mode_controls_the_cli_outcome(tmp_path: Path) -> None:
             time.time,
             http.open,
         ).run()
-        assert code == expected_code
+        assert state.kind is expected_kind
         assert stdout.getvalue() == expected_output
         logged = stderr.getvalue()
         assert "failed validation 2 time(s)" in logged
-        assert expected_log in logged
+        terminal_log = (
+            logged if state.kind is ExitKind.SUCCESS else final_message(state)
+        )
+        assert expected_log in terminal_log
         assert len(http.requests) == 6
 
 
@@ -490,7 +510,7 @@ def test_plain_call_end_to_end(tmp_path: Path) -> None:
             'model = "m"\n', 'model = "m"\nparams = { stream = false }\n'
         )
     )
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(plain_config),
@@ -503,7 +523,7 @@ def test_plain_call_end_to_end(tmp_path: Path) -> None:
         time.time,
         http.open,
     ).run()
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert stdout.getvalue() == "Plain.\n"
     assert json.loads(http.requests[0].body)["stream"] is False
 
@@ -538,7 +558,7 @@ def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
         time.time,
         http.open,
     ).run()
-    assert first == 0
+    assert first.kind is ExitKind.SUCCESS
     assert first_stdout.getvalue().strip() == "Hello."
 
     def refusing_open(
@@ -556,7 +576,7 @@ def test_cache_roundtrip_across_runs(tmp_path: Path) -> None:
         time.time,
         refusing_open,
     ).run()
-    assert second == 0
+    assert second.kind is ExitKind.SUCCESS
     assert second_stdout.getvalue().strip() == "Hello."
     assert "prompt=0, completion=0" in second_stderr.getvalue()
 
@@ -572,7 +592,7 @@ def test_translation_request_carries_glossary_block(tmp_path: Path) -> None:
     ]
     http = FakeHttp([FakeStreamResponse(chunks)])
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(write_config(tmp_path)),
@@ -587,7 +607,7 @@ def test_translation_request_carries_glossary_block(tmp_path: Path) -> None:
         time.time,
         http.open,
     ).run()
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     payload = json.loads(http.requests[0].body.decode("utf-8"))
     system = payload["messages"][0]["content"]
     assert "Glossary (mandatory)" in system
@@ -599,9 +619,9 @@ def run_extract_glossary(
     arguments: list[str],
     http: FakeHttp,
     stdin: str = "book text",
-) -> tuple[int, str, str]:
+) -> tuple[ExitState, str, str]:
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(write_config(tmp_path)),
@@ -614,7 +634,7 @@ def run_extract_glossary(
         time.time,
         http.open,
     ).run()
-    return code, stdout.getvalue(), stderr.getvalue()
+    return state, stdout.getvalue(), stderr.getvalue()
 
 
 def run_extract_glossary_with_config(
@@ -623,9 +643,9 @@ def run_extract_glossary_with_config(
     arguments: list[str],
     http: FakeHttp,
     stdin: str = "book text",
-) -> tuple[int, str, str]:
+) -> tuple[ExitState, str, str]:
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(config_path),
@@ -638,7 +658,7 @@ def run_extract_glossary_with_config(
         time.time,
         http.open,
     ).run()
-    return code, stdout.getvalue(), stderr.getvalue()
+    return state, stdout.getvalue(), stderr.getvalue()
 
 
 def glossary_reply(entries: list[JsonObject]) -> FakeStreamResponse:
@@ -668,16 +688,16 @@ def test_extract_glossary_happy_path(tmp_path: Path) -> None:
             )
         ]
     )
-    code, _, stderr = run_extract_glossary(
+    state, _, _stderr = run_extract_glossary(
         tmp_path,
         ["--extract-glossary", str(output), "--glossary", str(carried)],
         http,
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     document = json.loads(output.read_text(encoding="utf-8"))
     assert [item["original"] for item in document] == ["南京", "林黛玉"]
     assert document[1]["pronouns"] == "she/her"
-    assert f"wrote 2 glossary entries to {output}" in stderr
+    assert f"wrote 2 glossary entries to {output}" in final_message(state)
     payload = json.loads(http.requests[0].body.decode("utf-8"))
     user_message = payload["messages"][1]["content"]
     assert payload["model"] == "m"
@@ -693,10 +713,10 @@ def test_extract_glossary_target_language_reaches_the_payload(tmp_path: Path) ->
     french_config.write_text(
         CONFIG_TEXT.replace('target_language = "English"', 'target_language = "French"')
     )
-    code, _, _ = run_extract_glossary_with_config(
+    state, _, _ = run_extract_glossary_with_config(
         tmp_path, french_config, ["--extract-glossary", str(output)], http
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     payload = json.loads(http.requests[0].body.decode("utf-8"))
     assert "Target language: French" in payload["messages"][1]["content"]
 
@@ -708,23 +728,23 @@ def test_extract_glossary_invalid_reply_exits_one(tmp_path: Path) -> None:
         {"choices": [{"delta": {}}], "usage": USAGE},
     ]
     http = FakeHttp([FakeStreamResponse(chunks)])
-    code, _, stderr = run_extract_glossary(
+    state, _, _stderr = run_extract_glossary(
         tmp_path, ["--extract-glossary", str(output)], http
     )
-    assert code == 1
-    assert "not valid JSON" in stderr
+    assert state.kind is ExitKind.RUNTIME_ERROR
+    assert "not valid JSON" in final_message(state)
     assert not output.exists()
 
 
 def test_extract_glossary_empty_stdin_exits_two(tmp_path: Path) -> None:
     output = tmp_path / "book-glossary.json"
-    code, _, stderr = run_l2l(
+    state, _, _stderr = run_l2l(
         tmp_path,
         ["-c", str(write_config(tmp_path)), "--extract-glossary", str(output)],
         "",
     )
-    assert code == 2
-    assert "requires text on stdin" in stderr
+    assert state.kind is ExitKind.USAGE_ERROR
+    assert "requires text on stdin" in final_message(state)
     assert not output.exists()
 
 
@@ -732,7 +752,7 @@ def test_extract_glossary_ignores_pipeline_passes(tmp_path: Path) -> None:
     output = tmp_path / "book-glossary.json"
     http = FakeHttp([glossary_reply([{"original": "南京", "translated": "Nanjing"}])])
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(write_update_glossary_config(tmp_path)),
@@ -746,7 +766,7 @@ def test_extract_glossary_ignores_pipeline_passes(tmp_path: Path) -> None:
         time.time,
         http.open,
     ).run()
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert json.loads(output.read_text(encoding="utf-8")) == [
         {
             "original": "南京",
@@ -793,9 +813,9 @@ def run_update_glossary_pass(
     *extra_arguments: str,
     use_cache: bool = False,
     stdin: str = "你好。",
-) -> tuple[int, str, str]:
+) -> tuple[ExitState, str, str]:
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(config_path),
@@ -811,7 +831,7 @@ def run_update_glossary_pass(
         time.time,
         http.open,
     ).run()
-    return code, stdout.getvalue(), stderr.getvalue()
+    return state, stdout.getvalue(), stderr.getvalue()
 
 
 def translation_response(text: str) -> FakeStreamResponse:
@@ -836,14 +856,14 @@ def test_update_glossary_pass_updates_file_and_flows_into_later_passes(
             translation_response("Hello."),
         ]
     )
-    code, stdout, stderr = run_update_glossary_pass(
+    state, stdout, stderr = run_update_glossary_pass(
         tmp_path,
         french_update_glossary_config(tmp_path),
         glossary,
         http,
         stdin="你好南京大观园。",
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert stdout.strip() == "Hello."
 
     document = json.loads(glossary.read_text(encoding="utf-8"))
@@ -863,7 +883,7 @@ def test_update_glossary_pass_updates_file_and_flows_into_later_passes(
 
     assert "Starting pass 1/2 [glossary]..." in stderr
     assert "Starting pass 2/2 [translate]..." in stderr
-    assert "TOTAL" in stderr
+    assert "TOTAL" in final_message(state)
 
 
 def test_update_glossary_pass_writes_only_the_first_glossary_file(
@@ -886,7 +906,7 @@ def test_update_glossary_pass_writes_only_the_first_glossary_file(
     ]
     http = FakeHttp([extraction, FakeStreamResponse(translation_chunks)])
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(write_update_glossary_config(tmp_path)),
@@ -903,7 +923,7 @@ def test_update_glossary_pass_writes_only_the_first_glossary_file(
         time.time,
         http.open,
     ).run()
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert stdout.getvalue().strip() == "Hello."
 
     first_document = json.loads(first_glossary.read_text(encoding="utf-8"))
@@ -953,14 +973,14 @@ def test_update_glossary_pass_applies_the_include_types_filter(
             translation_response("Hello."),
         ]
     )
-    code, stdout, _ = run_update_glossary_pass(
+    state, stdout, _ = run_update_glossary_pass(
         tmp_path,
         config_path,
         glossary,
         http,
         stdin="你好林黛玉。",
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert stdout.strip() == "Hello."
 
     document = json.loads(glossary.read_text(encoding="utf-8"))
@@ -988,14 +1008,14 @@ def test_update_glossary_pass_response_format_follows_the_flag(
             translation_response("Hello."),
         ]
     )
-    code, _stdout, _stderr = run_update_glossary_pass(
+    state, _stdout, _stderr = run_update_glossary_pass(
         tmp_path,
         write_update_glossary_config(tmp_path),
         glossary,
         http,
         *extra_arguments,
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     payload = json.loads(http.requests[0].body)
     assert ("response_format" in payload) is requests_structured_output
 
@@ -1021,10 +1041,10 @@ def test_update_glossary_pass_target_language_overrides_the_global_language(
             translation_response("Hello."),
         ]
     )
-    code, _stdout, _stderr = run_update_glossary_pass(
+    state, _stdout, _stderr = run_update_glossary_pass(
         tmp_path, config_path, glossary, http
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     payload = json.loads(http.requests[0].body)
     assert "Target language: Chinese" in payload["messages"][1]["content"]
 
@@ -1032,21 +1052,21 @@ def test_update_glossary_pass_target_language_overrides_the_global_language(
 def test_update_glossary_pass_without_glossary_flag_exits_two(
     tmp_path: Path,
 ) -> None:
-    code, stdout, stderr = run_l2l(
+    state, stdout, _stderr = run_l2l(
         tmp_path, ["-c", str(write_update_glossary_config(tmp_path)), "--dry-run"]
     )
-    assert code == 2
+    assert state.kind is ExitKind.USAGE_ERROR
     assert stdout == ""
     assert (
         "an update_glossary pass requires at least one --glossary file on the "
-        "command line" in stderr
+        "command line" in final_message(state)
     )
 
 
 def test_dry_run_shows_update_glossary_pass(tmp_path: Path) -> None:
     glossary = tmp_path / "glossary.json"
     glossary.write_text("[]", encoding="utf-8")
-    code, stdout, _stderr = run_l2l(
+    state, stdout, _stderr = run_l2l(
         tmp_path,
         [
             "-c",
@@ -1056,7 +1076,7 @@ def test_dry_run_shows_update_glossary_pass(tmp_path: Path) -> None:
             str(glossary),
         ],
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert (
         "pass 1/2 [glossary]: target language English (scripts: Latin), "
         "mode=update_glossary, 1 call with the whole document" in stdout
@@ -1071,25 +1091,25 @@ def test_update_glossary_extraction_reply_is_cached_across_runs(tmp_path: Path) 
     glossary = tmp_path / "glossary.json"
     glossary.write_text("[]", encoding="utf-8")
 
-    def run() -> tuple[int, str, int]:
+    def run() -> tuple[ExitState, str, int]:
         http = FakeHttp(
             [
                 glossary_reply([{"original": "大观园", "translated": "G"}]),
                 translation_response("Hello."),
             ]
         )
-        code, stdout, _stderr = run_update_glossary_pass(
+        state, stdout, _stderr = run_update_glossary_pass(
             tmp_path,
             write_update_glossary_config(tmp_path),
             glossary,
             http,
             use_cache=True,
         )
-        return code, stdout, len(http.requests)
+        return state, stdout, len(http.requests)
 
-    first_code, first_output, first_calls = run()
-    second_code, second_output, second_calls = run()
-    assert (first_code, second_code) == (0, 0)
+    first_state, first_output, first_calls = run()
+    second_state, second_output, second_calls = run()
+    assert (first_state.kind, second_state.kind) == (ExitKind.SUCCESS, ExitKind.SUCCESS)
     assert first_output == second_output == "Hello.\n"
     assert (first_calls, second_calls) == (2, 0)
     document = json.loads(glossary.read_text(encoding="utf-8"))
@@ -1147,8 +1167,8 @@ def test_main_prints_version_and_help_without_http(tmp_path: Path) -> None:
         (["--version"], "l2l " + __version__ + "\n"),
         (["--help"], "usage:"),
     ):
-        code, stdout, stderr = run_l2l(tmp_path, arguments, "")
-        assert code == 0
+        state, stdout, stderr = run_l2l(tmp_path, arguments, "")
+        assert state.kind is ExitKind.SUCCESS
         assert expected in stdout
         assert stderr == ""
 
@@ -1156,7 +1176,7 @@ def test_main_prints_version_and_help_without_http(tmp_path: Path) -> None:
 def test_main_rejects_dry_run_with_extract_glossary_without_http(
     tmp_path: Path,
 ) -> None:
-    code, stdout, stderr = run_l2l(
+    state, stdout, _stderr = run_l2l(
         tmp_path,
         [
             "-c",
@@ -1166,9 +1186,11 @@ def test_main_rejects_dry_run_with_extract_glossary_without_http(
             str(tmp_path / "glossary.json"),
         ],
     )
-    assert code == 2
+    assert state.kind is ExitKind.USAGE_ERROR
     assert stdout == ""
-    assert "l2l: --extract-glossary cannot be combined with --dry-run" in stderr
+    assert "l2l: --extract-glossary cannot be combined with --dry-run" in final_message(
+        state
+    )
 
 
 @pytest.mark.parametrize(
@@ -1187,7 +1209,7 @@ def test_prune_logs_removes_old_logs(
     fresh = logs / "fresh.log"
     fresh.write_text("new", encoding="utf-8")
 
-    code, _, stderr = run_l2l(
+    state, _, _stderr = run_l2l(
         tmp_path,
         [
             "-c",
@@ -1196,15 +1218,15 @@ def test_prune_logs_removes_old_logs(
             str(days),
         ],
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     # "run log" matches both the singular and plural forms of the message.
-    assert f"pruned {pruned_count} run log" in stderr
+    assert f"pruned {pruned_count} run log" in final_message(state)
     assert not stale.exists()
     assert fresh.exists() is fresh_kept
 
 
 def test_prune_logs_rejects_negative_days(tmp_path: Path) -> None:
-    code, _, stderr = run_l2l(
+    state, _, _stderr = run_l2l(
         tmp_path,
         [
             "-c",
@@ -1213,19 +1235,19 @@ def test_prune_logs_rejects_negative_days(tmp_path: Path) -> None:
             "-1",
         ],
     )
-    assert code == 2
-    assert "non-negative" in stderr
+    assert state.kind is ExitKind.USAGE_ERROR
+    assert "non-negative" in final_message(state)
 
 
 def test_cli_exits_with_program_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_main(*arguments: object) -> IO[int]:
-        return io_pure(3)
+    def fake_main(*arguments: object) -> IO[ExitState]:
+        return io_pure(ExitState(ExitKind.RUNTIME_ERROR))
 
     exits: list[int] = []
     monkeypatch.setattr(cli, "main", fake_main)
     monkeypatch.setattr(sys, "exit", exits.append)
     cli.cli()
-    assert exits == [3]
+    assert exits == [1]
 
 
 def test_cli_handles_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1306,7 +1328,7 @@ def test_extract_glossary_defaults_to_state_home(tmp_path: Path) -> None:
     state_home = tmp_path / "xdg-state"
     http = FakeHttp([glossary_reply([{"original": "大观园", "translated": "G"}])])
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         ["-c", str(write_config(tmp_path)), "-E"],
         {**cache_environment(tmp_path), "XDG_STATE_HOME": str(state_home)},
         io.StringIO("book text"),
@@ -1316,10 +1338,10 @@ def test_extract_glossary_defaults_to_state_home(tmp_path: Path) -> None:
         http.open,
     ).run()
     output = state_home / "l2l" / "glossary.json"
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     document = json.loads(output.read_text(encoding="utf-8"))
     assert [item["original"] for item in document] == ["大观园"]
-    assert f"wrote 1 glossary entries to {output}" in stderr.getvalue()
+    assert f"wrote 1 glossary entries to {output}" in final_message(state)
 
 
 def test_update_glossary_pass_defaults_to_state_home(tmp_path: Path) -> None:
@@ -1331,7 +1353,7 @@ def test_update_glossary_pass_defaults_to_state_home(tmp_path: Path) -> None:
         ]
     )
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(write_update_glossary_config(tmp_path)),
@@ -1346,7 +1368,7 @@ def test_update_glossary_pass_defaults_to_state_home(tmp_path: Path) -> None:
         http.open,
     ).run()
     output = state_home / "l2l" / "glossary.json"
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert stdout.getvalue().strip() == "Hello."
     document = json.loads(output.read_text(encoding="utf-8"))
     assert [item["original"] for item in document] == ["大观园"]
@@ -1361,7 +1383,7 @@ def test_update_glossary_pass_with_malformed_reply_exits_one(tmp_path: Path) -> 
     ]
     http = FakeHttp([FakeStreamResponse(chunks)])
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(write_update_glossary_config(tmp_path)),
@@ -1376,8 +1398,8 @@ def test_update_glossary_pass_with_malformed_reply_exits_one(tmp_path: Path) -> 
         time.time,
         http.open,
     ).run()
-    assert code == 1
-    assert "not valid JSON" in stderr.getvalue()
+    assert state.kind is ExitKind.RUNTIME_ERROR
+    assert "not valid JSON" in final_message(state)
     assert json.loads(glossary.read_text(encoding="utf-8")) == []
     assert len(http.requests) == 1
 
@@ -1396,7 +1418,7 @@ def test_update_glossary_pass_reports_a_failed_extraction_call(
         return fail_http("unreachable", "down")
 
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(write_update_glossary_config(tmp_path)),
@@ -1411,8 +1433,8 @@ def test_update_glossary_pass_reports_a_failed_extraction_call(
         time.time,
         unreachable_open,
     ).run()
-    assert code == 1
-    assert "could not reach endpoint: down" in stderr.getvalue()
+    assert state.kind is ExitKind.RUNTIME_ERROR
+    assert "could not reach endpoint: down" in final_message(state)
     assert json.loads(glossary.read_text(encoding="utf-8")) == []
     assert len(requests) == 3
 
@@ -1437,7 +1459,7 @@ def test_update_glossary_pass_reports_a_glossary_write_failure(
     monkeypatch.setattr(pipeline, "write_glossary_file", failing_write)
     http = FakeHttp([glossary_reply([{"original": "大观园", "translated": "G"}])])
     stdout, stderr = io.StringIO(), io.StringIO()
-    code = cli.main(
+    state = cli.main(
         [
             "-c",
             str(write_update_glossary_config(tmp_path)),
@@ -1452,8 +1474,8 @@ def test_update_glossary_pass_reports_a_glossary_write_failure(
         time.time,
         http.open,
     ).run()
-    assert code == 1
-    assert "could not write glossary file" in stderr.getvalue()
+    assert state.kind is ExitKind.RUNTIME_ERROR
+    assert "could not write glossary file" in final_message(state)
     assert json.loads(glossary.read_text(encoding="utf-8")) == []
     assert len(http.requests) == 1
 
@@ -1465,11 +1487,11 @@ def test_unknown_target_language_warns_on_stderr(tmp_path: Path) -> None:
             'target_language = "English"', 'target_language = "Zorblaxian"'
         )
     )
-    code, stdout, stderr = run_l2l(
+    state, stdout, stderr = run_l2l(
         tmp_path,
         ["-c", str(zorblaxian_config), "--dry-run"],
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert "target language Zorblaxian (scripts: unknown)" in stdout
     assert "warning: target language Zorblaxian is not recognized" in stderr
 
@@ -1495,7 +1517,7 @@ def test_target_language_separates_the_cache_and_fills_the_prompt(
         ]
     )
 
-    def run(language: str) -> int:
+    def run(language: str) -> ExitState:
         language_config = tmp_path / f"{language}.toml"
         language_config.write_text(
             CONFIG_TEXT.replace(
@@ -1512,8 +1534,8 @@ def test_target_language_separates_the_cache_and_fills_the_prompt(
             http.open,
         ).run()
 
-    assert run("English") == 0
-    assert run("French") == 0
+    assert run("English").kind is ExitKind.SUCCESS
+    assert run("French").kind is ExitKind.SUCCESS
     assert len(http.requests) == 2
     systems = [
         json.loads(request.body)["messages"][0]["content"] for request in http.requests
@@ -1534,8 +1556,8 @@ def test_check_config_shows_built_in_prompt_metadata(tmp_path: Path) -> None:
             'target_language = "English"', 'target_language = "French"'
         )
     )
-    code, stdout, _ = run_l2l(tmp_path, ["-c", str(config_path), "--check-config"])
-    assert code == 0
+    state, stdout, _ = run_l2l(tmp_path, ["-c", str(config_path), "--check-config"])
+    assert state.kind is ExitKind.SUCCESS
     assert "prompt=built-in role=translator" in stdout
     assert "prompt sections: role=built-in, task=built-in" in stdout
     assert "prompt omitted sections: source_guidance" in stdout
@@ -1550,10 +1572,10 @@ def test_check_config_labels_legacy_instructions_and_warns_on_unused_prompts(
 ) -> None:
     config_path = tmp_path / "legacy.toml"
     config_path.write_text(CONFIG_TEXT + "\n[prompts]\n" + 'accuracy = "Replaced."\n')
-    code, stdout, _stderr = run_l2l(
+    state, stdout, _stderr = run_l2l(
         tmp_path, ["-c", str(config_path), "--check-config"]
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert "prompt=legacy instruction" in stdout
     assert "instruction text:" not in stdout
     assert "do not apply to the legacy pass [translate]" in stdout
@@ -1578,8 +1600,8 @@ def test_check_config_shows_prompt_override_origins_and_warnings(
             'target_language = "English"', 'target_language = "French"'
         )
     )
-    code, stdout, _ = run_l2l(tmp_path, ["-c", str(config_path), "--check-config"])
-    assert code == 0
+    state, stdout, _ = run_l2l(tmp_path, ["-c", str(config_path), "--check-config"])
+    assert state.kind is ExitKind.SUCCESS
     assert "Only keep the meaning exact." in stdout
     assert "accuracy=pass-file" in stdout
     assert "prompt=built-in role=reviewer" in stdout
@@ -1591,20 +1613,20 @@ def test_per_pass_prompts_on_legacy_instruction_fail_config(tmp_path: Path) -> N
     config_path.write_text(
         CONFIG_TEXT + "\n[pass.translate.prompts]\n" + 'style = "Short sentences."\n'
     )
-    code, _stdout, stderr = run_l2l(
+    state, _stdout, _stderr = run_l2l(
         tmp_path, ["-c", str(config_path), "--check-config"]
     )
-    assert code == 2
-    assert "per-pass prompt overrides apply only to" in stderr
+    assert state.kind is ExitKind.USAGE_ERROR
+    assert "per-pass prompt overrides apply only to" in final_message(state)
 
 
 def test_global_prompts_warn_on_legacy_passes(tmp_path: Path) -> None:
     config_path = tmp_path / "global-override.toml"
     config_path.write_text(CONFIG_TEXT + "\n[prompts]\n" + 'accuracy = "Replaced."\n')
-    code, stdout, _stderr = run_l2l(
+    state, stdout, _stderr = run_l2l(
         tmp_path, ["-c", str(config_path), "--check-config"]
     )
-    assert code == 0
+    assert state.kind is ExitKind.SUCCESS
     assert "do not apply to the legacy pass [translate]" in stdout
 
 
@@ -1627,8 +1649,8 @@ def test_check_config_shows_resolved_style_and_guidance(tmp_path: Path) -> None:
         'paragraphs = "approximate"\n'
         "maximum_characters = 300\n"
     )
-    code, stdout, _ = run_l2l(tmp_path, ["-c", str(config_path), "--check-config"])
-    assert code == 0
+    state, stdout, _ = run_l2l(tmp_path, ["-c", str(config_path), "--check-config"])
+    assert state.kind is ExitKind.SUCCESS
     assert "style=formality:informal honorifics:titles register_fidelity:preserve" in (
         stdout
     )
