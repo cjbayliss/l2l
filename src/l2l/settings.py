@@ -268,6 +268,7 @@ PASS_KEYS: Final = (
     "include_types",
     "prompts",
     "style",
+    "output",
     "paragraphs_per_call",
 )
 

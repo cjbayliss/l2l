@@ -1,0 +1,348 @@
+# Example l2l configuration file showing every supported option with
+# explanations. This file is illustrative: keys that are optional in real
+# configs are shown here only so their meaning is documented.
+#
+# File location:
+#   - selected with the -c/--config command-line option, or
+#   - $XDG_CONFIG_HOME/l2l/config.toml (default: ~/.config/l2l/config.toml)
+#
+# API settings can also come from environment variables instead of the
+# [api] table: TRANSLATE_BASE_URL, TRANSLATE_API_KEY, TRANSLATE_MODEL,
+# TRANSLATE_TIMEOUT, and TRANSLATE_MAX_TOKENS. Values in [api] win over
+# environment variables.
+
+# ---------------------------------------------------------------------------
+# Top-level language settings
+# ---------------------------------------------------------------------------
+
+# Target language of the translation. Required. Accepts a language name
+# ("English", "Brazilian Portuguese") or a BCP 47 tag ("en", "pt-BR").
+# A region component selects the target variety where known
+# (for example, en-GB is British English and en-US is American English).
+# The language also determines the expected output script, which is used
+# to verify and fix paragraphs that the model left untranslated.
+target_language = "English"
+
+# Source language of the input document. Optional; defaults to "auto".
+# Accepts a language name or BCP 47 tag, or one of:
+#   - "auto" (also written "guess", "detect", "und"): detect the language
+#   - "mixed" (also written "mul"): the document contains passages in
+#     several languages; each passage is handled by its own language
+source_language = "Japanese"
+
+# ---------------------------------------------------------------------------
+# Glossary
+# ---------------------------------------------------------------------------
+
+# List of paths (relative to this config file) to JSON glossary files.
+# Entries from all files are merged. Optional, but an update_glossary
+# pass requires at least one glossary file to read and write into.
+# Each glossary file contains a JSON array of entry objects:
+#   [
+#     {
+#       "original": "house-elf",
+#       "translated": "mais-elfo",
+#       "pronouns": "he",
+#       "type": "character",
+#       "notes": "Plural: mais-elfos"
+#     }
+#   ]
+# Fields:
+#   original   - source text (required)
+#   translated - fixed target rendering; null lets the model choose
+#                (required key, can be null)
+#   pronouns   - pronoun set for characters; null if none
+#                (required key, can be null)
+#   type       - one of "character", "place", "other" (required)
+#   notes      - free-form usage notes (optional)
+# Glossary paths can also be added on the command line with -g/--glossary.
+#glossary = ["glossary.json"]
+
+# ---------------------------------------------------------------------------
+# API settings
+# ---------------------------------------------------------------------------
+
+[api]
+
+# Base URL of the OpenAI-compatible chat completions endpoint,
+# for example, "https://openrouter.ai/api/v1". Required (here or via
+# TRANSLATE_BASE_URL).
+base_url = "https://openrouter.ai/api/v1"
+
+# API key sent as the bearer token. Required (here or via
+# TRANSLATE_API_KEY).
+api_key = "sk-..."
+
+# Default model used by every pass that does not set its own
+# pass.model. Required (here or via TRANSLATE_MODEL).
+model = "z-ai/glm-5.3-flash"
+
+# Per-request timeout in seconds. Must be positive. Defaults to 120.0.
+timeout = 120.0
+
+# Default maximum completion tokens requested per API call.
+# Must be a positive integer. Defaults to 100000.
+max_tokens = 100000
+
+# Default parameters passed through to the chat completions API for
+# every pass. Optional table of arbitrary JSON values. Values set in a
+# pass's own [pass.<name>.params] are merged over these.
+# Examples: temperature, top_p, stop, provider routing hints.
+[api.params]
+temperature = 0.2
+stop = ["END"]
+provider = { allow_fallbacks = true, sort = { by = "throughput" } }
+
+# ---------------------------------------------------------------------------
+# Global option defaults
+# ---------------------------------------------------------------------------
+
+# Defaults applied to every pass that does not set the option itself.
+[options]
+
+# When true, passes run an ASCII-fixing repair step that maps typographic
+# punctuation and fullwidth characters to ASCII equivalents in paragraphs
+# that were not fully translated (useful when the target script is ASCII,
+# for example romanized Japanese). Defaults to false.
+ascii = false
+
+# Paragraph-structure enforcement. Three forms:
+#   - false: do not require the output to keep the source paragraph count
+#   - true : output must contain exactly as many paragraphs as the input
+#   - a positive integer: allowed deviation from the source paragraph
+#     count (0 behaves like true)
+# Can be overridden per pass with [pass.<name>].ensure_paragraphs.
+# Defaults to false.
+ensure_paragraphs = false
+
+# When true, after a pass completes, paragraphs that still look
+# untranslated (for example, paragraphs left in the source language,
+# or failing the target script check) are re-sent once with a
+# retranslation salt so they do not hit the same cache entry. Defaults to false.
+retranslate_untranslated = false
+
+# ---------------------------------------------------------------------------
+# Filtering
+# ---------------------------------------------------------------------------
+
+# Removes paragraphs from the source text before translation, so junk
+# lines (repeated banners, URLs, tables of contents, page numbers) are
+# not sent to the model. Two mechanisms, at least one required:
+# a "script" (an external command piped the text, printing filtered
+# text) or a list of built-in "filters", or both. Optional table.
+[filter]
+
+# External filter command. Either a single command string (parsed with
+# shell-like word splitting via shlex, no shell expansion) or an array
+# of argument strings. The source text arrives on stdin, and the filtered
+# text is read from stdout. Optional.
+#script = ["misc/strip-headers", "--section", "1"]
+
+# Built-in filters, applied in array order to the paragraph list.
+# Each entry is either the string "duplicate_paragraphs" (shorthand) or
+# a table with a "kind" key. Kinds:
+#   - duplicate_paragraphs: drop paragraphs that repeat an earlier
+#     paragraph after whitespace normalization (no extra keys)
+#   - pattern: drop paragraphs matching a regular expression
+#     (requires the "pattern" key)
+#   - short_paragraphs: drop paragraphs shorter than a character count
+#     (requires the "minimum_characters" key)
+# Must not be empty if present.
+filters = [
+  "duplicate_paragraphs",
+  { kind = "pattern", pattern = "^\\s*(chapter|Chapter)\\s+[0-9IVXLC]+\\s*$" },
+  { kind = "short_paragraphs", minimum_characters = 3 },
+]
+
+# ---------------------------------------------------------------------------
+# Prompt section overrides
+# ---------------------------------------------------------------------------
+
+# Overrides the built-in prompt sections used for rendered translate,
+# review, and analysis passes. Optional table. Applies to all such
+# passes; individual passes can override further via
+# [pass.<name>.prompts]. Not valid together with custom instructions.
+#
+# Section names (the parts of the built-in prompt):
+#   role, task, languages, source_guidance, target_guidance, accuracy,
+#   fluency, style, context_handling, output_rules
+#
+# Each section accepts:
+#   - inline text: replaces the built-in section text
+#   - "" (empty string): removes the section from the prompt entirely
+#   - { file = "path" }: text loaded from a file path relative to this
+#     config file
+# Templates like {source_language} and {target_language} in the
+# "languages" section are substituted, and generated rules (paragraph
+# and character-limit rules) are still appended to "output_rules".
+#[prompts]
+#role = "You are a careful literary translator with twenty years of experience."
+#task = "Translate the supplied source text into natural, idiomatic prose."
+#output_rules = ""
+#style = { file = "prompts/style.txt" }
+
+# ---------------------------------------------------------------------------
+# Global style policy
+# ---------------------------------------------------------------------------
+
+# Style guidance merged into the "style" prompt section of built-in
+# translate and review passes. Optional table; can be overridden per
+# pass via [pass.<name>.style]. Keys and allowed values:
+[style]
+# Formality of the translation:
+#   - "preserve": keep the source's level of formality (default)
+#   - "formal": use formal address and phrasing
+#   - "informal": use informal, casual phrasing
+formality = "preserve"
+
+# How honorifics and titles are handled (mostly for Japanese/Korean
+# sources):
+#   - "keep": keep source honorifics (for example -san and -sama) (default)
+#   - "drop": drop honorifics
+#   - "titles": convert honorifics to English titles (Mr., Miss, ...)
+honorifics = "keep"
+
+# How faithfully to reproduce the source's register (slang, dialect,
+# coarse language):
+#   - "preserve": mirror the source register, including vulgarity
+#     and dialect flavor (default)
+#   - "soften": render the meaning but tone down vulgarity and
+#     heavy dialect
+register_fidelity = "preserve"
+
+# ---------------------------------------------------------------------------
+# Global output policy
+# ---------------------------------------------------------------------------
+
+# Output shape guidance for built-in translate and review passes.
+# Optional table; can be overridden per pass via [pass.<name>.output].
+[output]
+# Paragraph structure instruction:
+#   - "exact": keep the source paragraph structure exactly
+#   - "approximate": keep the paragraph structure close to the source
+# Omitted: paragraph structure follows ensure_paragraphs/paragraph
+# tolerance alone.
+paragraphs = "exact"
+
+# Soft limit: ask the model to keep each output paragraph to at most
+# this many characters. Positive integer. Omitted: no character limit
+# is added to the prompt.
+maximum_characters = 2000
+
+# ---------------------------------------------------------------------------
+# Passes
+# ---------------------------------------------------------------------------
+
+# The translation pipeline: an ordered list of named passes. Each
+# [pass.<name>] table defines one stage; name is the table key after
+# "pass." (must be a non-empty string). At least one pass is required.
+#
+# Modes:
+#   - "translate": translate the source text (default mode)
+#   - "review": receive a translation plus context and produce a
+#     corrected final translation
+#   - "analysis": read the whole document once and produce a
+#     preparation brief (story, cast, terms, idiom, style) that is
+#     fed to later passes
+#   - "update_glossary": extract glossary entries from the source and
+#     merge them into the glossary files
+#
+# Passes without "instruction" or "instruction_file" use the built-in
+# rendered prompt for their mode (translate/review/analysis) and can
+# use per-pass prompts/style/output overrides. Custom-instruction
+# passes (instruction or instruction_file set) cannot use prompts,
+# style, or output overrides.
+[pass.prep]
+# Pass mode: "analysis", "translate", "review", or "update_glossary".
+# Defaults to "translate".
+mode = "analysis"
+
+# Model override for this pass only. Defaults to [api].model.
+model = "z-ai/glm-5.3-flash"
+
+# Per-request API parameters for this pass only; merged over
+# [api.params]. Table of arbitrary JSON values.
+[pass.prep.params]
+reasoning_effort = "high"
+
+[pass.translate]
+# Translation mode of this pass.
+mode = "translate"
+
+# The instruction sent to the model. Exactly one of "instruction"
+# (inline text) or "instruction_file" (path to a text file, relative
+# to this config file) can be given; a pass with neither uses the
+# built-in rendered prompt for its mode. The text can contain
+# "{source_language}" and "{target_language}" placeholders, which are
+# substituted before sending.
+#instruction_file = "prompts/translate.txt"
+#
+# instruction = """
+# Translate the following Japanese prose into English.
+# Preserve names and honorifics as given in the glossary.
+# """
+
+# Per-request timeout-independent options inherited from defaults
+# unless set here. Each of the three options below mirrors its
+# [options] counterpart and overrides it for this pass only.
+# Repair paragraphs that were not fully translated to ASCII (see
+# [options].ascii). Defaults to the [options] value.
+ascii = false
+
+# Paragraph-structure enforcement for this pass: false, true, or a
+# positive integer tolerance (see [options].ensure_paragraphs).
+ensure_paragraphs = true
+
+# Re-send untranslated paragraphs once after the pass (see
+# [options].retranslate_untranslated).
+retranslate_untranslated = true
+
+# Target language override for this pass only; defaults to the global
+# target_language. Non-empty string.
+target_language = "English"
+
+# Group this many source paragraphs into one API call instead of
+# grouping purely by token budget. Non-negative integer; 0 restores
+# token-budget grouping. Applies only to translate and review passes.
+paragraphs_per_call = 4
+
+# Per-pass prompt section overrides. Same section names and value
+# forms as the global [prompts] table, but applies only to this pass,
+# on top of the global overrides. Only allowed for built-in rendered
+# translate, review, and analysis passes (not custom-instruction
+# passes, and not update_glossary passes).
+#[pass.translate.prompts]
+#role = "You are the lead translator for this novel."
+#context_handling = { file = "prompts/context.txt" }
+
+# Per-pass style policy, merged over the global [style]. Same keys and
+# values. Only allowed for built-in rendered translate and review
+# passes.
+[pass.translate.style]
+formality = "preserve"
+honorifics = "keep"
+register_fidelity = "soften"
+
+# Per-pass output policy, merged over the global [output]. Same keys
+# and values. Only allowed for built-in rendered translate and review
+# passes.
+[pass.translate.output]
+paragraphs = "exact"
+maximum_characters = 2000
+
+[pass.review]
+mode = "review"
+ensure_paragraphs = true
+
+#[pass.update_glossary]
+# Extracts glossary entries from the source text and merges them into
+# the glossary files. update_glossary passes require at least one
+# glossary file (config "glossary" or -g/--glossary) and cannot use
+# per-pass prompt overrides.
+#mode = "update_glossary"
+
+# Restricts which glossary entry types this pass extracts and merges.
+# List chosen from: "character", "place", "other". An empty list (the
+# default) merges all extracted types. Applies only to
+# update_glossary passes.
+#include_types = ["character", "place"]

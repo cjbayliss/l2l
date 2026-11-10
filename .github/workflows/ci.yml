@@ -7,8 +7,6 @@ on:
     paths:
       - '.github/workflows/**'
       - '.python-version'
-      - 'docs/configs/**'
-      - 'docs/prompts/**'
       - 'src/l2l/**'
       - 'tools/**'
       - 'tests/**'
@@ -18,8 +16,6 @@ on:
     paths:
       - '.github/workflows/**'
       - '.python-version'
-      - 'docs/configs/**'
-      - 'docs/prompts/**'
       - 'src/l2l/**'
       - 'tools/**'
       - 'tests/**'
@@ -55,9 +51,6 @@ jobs:
       - run: smoke-venv/bin/l2l --version
       # l2l validates the API key at startup even in --dry-run mode, so pass a
       # placeholder key; no real API calls are made.
-      - run: echo "你好，世界。" | smoke-venv/bin/l2l -c docs/configs/zh2en.toml --dry-run
-        env:
-          TRANSLATE_API_KEY: dummy-key-for-dry-run
-      - run: echo "こんにちは世界。" | smoke-venv/bin/l2l -c docs/configs/ja2en.toml --dry-run
+      - run: echo "你好，世界。" | smoke-venv/bin/l2l -c docs/example-config.toml --dry-run
         env:
           TRANSLATE_API_KEY: dummy-key-for-dry-run
