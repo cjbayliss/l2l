@@ -63,9 +63,12 @@ def string_api_setting(
     def step(
         partial_result: Result[PartialApiSettings, TranslationError], key: StringApiKey
     ) -> Result[PartialApiSettings, TranslationError]:
-        return result_bind(
-            partial_result, lambda partial: set_field_checked(partial, key)
-        )
+        def bind_checked(
+            partial: PartialApiSettings,
+        ) -> Result[PartialApiSettings, TranslationError]:
+            return set_field_checked(partial, key)
+
+        return result_bind(partial_result, bind_checked)
 
     initial: Result[PartialApiSettings, TranslationError] = Ok(partial)
     return reduce(step, STRING_API_KEYS, initial)
@@ -155,7 +158,12 @@ def document_api_settings(
             Result[PartialApiSettings, TranslationError],
         ],
     ) -> Result[PartialApiSettings, TranslationError]:
-        return result_bind(partial_result, lambda partial: parse(path, partial, table))
+        def bind_parser(
+            partial: PartialApiSettings,
+        ) -> Result[PartialApiSettings, TranslationError]:
+            return parse(path, partial, table)
+
+        return result_bind(partial_result, bind_parser)
 
     initial: Result[PartialApiSettings, TranslationError] = Ok(PartialApiSettings())
     return reduce(step, API_FIELD_PARSERS, initial)
@@ -196,9 +204,12 @@ def env_positive_setting(
     except ValueError:
         return fail_config(f"{variable} must be {kind}, got {raw!r}")
 
+    def as_optional(value: float) -> float | None:
+        return value or None
+
     return result_map(
         optional_positive_setting(parsed, variable),
-        lambda value: value or None,
+        as_optional,
     )
 
 
@@ -206,10 +217,11 @@ def env_timeout_setting(
     environment: Mapping[str, str], partial: PartialApiSettings
 ) -> Result[PartialApiSettings, TranslationError]:
     parsed = env_positive_setting(environment, "TRANSLATE_TIMEOUT", float, "a number")
-    return result_map(
-        parsed,
-        lambda value: partial if value is None else replace(partial, timeout=value),
-    )
+
+    def apply_timeout(value: float | None) -> PartialApiSettings:
+        return partial if value is None else replace(partial, timeout=value)
+
+    return result_map(parsed, apply_timeout)
 
 
 def environment_maximum_tokens_setting(
@@ -218,20 +230,24 @@ def environment_maximum_tokens_setting(
     parsed = env_positive_setting(
         environment, "TRANSLATE_MAX_TOKENS", int, "an integer"
     )
-    return result_map(
-        parsed,
-        lambda value: (
-            partial if value is None else replace(partial, maximum_tokens=int(value))
-        ),
-    )
+
+    def apply_maximum_tokens(value: float | None) -> PartialApiSettings:
+        return partial if value is None else replace(partial, maximum_tokens=int(value))
+
+    return result_map(parsed, apply_maximum_tokens)
 
 
 def api_settings_from_environment(
     environment: Mapping[str, str],
 ) -> Result[PartialApiSettings, TranslationError]:
+    def apply_maximum_tokens_setting(
+        partial: PartialApiSettings,
+    ) -> Result[PartialApiSettings, TranslationError]:
+        return environment_maximum_tokens_setting(environment, partial)
+
     return result_bind(
         env_timeout_setting(environment, env_string_settings(environment)),
-        lambda partial: environment_maximum_tokens_setting(environment, partial),
+        apply_maximum_tokens_setting,
     )
 
 
@@ -277,18 +293,23 @@ def merged_api_settings(
     def document_settings(
         document_result: DocumentResult,
     ) -> Result[PartialApiSettings, TranslationError]:
-        return result_bind(
-            document_result,
-            lambda document: document_api_settings(path, document),
-        )
+        def bind_document_api_settings(
+            document: Mapping[str, object],
+        ) -> Result[PartialApiSettings, TranslationError]:
+            return document_api_settings(path, document)
+
+        return result_bind(document_result, bind_document_api_settings)
 
     layers = (
         document_settings(document_result),
         api_settings_from_environment(environment),
     )
-    return result_bind(
-        result_sequence(layers),
-        lambda extras: build_config(
+
+    def build_merged_config(
+        extras: tuple[PartialApiSettings, ...],
+    ) -> Result[Config, TranslationError]:
+        return build_config(
             reduce(PartialApiSettings.merge, extras, DEFAULT_API_SETTINGS)
-        ),
-    )
+        )
+
+    return result_bind(result_sequence(layers), build_merged_config)

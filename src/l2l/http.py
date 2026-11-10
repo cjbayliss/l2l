@@ -176,12 +176,12 @@ def block_failing_provider(run_context: Context, failure: TranslationError) -> I
         if not blocked_a_new_provider:
             return io_pure(False)
 
-        return io_map(
+        return io_and_then(
             run_context.console.log_verbose(
                 f"l2l: openrouter provider {provider} failed; added to the blocklist, "
                 "retrying without it"
             ),
-            lambda _: True,
+            io_pure(True),
         )
 
     return io_bind(
@@ -358,9 +358,13 @@ def keep_trimmed(value: str) -> Maybe[str]:
     return Just(value.rstrip()) if value.strip() else NOTHING
 
 
+def single_text_tuple(text: str) -> tuple[str, ...]:
+    return (text,)
+
+
 def message_reasoning_texts(message: Mapping[str, object]) -> tuple[str, ...]:
     found = reasoning_at(message, keep_trimmed)
-    return maybe_either(found, lambda text: (text,), tuple)
+    return maybe_either(found, single_text_tuple, tuple)
 
 
 def first_choice_field(payload: Mapping[str, object], field: str) -> JsonValue | None:
@@ -460,7 +464,7 @@ def stream_step(
         think_step(state.think, text) if text else (state.think, False, "")
     )
     reasoning_texts: tuple[str, ...] = maybe_either(
-        reasoning_found, lambda value: (value,), lambda: ()
+        reasoning_found, single_text_tuple, tuple
     )
     thinking_progress = 1 if reasoning_texts and not state.content_started else 0
     text_progress = 1 if text else 0
@@ -583,11 +587,15 @@ def http_request(
     )
 
 
+def nonnegative_seconds(seconds: float) -> float:
+    return max(seconds, 0.0)
+
+
 def retry_after_seconds(raw: str | None) -> Maybe[float]:
     if raw is None:
         return NOTHING
 
-    return maybe_map(parse_float(raw), lambda seconds: max(seconds, 0.0))
+    return maybe_map(parse_float(raw), nonnegative_seconds)
 
 
 def retry_after_header(lines: tuple[bytes, ...]) -> Maybe[float]:
@@ -873,12 +881,18 @@ def with_retries[T](
                     return io_result(outcome)
 
                 wait = retry_delay(failure, delays[index])
-                return io_bind(
-                    verbose_retry_log(run_context, index + 1, len(delays), wait),
-                    lambda _: io_and_then(
+
+                def sleep_then_retry(
+                    _: None,
+                ) -> IO[Result[T, TranslationError]]:
+                    return io_and_then(
                         IO(lambda: run_context.sleep(wait)),
                         attempt_at(index + 1, blocked_provider_retries),
-                    ),
+                    )
+
+                return io_bind(
+                    verbose_retry_log(run_context, index + 1, len(delays), wait),
+                    sleep_then_retry,
                 )
 
             return io_bind(
@@ -918,8 +932,8 @@ def log_failure[T](
     if isinstance(outcome, Ok):
         return io_result(outcome)
 
-    return io_map(
-        log_error(run_context.log, describe(outcome.error)), lambda _: outcome
+    return io_and_then(
+        log_error(run_context.log, describe(outcome.error)), io_result(outcome)
     )
 
 
@@ -951,8 +965,8 @@ def http_post_json(
             return log_failure(run_context, outcome)
 
         body, loaded = outcome.value
-        return io_map(
-            log_entry(run_context.log, "RESPONSE", body), lambda _: Ok(loaded)
+        return io_and_then(
+            log_entry(run_context.log, "RESPONSE", body), io_result(Ok(loaded))
         )
 
     return io_bind(
@@ -1038,8 +1052,8 @@ def drive_stream(
             def after_reasoning(
                 _: None,
             ) -> IO[Result[StreamState, TranslationError]]:
-                return io_map(
-                    on_progress(request.label, request.count), lambda _: outcome
+                return io_and_then(
+                    on_progress(request.label, request.count), io_result(outcome)
                 )
 
             if on_reasoning is None or not request.reasoning:
@@ -1092,7 +1106,7 @@ def collect_stream(
             if isinstance(outcome, Err):
                 return log_failure(run_context, outcome)
 
-            return io_map(run_log_write(run_context.log, "\n"), lambda _: outcome)
+            return io_and_then(run_log_write(run_context.log, "\n"), io_result(outcome))
 
         return io_and_then(run_context.console.end_raw(), recorded(None))
 
@@ -1116,9 +1130,12 @@ def collect_stream(
 
 def log_all(console: Console, messages: tuple[str, ...]) -> IO[None]:
     def step(_: tuple[()], message: str) -> IO[Result[tuple[()], TranslationError]]:
-        return io_map(console.log_verbose(message), lambda _: Ok(()))
+        return io_and_then(console.log_verbose(message), io_result(Ok(())))
 
-    return io_map(fold_io(messages, step, Ok(())), lambda _: None)
+    def ignore_outcome(_: Result[tuple[()], TranslationError]) -> None:
+        return None
+
+    return io_map(fold_io(messages, step, Ok(())), ignore_outcome)
 
 
 def chat(
@@ -1196,14 +1213,17 @@ def streamed_call(
     return io_result_map(collect_stream(run_context, full_payload), to_chat_reply)
 
 
+def plain_reply_from_body(
+    body_result: Result[JsonValue, TranslationError],
+) -> IO[Result[ChatReply, TranslationError]]:
+    return io_result(result_bind(body_result, plain_reply))
+
+
 def plain_call(
     run_context: Context,
     payload: JsonObject,
 ) -> IO[Result[ChatReply, TranslationError]]:
-    return io_bind(
-        http_post_json(run_context, payload),
-        lambda body_result: io_result(result_bind(body_result, plain_reply)),
-    )
+    return io_bind(http_post_json(run_context, payload), plain_reply_from_body)
 
 
 @final
@@ -1233,17 +1253,16 @@ def exhausted_repair(
         if policy.on_exhausted is not None
         else io_pure(None)
     )
-    return io_map(
-        announce,
-        lambda _: Ok(
-            RepairOutcome(
-                text=reply.text,
-                usage=reply.usage,
-                validated=False,
-                problem=problem,
-            )
-        ),
+
+    unvalidated_outcome: Result[RepairOutcome, TranslationError] = Ok(
+        RepairOutcome(
+            text=reply.text,
+            usage=reply.usage,
+            validated=False,
+            problem=problem,
+        )
     )
+    return io_and_then(announce, io_result(unvalidated_outcome))
 
 
 def repaired_call(
@@ -1293,7 +1312,12 @@ def repaired_call(
             chat(run_context, instruction, user, model, parameters, usage), assessed
         )
 
-    return lambda usage: request_and_repair_reply(initial_user, 1, usage)
+    def request_initial_repair(
+        usage: Usage,
+    ) -> IO[Result[RepairOutcome, TranslationError]]:
+        return request_and_repair_reply(initial_user, 1, usage)
+
+    return request_initial_repair
 
 
 def reply_usage(usage: Usage, reply: ChatReply, estimated: int) -> Usage:
@@ -1321,9 +1345,7 @@ def conclude_chat(
 
     reply = reply_result.value
     content, think_text = strip_think_tag(reply.content)
-    think_texts: tuple[str, ...] = maybe_either(
-        think_text, lambda text: (text,), lambda: ()
-    )
+    think_texts: tuple[str, ...] = maybe_either(think_text, single_text_tuple, tuple)
 
     def conclude(verbose: bool) -> IO[Result[Translated, TranslationError]]:
         messages = (

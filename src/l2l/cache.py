@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 lazy from collections.abc import Callable
 
 from l2l.effects import cache_read, cache_write
@@ -10,6 +11,7 @@ from l2l.monads import (
     Maybe,
     Ok,
     Result,
+    io_and_then,
     io_bind,
     io_map,
     io_pure,
@@ -48,7 +50,9 @@ def cache_store(run_context: Context, key: str, value: str) -> IO[None]:
     if not run_context.use_cache:
         return io_pure(None)
 
-    return io_map(cache_write(run_context.cache_directory, key, value), lambda _: None)
+    return io_and_then(
+        cache_write(run_context.cache_directory, key, value), io_pure(None)
+    )
 
 
 def store_translation(
@@ -62,8 +66,8 @@ def store_translation(
         and result.value.validated
         and acceptable(result.value.text)
     ):
-        return io_map(
-            cache_store(run_context, key, result.value.text), lambda _: result
+        return io_and_then(
+            cache_store(run_context, key, result.value.text), io_pure(result)
         )
 
     return io_result(result)
@@ -80,12 +84,12 @@ def cached_translation(
     def compute_and_store() -> IO[Result[Translated, TranslationError]]:
         return io_bind(
             compute(),
-            lambda result: store_translation(run_context, key, result, acceptable),
+            partial(store_translation, run_context, key, acceptable=acceptable),
         )
 
     def use_cached(cached: Maybe[str]) -> IO[Result[Translated, TranslationError]]:
         if isinstance(cached, Just):
-            return io_map(hit_log, lambda _: Ok(Translated(cached.value, usage)))
+            return io_and_then(hit_log, io_pure(Ok(Translated(cached.value, usage))))
 
         return compute_and_store()
 

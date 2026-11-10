@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from functools import reduce
+from functools import partial, reduce
 from typing import TYPE_CHECKING, Final, Literal, TypeIs, final, get_args
 
 from l2l.errors import (
@@ -45,6 +45,10 @@ class GlossaryEntry:
     pronouns: str | None
     type: GlossaryEntryType
     notes: str | None = None
+
+
+def original_length(entry: GlossaryEntry) -> int:
+    return len(entry.original)
 
 
 GLOSSARY_BLOCK_HEADER: Final = (
@@ -102,7 +106,7 @@ def longest_match_glossary_entries(
     ordered_entries = tuple(
         sorted(
             (entry for entry in entries if entry.original),
-            key=lambda entry: len(entry.original),
+            key=original_length,
             reverse=True,
         )
     )
@@ -227,9 +231,12 @@ def parse_entries_document(
 def parse_glossary_document(
     path: str, document: object
 ) -> Result[tuple[GlossaryEntry, ...], TranslationError]:
+    def config_error(problem: str) -> ConfigError:
+        return ConfigError(f"{path}: {problem}")
+
     return result_map_error(
         parse_entries_document(document, glossary_entry_from_json),
-        lambda problem: ConfigError(f"{path}: {problem}"),
+        config_error,
     )
 
 
@@ -268,12 +275,15 @@ def parse_model_glossary_reply(
             )
         )
 
+    def reply_error(problem: str) -> GlossaryReplyError:
+        return GlossaryReplyError(pass_name=path, problem=problem)
+
     return result_map_error(
         result_bind(
             reply_entries_document(decoded.value),
-            lambda entries: parse_entries_document(entries, glossary_entry_from_json),
+            partial(parse_entries_document, parse_entry=glossary_entry_from_json),
         ),
-        lambda problem: GlossaryReplyError(pass_name=path, problem=problem),
+        reply_error,
     )
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from functools import reduce
+from functools import partial, reduce
 from typing import TextIO, final
 
 from l2l.ascii import enforce_pass_ascii
@@ -202,6 +202,10 @@ def untranslated_majority(flagged: int, total: int) -> bool:
     return flagged * 2 > total
 
 
+def translation_with_stripped_text(translated: Translated) -> Translated:
+    return Translated(translated.text.strip(), translated.usage)
+
+
 def run_analysis(
     run_context: Context,
     pass_definition: PassDefinition,
@@ -226,7 +230,7 @@ def run_analysis(
             parameters,
             usage,
         ),
-        lambda translated: Translated(translated.text.strip(), translated.usage),
+        translation_with_stripped_text,
     )
 
 
@@ -308,8 +312,8 @@ def run_analysis_once(
         run_context,
         key,
         usage,
-        compute=lambda: analyze_document(
-            run_context, pass_definition, glossary, full_text, usage
+        compute=partial(
+            analyze_document, run_context, pass_definition, glossary, full_text, usage
         ),
         hit_log=verbose_log(run_context, pass_cache_hit_message(pass_definition.name)),
     )
@@ -372,6 +376,13 @@ def enforce_ascii_state(
     if not pass_definition.ascii:
         return io_result(Ok(state))
 
+    def state_with_translated(translated: Translated) -> State:
+        return replace(
+            state,
+            text=translated.text,
+            usage=translated.usage,
+        )
+
     def enforce(ascii_started: float) -> IO[StateResult]:
         return io_result_map(
             enforce_pass_ascii(
@@ -382,11 +393,7 @@ def enforce_ascii_state(
                 state.usage,
                 ascii_started,
             ),
-            lambda translated: replace(
-                state,
-                text=translated.text,
-                usage=translated.usage,
-            ),
+            state_with_translated,
         )
 
     return io_bind(now(run_context.clock), enforce)
@@ -692,14 +699,14 @@ def combine_retranslated_units(
     evaluation = evaluate_retranslation(
         run_context, pass_definition, check, source_paragraphs, units, usage
     )
-    return io_map(
+    return io_and_then(
         announce_retranslation_evaluation(
             run_context,
             pass_definition,
             len(check.work_paragraphs),
             evaluation,
         ),
-        lambda _: evaluation.outcome,
+        io_pure(evaluation.outcome),
     )
 
 
@@ -753,16 +760,16 @@ def conclude_retranslation(
     started_at: float,
 ) -> IO[Result[Translated, TranslationError]]:
     if isinstance(result, Err):
-        return io_map(run_context.console.interrupt(), lambda _: result)
+        return io_and_then(run_context.console.interrupt(), io_result(result))
 
     prompt, completion, cost = usage_delta(usage, result.value.usage)
 
     def report(ended_at: float) -> IO[Result[Translated, TranslationError]]:
-        return io_map(
+        return io_and_then(
             run_context.console.finish(
                 stage_done_line(ended_at - started_at, prompt, completion, cost)
             ),
-            lambda _: result,
+            io_result(result),
         )
 
     return io_bind(now(run_context.clock), report)
@@ -787,17 +794,21 @@ def run_retranslation(
         )
 
     calls_by_index = dict(zip(run.check.flagged, run.calls, strict=True))
+
+    def concluded(
+        result: Result[Translated, TranslationError],
+    ) -> IO[Result[Translated, TranslationError]]:
+        return conclude_retranslation(run_context, result, run.usage, run.started_at)
+
     return io_bind(
         io_result_bind(
             io_traverse(
                 enumerate(run.check.work_paragraphs),
-                lambda item: retranslate_indexed_paragraph(run, calls_by_index, item),
+                partial(retranslate_indexed_paragraph, run, calls_by_index),
             ),
             units_result,
         ),
-        lambda result: conclude_retranslation(
-            run_context, result, run.usage, run.started_at
-        ),
+        concluded,
     )
 
 
@@ -853,7 +864,7 @@ def retranslate_untranslated(
     check = retranslation_check(run_context, pass_definition, text, source_paragraphs)
 
     if not check.has_matching_paragraph_count:
-        return io_bind(
+        return io_and_then(
             verbose_log(
                 run_context,
                 retranslate_skipped_message(
@@ -862,7 +873,7 @@ def retranslate_untranslated(
                     len(source_paragraphs),
                 ),
             ),
-            lambda _: io_result(Ok(Translated(text, usage))),
+            io_result(Ok(Translated(text, usage))),
         )
 
     if not check.flagged:
@@ -904,7 +915,7 @@ def retranslate_untranslated(
                 len(check.work_paragraphs),
             )
         ),
-        io_bind(
+        io_and_then(
             run_context.console.log(
                 retranslation_check_message(
                     check.target_language,
@@ -912,7 +923,7 @@ def retranslate_untranslated(
                     check.target_scripts_display,
                 )
             ),
-            lambda _: run_retranslation(run),
+            run_retranslation(run),
         ),
     )
 
@@ -945,14 +956,14 @@ def run_analysis_pass(
             execution.source_paragraphs,
         )
 
-    return io_bind(
+    return io_and_then(
         verbose_log(
             run_context,
             analysis_information_message(
                 pass_definition.name, len(state.text), estimate_tokens(state.text)
             ),
         ),
-        lambda _: io_bind(
+        io_bind(
             run_analysis_once(
                 run_context, pass_definition, state.glossary, state.text, state.usage
             ),
@@ -981,7 +992,8 @@ def run_update_glossary_once(
         run_context,
         key,
         state.usage,
-        compute=lambda: chat(
+        compute=partial(
+            chat,
             run_context,
             run_context.settings.glossary_extraction_instruction,
             extraction_user_message(target_language, state.text),
@@ -1061,7 +1073,13 @@ def run_update_glossary_pass(
     target_language = effective_target_language(
         run_context.target_language, pass_definition.target_language
     )
-    return io_bind(
+
+    def updated(
+        reply: Result[Translated, TranslationError],
+    ) -> IO[StateResult]:
+        return apply_glossary_update(execution, state, started_at, update_path, reply)
+
+    return io_and_then(
         verbose_log(
             run_context,
             glossary_update_information_message(
@@ -1071,29 +1089,31 @@ def run_update_glossary_pass(
                 estimate_tokens(state.text),
             ),
         ),
-        lambda _: io_bind(
+        io_bind(
             run_update_glossary_once(
                 run_context, pass_definition, target_language, state
             ),
-            lambda reply: apply_glossary_update(
-                execution, state, started_at, update_path, reply
-            ),
+            updated,
         ),
     )
+
+
+def translated_from_unit(unit: UnitResult) -> Translated:
+    return Translated(unit.text, unit.usage, unit.validated, unit.problem)
 
 
 def unit_result_from_repair(
     outcome: Result[RepairOutcome, TranslationError],
 ) -> Result[UnitResult, TranslationError]:
-    return result_map(
-        outcome,
-        lambda repaired: UnitResult(
+    def unit_result(repaired: RepairOutcome) -> UnitResult:
+        return UnitResult(
             text=repaired.text,
             validated=repaired.validated,
             usage=repaired.usage,
             problem=repaired.problem,
-        ),
-    )
+        )
+
+    return result_map(outcome, unit_result)
 
 
 def run_unit(
@@ -1218,12 +1238,7 @@ def run_single_call(
             store_translation(
                 run_context,
                 call.key,
-                result_map(
-                    result,
-                    lambda unit: Translated(
-                        unit.text, unit.usage, unit.validated, unit.problem
-                    ),
-                ),
+                result_map(result, translated_from_unit),
                 cacheable,
             ),
             verbose_log(
@@ -1231,14 +1246,16 @@ def run_single_call(
                 unit_done_message(pass_definition.name, call.index + 1, call.total),
             ),
         )
-        return io_map(
+        return io_and_then(
             stored,
-            lambda _: Ok(
-                UnitResult(
-                    text=outcome.text + call.trailing_separator,
-                    validated=outcome.validated,
-                    usage=Usage(*usage_delta(usage, outcome.usage)),
-                    problem=outcome.problem,
+            io_result(
+                Ok(
+                    UnitResult(
+                        text=outcome.text + call.trailing_separator,
+                        validated=outcome.validated,
+                        usage=Usage(*usage_delta(usage, outcome.usage)),
+                        problem=outcome.problem,
+                    )
                 )
             ),
         )
@@ -1247,19 +1264,21 @@ def run_single_call(
         cached: Maybe[str],
     ) -> IO[Result[UnitResult, TranslationError]]:
         if isinstance(cached, Just):
-            return io_map(
+            return io_and_then(
                 verbose_log(
                     run_context,
                     unit_cache_hit_message(
                         pass_definition.name, call.index + 1, call.total
                     ),
                 ),
-                lambda _: Ok(
-                    UnitResult(
-                        text=cached.value + call.trailing_separator,
-                        validated=True,
-                        usage=Usage(),
-                        problem=None,
+                io_result(
+                    Ok(
+                        UnitResult(
+                            text=cached.value + call.trailing_separator,
+                            validated=True,
+                            usage=Usage(),
+                            problem=None,
+                        )
                     )
                 ),
             )
@@ -1318,37 +1337,41 @@ def run_units(
         call: UnitCall,
     ) -> IO[Result[UnitResult, TranslationError]]:
         if not call.source_chunk:
-            return io_map(
+            return io_and_then(
                 verbose_log(
                     run_context,
                     unit_no_source_message(
                         pass_definition.name, call.index + 1, call.total
                     ),
                 ),
-                lambda _: Ok(
-                    UnitResult(
-                        text=call.work_chunk + call.trailing_separator,
-                        validated=True,
-                        usage=Usage(),
-                        problem=None,
+                io_result(
+                    Ok(
+                        UnitResult(
+                            text=call.work_chunk + call.trailing_separator,
+                            validated=True,
+                            usage=Usage(),
+                            problem=None,
+                        )
                     )
                 ),
             )
 
         if not paragraph_is_translatable(call.source_chunk):
-            return io_map(
+            return io_and_then(
                 verbose_log(
                     run_context,
                     unit_passed_through_message(
                         pass_definition.name, call.index + 1, call.total
                     ),
                 ),
-                lambda _: Ok(
-                    UnitResult(
-                        text=call.source_chunk + call.trailing_separator,
-                        validated=True,
-                        usage=Usage(),
-                        problem=None,
+                io_result(
+                    Ok(
+                        UnitResult(
+                            text=call.source_chunk + call.trailing_separator,
+                            validated=True,
+                            usage=Usage(),
+                            problem=None,
+                        )
                     )
                 ),
             )
@@ -1435,7 +1458,7 @@ def run_text_pass_once(
         )
 
     reported_warning: IO[None] = maybe_either(
-        warning, run_context.console.log, lambda: io_pure(None)
+        warning, run_context.console.log, partial(io_pure, None)
     )
     return io_bind(reported_warning, run_units_after_warning)
 
@@ -1488,11 +1511,11 @@ def after_paragraph_retry(
     if paragraph_count_is_accepted(count, source_count, tolerance):
         return io_result(result)
 
-    return io_map(
+    return io_and_then(
         run_context.console.log(
             paragraph_still_differs_message(pass_definition.name, count, source_count)
         ),
-        lambda _: result,
+        io_result(result),
     )
 
 
@@ -1519,12 +1542,17 @@ def verify_paragraph_count(
         return io_result(result)
 
     if pass_definition.paragraphs_per_call == 1:
-        return io_map(
+        return io_and_then(
             run_context.console.log(mismatch_message(count, "continuing")),
-            lambda _: result,
+            io_result(result),
         )
 
     def retry_at(retry_started: float) -> IO[StateResult]:
+        def after_retried_attempt(retried: StateResult) -> IO[StateResult]:
+            return after_paragraph_retry(
+                run_context, pass_definition, source_count, tolerance, retried
+            )
+
         unit_execution = replace(
             execution,
             pass_definition=replace(pass_definition, paragraphs_per_call=1),
@@ -1535,9 +1563,7 @@ def verify_paragraph_count(
                 replace(state, usage=result.value.usage),
                 retry_started,
             ),
-            lambda retried: after_paragraph_retry(
-                run_context, pass_definition, source_count, tolerance, retried
-            ),
+            after_retried_attempt,
         )
 
     return io_and_then(
@@ -1557,10 +1583,10 @@ def run_text_pass(
     if tolerance is None:
         return run_pass_attempt(execution, state, started_at)
 
-    return io_bind(
-        run_pass_attempt(execution, state, started_at),
-        lambda result: verify_paragraph_count(execution, state, tolerance, result),
-    )
+    def verified(result: StateResult) -> IO[StateResult]:
+        return verify_paragraph_count(execution, state, tolerance, result)
+
+    return io_bind(run_pass_attempt(execution, state, started_at), verified)
 
 
 def run_pass(
@@ -1607,6 +1633,11 @@ def run_passes(
         number, execution = indexed
 
         def begin_pass_at(stage_started: float) -> IO[StateResult]:
+            def concluded(result: StateResult) -> StateResult:
+                return conclude_pass_result(
+                    execution.run_context, execution.pass_definition, result
+                )
+
             return io_and_then(
                 execution.run_context.console.log(
                     pass_started_message(
@@ -1617,9 +1648,7 @@ def run_passes(
                 ),
                 io_map(
                     run_pass(execution, current_state, stage_started),
-                    lambda result: conclude_pass_result(
-                        execution.run_context, execution.pass_definition, result
-                    ),
+                    concluded,
                 ),
             )
 

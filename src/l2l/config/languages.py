@@ -51,10 +51,10 @@ def document_language_result(
     document_result: DocumentResult,
     parse_document_language: DocumentLanguageParser,
 ) -> LanguageResult:
-    return result_bind(
-        document_result,
-        lambda document: parse_document_language(path, document),
-    )
+    def parse_bound_document(document: JsonObject) -> LanguageResult:
+        return parse_document_language(path, document)
+
+    return result_bind(document_result, parse_bound_document)
 
 
 def resolve_target_language(
@@ -67,11 +67,15 @@ def resolve_target_language(
     )
 
 
+def normalized_configured_source_language(value: str | None) -> str:
+    return normalized_source_language(value or "auto")
+
+
 def resolve_source_language(
     path: str,
     document_result: DocumentResult,
 ) -> Result[str, TranslationError]:
     return result_map(
         document_language_result(path, document_result, document_source_language),
-        lambda value: normalized_source_language(value or "auto"),
+        normalized_configured_source_language,
     )

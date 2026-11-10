@@ -7,6 +7,7 @@ import threading
 import time
 import unicodedata
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Final, TextIO, final
 lazy from collections.abc import Callable
 
@@ -163,7 +164,9 @@ class StatusLine:
     stream: TextIO
     live: bool
     monotonic: Callable[[], float] = time.monotonic
-    view: Reference[StatusView] = field(default_factory=lambda: Reference(StatusView()))
+    view: Reference[StatusView] = field(
+        default_factory=partial(Reference[StatusView], StatusView())
+    )
     lock: threading.Lock = field(
         default_factory=threading.Lock, repr=False, compare=False
     )
@@ -171,7 +174,9 @@ class StatusLine:
         default_factory=threading.Event, repr=False, compare=False
     )
     worker: Reference[threading.Thread | None] = field(
-        default_factory=lambda: Reference(None), repr=False, compare=False
+        default_factory=partial(Reference[threading.Thread | None], None),
+        repr=False,
+        compare=False,
     )
 
     def write(self, text: str) -> IO[None]:
@@ -199,10 +204,10 @@ class StatusLine:
         return io_atomic(self.lock, self.begin_raw_action())
 
     def write_raw_action(self, text: str) -> IO[None]:
-        return io_and_then(
-            modify_reference(self.view, lambda view: raw_write_render(view, text)),
-            self.write(text),
-        )
+        def written(view: StatusView) -> StatusView:
+            return raw_write_render(view, text)
+
+        return io_and_then(modify_reference(self.view, written), self.write(text))
 
     def write_raw(self, text: str) -> IO[None]:
         return io_atomic(self.lock, self.write_raw_action(text))
@@ -249,7 +254,7 @@ class StatusLine:
             self.live,
             io_atomic(
                 self.lock,
-                io_map(modify_reference(self.view, updated), lambda _: None),
+                io_and_then(modify_reference(self.view, updated), io_pure(None)),
             ),
         )
 
@@ -277,10 +282,11 @@ class StatusLine:
         )
 
     def interrupt_action(self) -> IO[None]:
+        def interrupted(view: StatusView) -> tuple[StatusView, str]:
+            return interrupt_render(view, self.live)
+
         return io_bind(
-            modify_reference_with(
-                self.view, lambda view: interrupt_render(view, self.live)
-            ),
+            modify_reference_with(self.view, interrupted),
             self.write_rendered,
         )
 
@@ -291,8 +297,11 @@ class StatusLine:
         )
 
     def finish_action(self, text: str) -> IO[None]:
+        def finished(view: StatusView) -> tuple[StatusView, str]:
+            return finish_render(view, text)
+
         return io_bind(
-            modify_reference_with(self.view, lambda view: finish_render(view, text)),
+            modify_reference_with(self.view, finished),
             self.write_rendered,
         )
 
@@ -334,6 +343,10 @@ def terminal_size() -> IO[tuple[int, int]]:
         return columns, lines
 
     return IO(probe)
+
+
+def terminal_columns(size: tuple[int, int]) -> int:
+    return size[0]
 
 
 def display_width(text: str) -> int:
@@ -398,10 +411,16 @@ def erase_rows_render(rows: int, height: int) -> str:
 
 
 def toggle_verbose(console: Console) -> IO[bool]:
-    return io_bind(
-        modify_reference(console.verbose, lambda verbose: not verbose),
-        lambda flipped: io_map(console.replay(), lambda _: flipped),
-    )
+    def flipped(verbose: bool) -> bool:
+        return not verbose
+
+    def replayed(flipped_value: bool) -> IO[bool]:
+        def constant(_: None) -> bool:
+            return flipped_value
+
+        return io_map(console.replay(), constant)
+
+    return io_bind(modify_reference(console.verbose, flipped), replayed)
 
 
 @final
@@ -409,12 +428,12 @@ def toggle_verbose(console: Console) -> IO[bool]:
 class Console:
     stream: TextIO
     status: StatusLine
-    verbose: Reference[bool] = field(default_factory=lambda: Reference(False))
+    verbose: Reference[bool] = field(default_factory=partial(Reference[bool], False))
     events: Reference[Cons[LogEvent] | None] = field(
-        default_factory=lambda: Reference(None)
+        default_factory=partial(Reference[Cons[LogEvent] | None], None)
     )
-    pending_raw: Reference[str] = field(default_factory=lambda: Reference(""))
-    displayed_rows: Reference[int] = field(default_factory=lambda: Reference(0))
+    pending_raw: Reference[str] = field(default_factory=partial(Reference[str], ""))
+    displayed_rows: Reference[int] = field(default_factory=partial(Reference[int], 0))
     term_size: Callable[[], IO[tuple[int, int]]] = terminal_size
 
     def record(self, text: str, verbose_only: bool, raw: bool) -> IO[None]:
@@ -435,11 +454,12 @@ class Console:
                     if raw or (verbose_only and not verbose):
                         return io_pure(None)
 
-                    return io_map(
-                        modify_reference(
-                            self.displayed_rows, lambda rows: rows + event.rows
-                        ),
-                        lambda _: None,
+                    def increased(rows: int) -> int:
+                        return rows + event.rows
+
+                    return io_and_then(
+                        modify_reference(self.displayed_rows, increased),
+                        io_pure(None),
                     )
 
                 return Cons(event, events), io_bind(
@@ -448,10 +468,10 @@ class Console:
 
             return step
 
-        return io_bind(
-            io_map(self.term_size(), lambda size: size[0]),
-            lambda width: io_join(modify_reference_with(self.events, tracked(width))),
-        )
+        def recorded(width: int) -> IO[None]:
+            return io_join(modify_reference_with(self.events, tracked(width)))
+
+        return io_bind(io_map(self.term_size(), terminal_columns), recorded)
 
     def commit_pending_raw(self) -> IO[None]:
         def sealed(pending: str) -> IO[None]:
@@ -459,7 +479,7 @@ class Console:
                 return io_pure(None)
 
             return io_and_then(
-                io_map(write_reference(self.pending_raw, ""), lambda _: None),
+                write_reference(self.pending_raw, ""),
                 self.record(pending, verbose_only=True, raw=True),
             )
 
@@ -512,31 +532,31 @@ class Console:
                         return io_pure(None)
 
                     def counted(width: int) -> IO[None]:
-                        return io_map(
-                            modify_reference(
-                                self.displayed_rows,
-                                lambda rows: (
-                                    rows
-                                    + row_count(pending, width)
-                                    - row_count(previous, width)
-                                ),
-                            ),
-                            lambda _: None,
+                        def grown(rows: int) -> int:
+                            return (
+                                rows
+                                + row_count(pending, width)
+                                - row_count(previous, width)
+                            )
+
+                        return io_and_then(
+                            modify_reference(self.displayed_rows, grown),
+                            io_pure(None),
                         )
 
-                    return io_bind(
-                        io_map(self.term_size(), lambda size: size[0]),
-                        lambda width: io_and_then(
+                    def rendered(width: int) -> IO[None]:
+                        return io_and_then(
                             io_and_then(
                                 self.status.begin_raw_action(),
                                 self.status.write_raw_action(text),
                             ),
                             counted(width),
-                        ),
-                    )
+                        )
+
+                    return io_bind(io_map(self.term_size(), terminal_columns), rendered)
 
                 return io_and_then(
-                    io_map(write_reference(self.pending_raw, pending), lambda _: None),
+                    write_reference(self.pending_raw, pending),
                     displayed(None),
                 )
 
@@ -595,21 +615,21 @@ class Console:
 
             def written(_: None) -> IO[None]:
                 shown_pending = verbose and bool(pending)
+
+                def reset(current: StatusView) -> StatusView:
+                    return replace(
+                        current,
+                        drawn="",
+                        raw=shown_pending,
+                        raw_open=shown_pending and not pending.endswith("\n"),
+                        prefix="" if shown_pending else current.prefix,
+                    )
+
                 rows = replay_rows(events, pending, verbose, width)
                 return io_and_then(
                     write_reference(self.displayed_rows, rows),
-                    io_map(
-                        modify_reference(
-                            self.status.view,
-                            lambda current: replace(
-                                current,
-                                drawn="",
-                                raw=shown_pending,
-                                raw_open=shown_pending and not pending.endswith("\n"),
-                                prefix="" if shown_pending else current.prefix,
-                            ),
-                        ),
-                        lambda _: None,
+                    io_and_then(
+                        modify_reference(self.status.view, reset), io_pure(None)
                     ),
                 )
 
@@ -625,7 +645,10 @@ class Console:
                     tuple[int, StatusView],
                 ],
             ) -> IO[None]:
-                return io_bind(self.term_size(), lambda size: render(inputs, size))
+                def rendered(size: tuple[int, int]) -> IO[None]:
+                    return render(inputs, size)
+
+                return io_bind(self.term_size(), rendered)
 
             return io_atomic(self.status.lock, io_bind(snapshot(), sized))
 

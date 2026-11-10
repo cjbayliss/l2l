@@ -4,6 +4,7 @@ import os
 import re
 import shlex
 from dataclasses import replace
+from functools import partial
 from types import MappingProxyType
 from typing import Final
 lazy from collections.abc import Mapping
@@ -29,6 +30,7 @@ from l2l.monads import (
     Result,
     io_bind,
     io_map,
+    io_pair,
     io_result,
     io_traverse,
     result_bind,
@@ -245,9 +247,7 @@ def parse_filter_table(
     def build(
         command: tuple[str, ...] | None,
     ) -> Result[FilterSettings, TranslationError]:
-        return result_map(
-            specs, lambda parsed_specs: FilterSettings(command, parsed_specs)
-        )
+        return result_map(specs, partial(FilterSettings, command))
 
     if script_value is None:
         return build(None)
@@ -582,16 +582,19 @@ def parse_prompt_overrides(
         def checked(
             text_result: Result[str, TranslationError],
         ) -> Result[PromptSectionOverride | None, TranslationError]:
-            return result_bind(
-                text_result,
-                lambda text: (
-                    Ok(PromptSectionOverride(text.strip(), file_origin))
-                    if text.strip()
+            def section_override_from_text(
+                text: str,
+            ) -> Result[PromptSectionOverride | None, TranslationError]:
+                stripped_text = text.strip()
+                return (
+                    Ok(PromptSectionOverride(stripped_text, file_origin))
+                    if stripped_text
                     else fail_config(
                         f"{path}: {description} {section}: prompt file is empty"
                     )
-                ),
-            )
+                )
+
+            return result_bind(text_result, section_override_from_text)
 
         return io_map(read_text_file(file_path, file_description), checked)
 
@@ -906,34 +909,54 @@ def parse_pass_table(
 
     mode = table.get("mode", "translate")
 
-    return io_bind(
-        load_instruction_text(path, name, table, base_directory),
-        lambda instruction_result: io_bind(
-            pass_prompt_overrides(path, name, table, base_directory),
-            lambda prompts_result: io_result(
-                result_bind(
-                    instruction_result,
-                    lambda instruction: result_bind(
-                        prompts_result,
-                        lambda prompts: result_bind(
-                            pass_style_patch(path, name, table, instruction, mode),
-                            lambda style_patch: result_bind(
-                                pass_output_patch(path, name, table, instruction, mode),
-                                lambda output_patch: pass_draft_from(
-                                    path,
-                                    name,
-                                    table,
-                                    instruction,
-                                    prompts,
-                                    style_patch,
-                                    output_patch,
-                                ),
-                            ),
-                        ),
-                    ),
-                )
+    def assemble_draft(
+        instruction: str | None,
+        prompts: Mapping[PromptSectionName, PromptSectionOverride],
+    ) -> Result[PassDraft, TranslationError]:
+        return result_bind(
+            pass_style_patch(path, name, table, instruction, mode),
+            partial(finish_draft, instruction, prompts),
+        )
+
+    def finish_draft(
+        instruction: str | None,
+        prompts: Mapping[PromptSectionName, PromptSectionOverride],
+        style_patch: StylePolicyPatch,
+    ) -> Result[PassDraft, TranslationError]:
+        return result_bind(
+            pass_output_patch(path, name, table, instruction, mode),
+            partial(
+                pass_draft_from,
+                path,
+                name,
+                table,
+                instruction,
+                prompts,
+                style_patch,
             ),
+        )
+
+    def combine_loaded(
+        results: tuple[
+            Result[str | None, TranslationError],
+            Result[Mapping[PromptSectionName, PromptSectionOverride], TranslationError],
+        ],
+    ) -> IO[Result[PassDraft, TranslationError]]:
+        instruction_result, prompts_result = results
+
+        def with_instruction(
+            instruction: str | None,
+        ) -> Result[PassDraft, TranslationError]:
+            return result_bind(prompts_result, partial(assemble_draft, instruction))
+
+        return io_result(result_bind(instruction_result, with_instruction))
+
+    return io_bind(
+        io_pair(
+            load_instruction_text(path, name, table, base_directory),
+            pass_prompt_overrides(path, name, table, base_directory),
         ),
+        combine_loaded,
     )
 
 

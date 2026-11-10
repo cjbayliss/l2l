@@ -56,6 +56,10 @@ lazy from l2l.filtering import FilterSettings
 lazy from l2l.json_values import JsonObject
 
 
+def _identity[value_t](value: value_t) -> value_t:
+    return value
+
+
 def resolve_filter_settings(
     path: str,
     document_result: DocumentResult,
@@ -67,12 +71,50 @@ def resolve_filter_settings(
             return Ok(None)
 
         # result_map widens Ok[FilterSettings] to the optional settings type.
-        return result_map(
-            parse_filter_table(path, document["filter"]),
-            lambda settings: settings,
-        )
+        return result_map(parse_filter_table(path, document["filter"]), _identity)
 
     return result_bind(document_result, resolve)
+
+
+def resolved_passes_from_results(
+    drafts_result: Result[tuple[PassDraft, ...], TranslationError],
+    prompts_result: Result[
+        Mapping[PromptSectionName, PromptSectionOverride], TranslationError
+    ],
+    styles_result: Result[StylePolicyPatch, TranslationError],
+    outputs_result: Result[OutputPolicyPatch, TranslationError],
+    options_result: Result[OptionDefaults, TranslationError],
+) -> Result[ResolvedPasses, TranslationError]:
+    def with_prompts(
+        drafts: tuple[PassDraft, ...],
+    ) -> Result[ResolvedPasses, TranslationError]:
+        def with_styles(
+            prompts: Mapping[PromptSectionName, PromptSectionOverride],
+        ) -> Result[ResolvedPasses, TranslationError]:
+            def with_outputs(
+                styles: StylePolicyPatch,
+            ) -> Result[ResolvedPasses, TranslationError]:
+                def with_option_values(
+                    outputs: OutputPolicyPatch,
+                ) -> Result[ResolvedPasses, TranslationError]:
+                    def build(option_values: OptionDefaults) -> ResolvedPasses:
+                        return ResolvedPasses(
+                            option_defaults=option_values,
+                            global_prompts=prompts,
+                            global_style_patch=styles,
+                            global_output_patch=outputs,
+                            pass_drafts=drafts,
+                        )
+
+                    return result_map(options_result, build)
+
+                return result_bind(outputs_result, with_option_values)
+
+            return result_bind(styles_result, with_outputs)
+
+        return result_bind(prompts_result, with_styles)
+
+    return result_bind(drafts_result, with_prompts)
 
 
 def resolve_passes(
@@ -113,27 +155,12 @@ def resolve_passes(
             ((drafts_result, prompts_result), styles_and_outputs) = resolved
             styles_result, outputs_result = styles_and_outputs
             return io_result(
-                result_bind(
+                resolved_passes_from_results(
                     drafts_result,
-                    lambda drafts: result_bind(
-                        prompts_result,
-                        lambda prompts: result_bind(
-                            styles_result,
-                            lambda styles: result_bind(
-                                outputs_result,
-                                lambda outputs: result_map(
-                                    options,
-                                    lambda option_values: ResolvedPasses(
-                                        option_defaults=option_values,
-                                        global_prompts=prompts,
-                                        global_style_patch=styles,
-                                        global_output_patch=outputs,
-                                        pass_drafts=drafts,
-                                    ),
-                                ),
-                            ),
-                        ),
-                    ),
+                    prompts_result,
+                    styles_result,
+                    outputs_result,
+                    options,
                 )
             )
 
@@ -384,6 +411,20 @@ def uses_japanese_or_korean_honorifics(source_language: str) -> bool:
     return components is not None and components[0] in JAPANESE_KOREAN_SOURCE_BASES
 
 
+def finalized_passes_from_finalization_pairs(
+    finalization_pairs: tuple[
+        tuple[PassDefinition, tuple[str, ...]],
+        ...,
+    ],
+) -> FinalizedPasses:
+    return FinalizedPasses(
+        passes=tuple(pass_definition for pass_definition, _ in finalization_pairs),
+        warnings=tuple(
+            warning for _, warnings in finalization_pairs for warning in warnings
+        ),
+    )
+
+
 def finalize_passes(
     pass_drafts: tuple[PassDraft, ...],
     global_target_language: str,
@@ -410,10 +451,4 @@ def finalize_passes(
             for pass_draft, role in zip(pass_drafts, roles, strict=True)
         )
     )
-    return result_map(
-        per_pass,
-        lambda pairs: FinalizedPasses(
-            passes=tuple(pass_definition for pass_definition, _ in pairs),
-            warnings=tuple(warning for _, warnings in pairs for warning in warnings),
-        ),
-    )
+    return result_map(per_pass, finalized_passes_from_finalization_pairs)

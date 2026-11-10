@@ -78,10 +78,13 @@ def result_sequence[T, E](results: Iterable[Result[T, E]]) -> Result[tuple[T, ..
     def collect_value(
         collected: Result[tuple[T, ...], E], result: Result[T, E]
     ) -> Result[tuple[T, ...], E]:
-        return result_bind(
-            collected,
-            lambda values: result_map(result, lambda value: (*values, value)),
-        )
+        def append_value(values: tuple[T, ...]) -> Result[tuple[T, ...], E]:
+            def extend(value: T) -> tuple[T, ...]:
+                return (*values, value)
+
+            return result_map(result, extend)
+
+        return result_bind(collected, append_value)
 
     collected: Result[tuple[T, ...], E] = Ok(())
     return reduce(collect_value, results, collected)
@@ -113,8 +116,12 @@ def cons[T](head: T, tail: Cons[T] | None = None) -> Cons[T]:
     return Cons(head, tail)
 
 
+def cons_onto[T](accumulated: Cons[T] | None, head: T) -> Cons[T]:
+    return Cons(head, accumulated)
+
+
 def cons_all[T](heads: Iterable[T], tail: Cons[T] | None = None) -> Cons[T] | None:
-    return reduce(lambda accumulated, head: Cons(head, accumulated), heads, tail)
+    return reduce(cons_onto, heads, tail)
 
 
 def cons_cells[T](items: Cons[T] | None) -> Iterable[T]:
@@ -190,7 +197,10 @@ def io_bind[T, R](io_value: IO[T], transform: Callable[[T], IO[R]]) -> IO[R]:
 
 
 def io_join[T](io_value: IO[IO[T]]) -> IO[T]:
-    return io_bind(io_value, lambda inner: inner)
+    def identity(inner: IO[T]) -> IO[T]:
+        return inner
+
+    return io_bind(io_value, identity)
 
 
 def io_and_then[T, R](io_value: IO[T], next_value: IO[R]) -> IO[R]:
@@ -333,7 +343,10 @@ def io_traverse[S, T, E](
     items: Iterable[S], transform: Callable[[S], IO[Result[T, E]]]
 ) -> IO[Result[tuple[T, ...], E]]:
     def step(collected: tuple[T, ...], item: S) -> IO[Result[tuple[T, ...], E]]:
-        return io_result_map(transform(item), lambda value: (*collected, value))
+        def extend(value: T) -> tuple[T, ...]:
+            return (*collected, value)
+
+        return io_result_map(transform(item), extend)
 
     return fold_io(items, step, Ok(()))
 
@@ -341,13 +354,19 @@ def io_traverse[S, T, E](
 def io_result_map[T, E, R](
     io_value: IOResult[T, E], transform: Callable[[T], R]
 ) -> IOResult[R, E]:
-    return io_map(io_value, lambda outcome: result_map(outcome, transform))
+    def mapped(outcome: Result[T, E]) -> Result[R, E]:
+        return result_map(outcome, transform)
+
+    return io_map(io_value, mapped)
 
 
 def io_result_bind[T, E, R](
     io_value: IOResult[T, E], transform: Callable[[T], IOResult[R, E]]
 ) -> IOResult[R, E]:
-    return io_bind(io_value, lambda outcome: result_bind_io(outcome, transform))
+    def bound(outcome: Result[T, E]) -> IO[Result[R, E]]:
+        return result_bind_io(outcome, transform)
+
+    return io_bind(io_value, bound)
 
 
 @final

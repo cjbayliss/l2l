@@ -14,7 +14,6 @@ from l2l.monads import (
     Ok,
     Result,
     io_bind,
-    io_map,
     io_pure,
     io_result,
     io_result_bind,
@@ -24,7 +23,7 @@ lazy from l2l.config.models import DocumentResult
 lazy from l2l.settings import Unset
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
 
 def validate_document(
@@ -64,18 +63,27 @@ def validate_document(
     return Ok(None)
 
 
+def returning[Value](value: Value) -> Callable[[object], Value]:
+    def return_value(_: object) -> Value:
+        return value
+
+    return return_value
+
+
 def read_document(
     path: str | None, description: str, exists: bool
 ) -> IO[Result[JsonObject, TranslationError]]:
     if not exists:
         return io_result(Ok({}))
 
-    return io_result_bind(
-        load_toml(path or "", description),
-        lambda document: io_result(
-            result_map(validate_document(path or "", document), lambda _: document)
-        ),
-    )
+    def validate_loaded(
+        document: JsonObject,
+    ) -> IO[Result[JsonObject, TranslationError]]:
+        return io_result(
+            result_map(validate_document(path or "", document), returning(document))
+        )
+
+    return io_result_bind(load_toml(path or "", description), validate_loaded)
 
 
 def resolve_config_path(
@@ -87,7 +95,7 @@ def resolve_config_path(
             return io_pure(path)
 
         case _:
-            return io_map(user_config_path(environment), lambda path: path)
+            return user_config_path(environment)
 
 
 def read_setup_document(path: str, requested: bool) -> IO[DocumentResult]:

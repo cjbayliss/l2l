@@ -11,6 +11,7 @@ import time
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from typing import Final, TextIO, final
 
 from l2l.errors import (
@@ -29,6 +30,7 @@ from l2l.monads import (
     Nothing,
     Ok,
     Result,
+    io_and_then,
     io_bind,
     io_result,
 )
@@ -60,11 +62,11 @@ def write_stdout(stream: TextIO, content: str) -> IO[None]:
 
 
 def path_exists(path: str) -> IO[bool]:
-    return IO(lambda: os.path.exists(path))
+    return IO(partial(os.path.exists, path))
 
 
 def path_is_directory(path: str) -> IO[bool]:
-    return IO(lambda: os.path.isdir(path))
+    return IO(partial(os.path.isdir, path))
 
 
 def current_working_directory() -> IO[str]:
@@ -82,23 +84,25 @@ def stream_isatty(stream: TextIO) -> IO[bool]:
 
 
 def user_config_path(environment: Mapping[str, str]) -> IO[str]:
-    return IO(
-        lambda: os.path.join(
+    def thunk() -> str:
+        return os.path.join(
             environment.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
             "l2l",
             "config.toml",
         )
-    )
+
+    return IO(thunk)
 
 
 def user_state_glossary_path(environment: Mapping[str, str]) -> IO[str]:
-    return IO(
-        lambda: os.path.join(
+    def thunk() -> str:
+        return os.path.join(
             environment.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
             "l2l",
             "glossary.json",
         )
-    )
+
+    return IO(thunk)
 
 
 def ensure_parent_directory(path: str) -> IO[Result[None, TranslationError]]:
@@ -477,9 +481,9 @@ def write_text_file(
 
 
 def write_glossary_file(path: str, content: str) -> IO[Result[None, TranslationError]]:
-    return io_bind(
+    return io_and_then(
         ensure_parent_directory(path),
-        lambda _: write_text_file(path, content, "glossary file"),
+        write_text_file(path, content, "glossary file"),
     )
 
 

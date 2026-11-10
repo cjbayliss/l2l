@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
+from functools import partial
 from typing import TYPE_CHECKING
 
 from l2l.effects import load_json, path_exists
@@ -28,6 +29,7 @@ lazy from l2l.settings import Setup
 
 if TYPE_CHECKING:
     from l2l.config.models import DocumentResult, Glossaries
+    from l2l.glossary import GlossaryEntry
 
 
 def document_glossary_paths(
@@ -54,9 +56,12 @@ def glossary_paths(
     document: JsonObject,
     command_line_paths: tuple[str, ...],
 ) -> Result[tuple[str, ...], TranslationError]:
+    def with_command_line_paths(document_paths: tuple[str, ...]) -> tuple[str, ...]:
+        return document_paths + tuple(command_line_paths)
+
     return result_map(
         document_glossary_paths(path, document),
-        lambda groups: groups + tuple(command_line_paths),
+        with_command_line_paths,
     )
 
 
@@ -74,27 +79,33 @@ def load_glossary_document(
     return io_bind(path_exists(path), after_existence)
 
 
+def parsed_glossaries(
+    paths: tuple[str, ...], loaded: tuple[JsonValue, ...]
+) -> Result[Glossaries, TranslationError]:
+    def glossaries_with_merged_entries(
+        groups: tuple[tuple[GlossaryEntry, ...], ...],
+    ) -> Glossaries:
+        return (paths, merge_glossary_entries(groups))
+
+    return result_map(
+        result_sequence(
+            parse_glossary_document(item_path, document)
+            for item_path, document in zip(paths, loaded, strict=True)
+        ),
+        glossaries_with_merged_entries,
+    )
+
+
 def load_glossaries(
     paths: tuple[str, ...], default_path: str | None = None
 ) -> IO[Result[Glossaries, TranslationError]]:
     def parsed(
         loaded_result: Result[tuple[JsonValue, ...], TranslationError],
     ) -> Result[Glossaries, TranslationError]:
-        return result_bind(
-            loaded_result,
-            lambda loaded: result_map(
-                result_sequence(
-                    parse_glossary_document(item_path, document)
-                    for item_path, document in zip(paths, loaded, strict=True)
-                ),
-                lambda groups: (paths, merge_glossary_entries(groups)),
-            ),
-        )
+        return result_bind(loaded_result, partial(parsed_glossaries, paths))
 
     return io_map(
-        io_traverse(
-            paths, lambda item_path: load_glossary_document(item_path, default_path)
-        ),
+        io_traverse(paths, partial(load_glossary_document, default_path=default_path)),
         parsed,
     )
 
@@ -105,12 +116,19 @@ def resolve_glossaries(
     command_line_paths: tuple[str, ...],
     default_path: str | None = None,
 ) -> IO[Result[Glossaries, TranslationError]]:
+    def document_glossary(
+        document: JsonObject,
+    ) -> Result[tuple[str, ...], TranslationError]:
+        return glossary_paths(path, document, command_line_paths)
+
+    def glossaries_for_paths(
+        paths: tuple[str, ...],
+    ) -> IO[Result[Glossaries, TranslationError]]:
+        return load_glossaries(paths, default_path)
+
     return result_bind_io(
-        result_bind(
-            document_result,
-            lambda document: glossary_paths(path, document, command_line_paths),
-        ),
-        lambda paths: load_glossaries(paths, default_path),
+        result_bind(document_result, document_glossary),
+        glossaries_for_paths,
     )
 
 

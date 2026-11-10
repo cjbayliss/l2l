@@ -5,7 +5,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, replace
-from functools import reduce
+from functools import partial, reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, TextIO, final, override
 
@@ -266,6 +266,14 @@ def arguments_from_namespace(parsed: argparse.Namespace) -> Arguments:
 type ParsedArguments = Result[Arguments | EarlyExitText, TranslationError]
 
 
+def exit_successfully_after_writing(_: None) -> ExitState:
+    return ExitState(ExitKind.SUCCESS)
+
+
+def announce_nothing() -> IO[None]:
+    return io_pure(None)
+
+
 def active_mode_flags(parsed: Arguments) -> tuple[str, ...]:
     return tuple(
         flag_name
@@ -356,14 +364,13 @@ def with_tab_listener[T](
 
 
 def announce_run_log(parsed: Arguments, console: Console, log: RunLog) -> IO[None]:
-    return maybe_either(
-        log.path,
-        lambda path: io_when_unit(
+    def announce_log_path(path: str) -> IO[None]:
+        return io_when_unit(
             parsed.print_log_path,
             console.log(f"l2l: log: {path}"),
-        ),
-        lambda: io_pure(None),
-    )
+        )
+
+    return maybe_either(log.path, announce_log_path, announce_nothing)
 
 
 def main(
@@ -387,10 +394,16 @@ def main(
             )
 
         parsed = parsed_result.value
+
         if isinstance(parsed, EarlyExitText):
             return io_map(
                 write_stdout(stdout, parsed.text),
-                lambda _: ExitState(ExitKind.SUCCESS),
+                exit_successfully_after_writing,
+            )
+
+        def translate_input(text: str) -> IO[ExitState]:
+            return run_main_program(
+                parsed, environment, text, stdout, stderr, clock, opener, sleep
             )
 
         if parsed.check_config:
@@ -404,9 +417,9 @@ def main(
 
         if not isinstance(parsed.extract_glossary, Unset):
             glossary_output_path = parsed.extract_glossary
-            return io_bind(
-                read_stdin(stdin),
-                lambda text: extract_glossary_program(
+
+            def extract_glossary_from_input(text: str) -> IO[ExitState]:
+                return extract_glossary_program(
                     parsed,
                     glossary_output_path,
                     environment,
@@ -415,15 +428,11 @@ def main(
                     clock,
                     opener,
                     sleep,
-                ),
-            )
+                )
 
-        return io_bind(
-            read_stdin(stdin),
-            lambda text: run_main_program(
-                parsed, environment, text, stdout, stderr, clock, opener, sleep
-            ),
-        )
+            return io_bind(read_stdin(stdin), extract_glossary_from_input)
+
+        return io_bind(read_stdin(stdin), translate_input)
 
     return io_bind(parse_arguments(arguments, environment), after_parse)
 
@@ -528,7 +537,7 @@ def filter_source_text(
                 reports = io_and_then(
                     script_report, report_filter_outcome(console, outcome)
                 )
-                return io_map(reports, lambda _: filtered)
+                return io_and_then(reports, io_pure(filtered))
 
     return io_bind(scripted, after_script)
 
@@ -550,7 +559,7 @@ def dry_run_program(
         write_stdout(
             stdout, plan_report(planning_run_context, setup.passes, text) + "\n"
         ),
-        lambda _: ExitState(ExitKind.SUCCESS),
+        exit_successfully_after_writing,
     )
 
 
@@ -574,7 +583,7 @@ def check_config_program(
         warnings = "".join(f"\nwarning: {warning}" for warning in setup_warnings(setup))
         return io_map(
             write_stdout(stdout, report + warnings + "\n"),
-            lambda _: ExitState(ExitKind.SUCCESS),
+            exit_successfully_after_writing,
         )
 
     def with_console(console: Console) -> IO[ExitState]:
@@ -590,17 +599,17 @@ def prune_entry(
     path: str,
 ) -> IO[Result[int, TranslationError]]:
     if days <= 0:
+        return io_map(remove_file(path), partial(count_removed_file, count))
+
+    def remove_entry_older_than_retention(
+        now_value: float,
+    ) -> IO[Result[int, TranslationError]]:
         return io_map(
-            remove_file(path),
-            lambda removal: count_removed_file(count, removal),
-        )
-    return io_bind(
-        now(clock),
-        lambda now_value: io_map(
             remove_file_if_older(path, now_value, days * SECONDS_PER_DAY),
-            lambda removal: count_removed_file(count, removal),
-        ),
-    )
+            partial(count_removed_file, count),
+        )
+
+    return io_bind(now(clock), remove_entry_older_than_retention)
 
 
 def report_cache_prune(pruned: Result[int, TranslationError]) -> IO[ExitState]:
@@ -645,9 +654,7 @@ def prune_cache_program(
                     case Ok(paths):
                         return fold_io(
                             paths,
-                            lambda count, path: prune_entry(
-                                clock, retention_days, count, path
-                            ),
+                            partial(prune_entry, clock, retention_days),
                             Ok(0),
                         )
 
@@ -703,9 +710,7 @@ def prune_logs_program(
                     case Ok(paths):
                         return fold_io(
                             paths,
-                            lambda count, path: prune_entry(
-                                clock, retention_days, count, path
-                            ),
+                            partial(prune_entry, clock, retention_days),
                             Ok(0),
                         )
 
@@ -732,7 +737,7 @@ def run_main_program(
     if not text.strip():
         return io_pure(ExitState(ExitKind.SUCCESS))
 
-    def run_with_setup(setup: Setup, console: Console) -> IO[ExitState]:
+    def run_with_setup(console: Console, setup: Setup) -> IO[ExitState]:
         def run_with_source(source_text: str) -> IO[ExitState]:
             warnings = log_setup_warnings(console, setup)
             if parsed.dry_run:
@@ -799,7 +804,7 @@ def run_main_program(
 
     def with_console(console: Console) -> IO[ExitState]:
         return with_loaded_setup(
-            parsed, environment, console, lambda setup: run_with_setup(setup, console)
+            parsed, environment, console, partial(run_with_setup, console)
         )
 
     return with_console_io(stderr, with_console, verbose=parsed.verbose)
@@ -892,7 +897,7 @@ def extract_glossary_program(
             log_setup_warnings(console, setup),
             io_bind(
                 extract_reply(run_context, setup),
-                lambda reply: write_extracted_glossary(output_path, setup, reply),
+                partial(write_extracted_glossary, output_path, setup),
             ),
         )
 
@@ -901,7 +906,7 @@ def extract_glossary_program(
             parsed,
             environment,
             console,
-            lambda setup: run_with_setup(console, setup),
+            partial(run_with_setup, console),
             resolve_pipeline_passes=False,
         )
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING, Protocol, final
 
 from l2l.errors import TranslationError
@@ -56,5 +57,5 @@ class Context:
     glossary_update_path: str | None = None
     no_structured_output: bool = False
     provider_blocklist: Reference[frozenset[str]] = field(
-        default_factory=lambda: Reference(frozenset[str]())
+        default_factory=partial(Reference[frozenset[str]], frozenset[str]())
     )

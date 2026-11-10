@@ -6,7 +6,7 @@ lazy from collections.abc import Mapping
 from l2l.cache import cached_translation
 from l2l.effects import now
 from l2l.errors import TranslationError, fail_ascii, fail_ascii_collapse
-from l2l.http import RepairPolicy, repaired_call
+from l2l.http import RepairOutcome, RepairPolicy, repaired_call
 from l2l.languages import normalized_language_name
 from l2l.messages import (
     ascii_cache_hit_message,
@@ -26,6 +26,7 @@ from l2l.monads import (
     io_and_then,
     io_bind,
     io_map,
+    io_pure,
     io_result,
     io_result_map,
     io_traverse,
@@ -92,6 +93,12 @@ def ascii_fix_llm(
             ascii_retry_message(failed, run_context.settings.ascii_fix_attempts),
         )
 
+    def build_retry_user(bad_output: str, _problem: str) -> str:
+        return build_ascii_retry_user(source_paragraph, output_paragraph, bad_output)
+
+    def to_translated(repaired: RepairOutcome) -> Translated:
+        return Translated(repaired.text, repaired.usage)
+
     def start() -> IO[Result[Translated, TranslationError]]:
         call = repaired_call(
             run_context,
@@ -101,17 +108,12 @@ def ascii_fix_llm(
             build_ascii_fix_user(source_paragraph, output_paragraph),
             RepairPolicy(
                 validate=validate,
-                build_retry_user=lambda bad_output, _problem: build_ascii_retry_user(
-                    source_paragraph, output_paragraph, bad_output
-                ),
+                build_retry_user=build_retry_user,
                 maximum_repairs=run_context.settings.ascii_fix_attempts - 1,
                 on_repair=on_repair,
             ),
         )
-        return io_result_map(
-            call(usage),
-            lambda repaired: Translated(repaired.text, repaired.usage),
-        )
+        return io_result_map(call(usage), to_translated)
 
     return cached_translation(
         run_context,
@@ -137,9 +139,9 @@ def repair_paragraph(
         paragraph, run_context.settings.ascii_character_map
     )
     if mechanical.isascii():
-        return io_map(
+        return io_and_then(
             verbose_log(run_context, ascii_mechanical_message(index, total)),
-            lambda _: Ok(Translated(mechanical + separator, usage)),
+            io_pure(Ok(Translated(mechanical + separator, usage))),
         )
 
     def repaired(
@@ -221,6 +223,9 @@ def ensure_ascii_output(
         if paragraph.isascii():
             return io_result(Ok((paragraph + separator, Usage())))
 
+        def measured(translated: Translated) -> tuple[str, Usage]:
+            return translated.text, Usage(*usage_delta(usage, translated.usage))
+
         return io_result_map(
             repair_paragraph(
                 run_context,
@@ -232,10 +237,7 @@ def ensure_ascii_output(
                 source_paragraphs,
                 usage,
             ),
-            lambda translated: (
-                translated.text,
-                Usage(*usage_delta(usage, translated.usage)),
-            ),
+            measured,
         )
 
     def collect(parts: tuple[tuple[str, Usage], ...]) -> Translated:
@@ -259,19 +261,19 @@ def enforce_pass_ascii(
         result: Result[Translated, TranslationError],
     ) -> IO[Result[Translated, TranslationError]]:
         if isinstance(result, Err):
-            return io_map(
+            return io_and_then(
                 run_context.console.interrupt(),
-                lambda _: fail_ascii(pass_definition.name, result.error),
+                io_pure(fail_ascii(pass_definition.name, result.error)),
             )
 
         prompt, completion, cost = usage_delta(usage, result.value.usage)
 
         def report(ended_at: float) -> IO[Result[Translated, TranslationError]]:
-            return io_map(
+            return io_and_then(
                 run_context.console.finish(
                     stage_done_line(ended_at - started_at, prompt, completion, cost)
                 ),
-                lambda _: result,
+                io_pure(result),
             )
 
         return io_bind(now(run_context.clock), report)

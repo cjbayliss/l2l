@@ -236,12 +236,16 @@ def parse_float(value: object) -> Maybe[float]:
     return NOTHING
 
 
+def zero_float() -> float:
+    return 0.0
+
+
 def parse_cost(value: object) -> float:
-    return maybe_or_else(parse_float(value), lambda: 0.0)
+    return maybe_or_else(parse_float(value), zero_float)
 
 
 def parse_tokens(value: object) -> int:
-    return int(maybe_or_else(parse_float(value), lambda: 0.0))
+    return int(maybe_or_else(parse_float(value), zero_float))
 
 
 def add_usage(usage: Usage, reported: Mapping[str, object]) -> Usage:
@@ -366,13 +370,18 @@ def excerpt(text: str, limit: int = 60) -> str:
     return collapsed if len(collapsed) <= limit else collapsed[:limit] + "..."
 
 
+def replace_character_pair(text: str, pair: tuple[str, str]) -> str:
+    source, target = pair
+    return text.replace(source, target)
+
+
 def to_ascii_mechanical(text: str, character_map: Mapping[str, str]) -> str:
     return "".join(
         character
         for character in unicodedata.normalize(
             "NFKD",
             reduce(
-                lambda text, pair: text.replace(pair[0], pair[1]),
+                replace_character_pair,
                 character_map.items(),
                 text,
             ),

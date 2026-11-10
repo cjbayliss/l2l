@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 import select
 import sys
@@ -57,7 +58,10 @@ def open_tty() -> IO[Maybe[int]]:
 
         return Just(file_descriptor) if os.isatty(file_descriptor) else NOTHING
 
-    return IO(lambda: maybe_or(from_tty_device(), from_stdin()))
+    def thunk() -> Maybe[int]:
+        return maybe_or(from_tty_device(), from_stdin())
+
+    return IO(thunk)
 
 
 def tty_attributes(file_descriptor: int) -> IO[Maybe[TermiosState]]:
@@ -96,10 +100,14 @@ class TabListener:
         default_factory=threading.Event, repr=False, compare=False
     )
     thread: Reference[threading.Thread | None] = field(
-        default_factory=lambda: Reference(None), repr=False, compare=False
+        default_factory=functools.partial(Reference[threading.Thread | None], None),
+        repr=False,
+        compare=False,
     )
     restored: Reference[bool] = field(
-        default_factory=lambda: Reference(False), repr=False, compare=False
+        default_factory=functools.partial(Reference[bool], False),
+        repr=False,
+        compare=False,
     )
 
     def listen_action(self) -> IO[None]:
@@ -178,13 +186,20 @@ def start_tab_listener(console: Console, toggle: Callable[[], None]) -> IO[IO[No
                     saved=attributes.value,
                     toggle=toggle,
                 )
-                return io_map(listener.start(), lambda _: listener.stop())
+
+                def stop_after_start(_: None) -> IO[None]:
+                    return listener.stop()
+
+                return io_map(listener.start(), stop_after_start)
 
             return io_bind(enter_cbreak(file_descriptor), with_cbreak)
 
         return io_bind(tty_attributes(file_descriptor), with_attributes)
 
+    def without_tty() -> IO[IO[None]]:
+        return io_pure(IO(no_op))
+
     def with_tty(file_descriptor: Maybe[int]) -> IO[IO[None]]:
-        return maybe_either(file_descriptor, attach, lambda: io_pure(IO(no_op)))
+        return maybe_either(file_descriptor, attach, without_tty)
 
     return io_bind(open_tty(), with_tty)

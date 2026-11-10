@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from itertools import accumulate, takewhile
 from typing import Final, final
-lazy from collections.abc import Mapping
+lazy from collections.abc import Callable, Mapping
 
 from l2l.errors import TranslationError, fail_budget, fail_pass
 from l2l.glossary import (
@@ -251,15 +251,21 @@ def earlier_passes_translated_text(earlier_pass_modes: PassModeSet) -> bool:
     return bool(earlier_pass_modes - NON_TEXT_PASS_MODES)
 
 
+def cumulative_total_within_budget(budget_tokens: int) -> Callable[[int], bool]:
+    def within_budget(cumulative_tokens: int) -> bool:
+        return cumulative_tokens <= budget_tokens
+
+    return within_budget
+
+
 def suffix_within_token_budget(
     paragraphs: tuple[str, ...], budget_tokens: int
 ) -> tuple[str, ...]:
     cumulative_sizes = accumulate(
         estimate_tokens(paragraph) for paragraph in reversed(paragraphs)
     )
-    affordable_paragraph_count = len(
-        tuple(takewhile(lambda total: total <= budget_tokens, cumulative_sizes))
-    )
+    within_budget = cumulative_total_within_budget(budget_tokens)
+    affordable_paragraph_count = len(tuple(takewhile(within_budget, cumulative_sizes)))
     return paragraphs[len(paragraphs) - affordable_paragraph_count :]
 
 

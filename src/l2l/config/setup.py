@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import partial
 lazy from collections.abc import Mapping
 
 from l2l.config.api import merged_api_settings
@@ -14,6 +15,7 @@ from l2l.config.languages import resolve_source_language, resolve_target_languag
 from l2l.config.models import DocumentResult, Glossaries, ResolvedPasses, SetupResult
 from l2l.config.parsing import apply_default_options
 from l2l.config.resolution import (
+    FinalizedPasses,
     finalize_passes,
     resolve_filter_settings,
     resolve_passes,
@@ -34,11 +36,13 @@ from l2l.monads import (
 from l2l.settings import (
     Arguments,
     Config,
+    ParagraphTriState,
     PassDefinition,
     Setup,
     effective_target_language,
     value_if_set,
 )
+lazy from l2l.filtering import FilterSettings
 
 
 def validate_ascii_target_language(
@@ -80,6 +84,32 @@ def validate_ascii_target_language(
     return Ok(setup)
 
 
+def setup_from_finalized_passes(
+    config: Config,
+    ensure_paragraphs: ParagraphTriState,
+    target_language: str,
+    source_language: str,
+    finalized: FinalizedPasses,
+) -> Result[Setup, TranslationError]:
+    return validate_ascii_target_language(
+        Setup(
+            config=config,
+            passes=finalized.passes,
+            ensure_paragraphs=ensure_paragraphs,
+            target_language=target_language,
+            source_language=source_language,
+            config_warnings=finalized.warnings,
+        )
+    )
+
+
+def apply_filter_settings(
+    complete_setup: Setup,
+    filter_settings: FilterSettings | None,
+) -> Setup:
+    return replace(complete_setup, filter=filter_settings)
+
+
 def build_setup(
     config: Config,
     pair: Result[ResolvedPasses, TranslationError],
@@ -102,15 +132,12 @@ def build_setup(
                 resolved.global_output_patch,
                 global_ensure,
             ),
-            lambda finalized: validate_ascii_target_language(
-                Setup(
-                    config=config,
-                    passes=finalized.passes,
-                    ensure_paragraphs=effective,
-                    target_language=target_language,
-                    source_language=source_language,
-                    config_warnings=finalized.warnings,
-                )
+            partial(
+                setup_from_finalized_passes,
+                config,
+                effective,
+                target_language,
+                source_language,
             ),
         )
 
@@ -131,32 +158,50 @@ def assemble_setup(
         ],
     ) -> SetupResult:
         resolved, glossaries = pair
+
+        def with_config(config: Config) -> SetupResult:
+            return result_bind(
+                resolve_target_language(path, document_result),
+                partial(with_target_language, config),
+            )
+
+        def with_target_language(config: Config, target_language: str) -> SetupResult:
+            return result_bind(
+                resolve_source_language(path, document_result),
+                partial(with_source_language, config, target_language),
+            )
+
+        def with_source_language(
+            config: Config, target_language: str, source_language: str
+        ) -> SetupResult:
+            return result_bind(
+                build_setup(config, resolved, target_language, source_language),
+                with_built_setup,
+            )
+
+        def with_built_setup(setup: Setup) -> SetupResult:
+            return result_bind(glossaries, partial(with_resolved_glossaries, setup))
+
+        def with_resolved_glossaries(
+            setup: Setup, resolved_glossaries: Glossaries
+        ) -> SetupResult:
+            return result_bind(
+                require_glossary_for_update_passes(
+                    arguments.glossary,
+                    setup_with_glossary(setup, resolved_glossaries),
+                ),
+                with_filter_settings,
+            )
+
+        def with_filter_settings(complete_setup: Setup) -> SetupResult:
+            return result_map(
+                resolve_filter_settings(path, document_result),
+                partial(apply_filter_settings, complete_setup),
+            )
+
         return result_bind(
             merged_api_settings(environment, path, document_result),
-            lambda config: result_bind(
-                resolve_target_language(path, document_result),
-                lambda target_language: result_bind(
-                    resolve_source_language(path, document_result),
-                    lambda source_language: result_bind(
-                        build_setup(config, resolved, target_language, source_language),
-                        lambda setup: result_bind(
-                            glossaries,
-                            lambda resolved_glossaries: result_bind(
-                                require_glossary_for_update_passes(
-                                    arguments.glossary,
-                                    setup_with_glossary(setup, resolved_glossaries),
-                                ),
-                                lambda complete_setup: result_map(
-                                    resolve_filter_settings(path, document_result),
-                                    lambda filter_settings: replace(
-                                        complete_setup, filter=filter_settings
-                                    ),
-                                ),
-                            ),
-                        ),
-                    ),
-                ),
-            ),
+            with_config,
         )
 
     return io_map(
@@ -182,15 +227,18 @@ def load_setup(
 ) -> IO[SetupResult]:
     def with_path(path: str) -> IO[SetupResult]:
         requested = isinstance(arguments.config, str) and bool(arguments.config.strip())
-        return io_bind(
-            read_setup_document(path, requested),
-            lambda document_result: assemble_setup(
+
+        def with_document_result(
+            document_result: DocumentResult,
+        ) -> IO[SetupResult]:
+            return assemble_setup(
                 arguments,
                 environment,
                 path,
                 document_result,
                 resolve_pipeline_passes,
-            ),
-        )
+            )
+
+        return io_bind(read_setup_document(path, requested), with_document_result)
 
     return io_bind(resolve_config_path(arguments.config, environment), with_path)
