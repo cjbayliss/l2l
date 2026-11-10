@@ -250,7 +250,7 @@ def make_console(
     console = Console(
         stream,
         StatusLine(stream, live=live),
-        term_size=lambda: IO(lambda: size()),
+        term_size=lambda: IO(size),
     )
     return console, stream
 

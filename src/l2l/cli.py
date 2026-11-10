@@ -653,7 +653,7 @@ def prune_cache_program(
 
             return io_bind(
                 io_bind(cache_entry_paths(directory), with_entry_paths),
-                lambda pruned: report_cache_prune(pruned),
+                report_cache_prune,
             )
 
         return with_cache_directory(environment, prune)
@@ -711,7 +711,7 @@ def prune_logs_program(
 
             return io_bind(
                 io_bind(run_log_paths(cache_directory), with_log_paths),
-                lambda pruned: report_log_prune(pruned),
+                report_log_prune,
             )
 
         return with_cache_directory(environment, prune)
