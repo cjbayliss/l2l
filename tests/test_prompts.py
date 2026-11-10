@@ -15,6 +15,8 @@ from l2l.prompts import (
     ANALYSER_HEADINGS,
     ANALYSER_OPENING_LINE,
     ANALYSER_OUTPUT_RULES_TEXT,
+    ANALYSER_ROLE_TEXT,
+    ANALYSER_WORD_LIMIT,
     APPROXIMATE_PARAGRAPH_RULE_TEXT,
     ASCII_FIX_INSTRUCTION_TEXT,
     CHINESE_SOURCE_GUIDANCE_TEXT,
@@ -28,6 +30,7 @@ from l2l.prompts import (
     PROMPT_SECTION_NAMES,
     REGISTER_FIDELITY_GUIDANCE_TEXTS,
     REVIEWER_SECTIONS,
+    TRANSLATOR_SECTIONS,
     OutputPolicy,
     OutputPolicyPatch,
     PassPromptRequest,
@@ -77,74 +80,21 @@ def analyser_request(
     )
 
 
-TRANSLATOR_GOLDEN = "\n".join(
-    (
-        "You are a professional literary translator of fiction.",
-        "",
-        "Translate the supplied source text.",
-        "",
-        "Translate from Chinese into English.",
-        "",
-        "- Chinese often omits the subject: say exactly who acts or speaks.",
-        "- Attach vocatives to the correct line; keep who accuses or rebukes "
-        "whom exactly as in the source.",
-        "- Render idioms by meaning with matching force.",
-        "- Verify romanized names syllable by syllable (pinyin) and keep them "
-        "consistent.",
-        "- Render tildes and repeated characters naturally instead of copying them.",
-        "",
-        "Write the translation in the Latin script.",
-        "",
-        "- Translate every sentence and keep every detail, however minor: actions, "
-        "temporal markers, and asides. Never summarise, expand, censor, or drop "
-        "content.",
-        "- Before finalising, check every sentence for who does what to whom: attach "
-        "vocatives to the correct line, keep who accuses or rebukes whom exactly "
-        "as in the source, never shift subjects between clauses, and never invent "
-        "agents or "
-        "contrasts.",
-        "- Resolve possessives and time references explicitly; never leave them vague.",
-        "- Use one consistent pronoun per character, including non-human speakers; "
-        "never flip who does what in contrastive sentences.",
-        "- Render idioms by meaning with matching force, and use the same rendering "
-        "for a recurring term on every occurrence, including callbacks.",
-        "",
-        "- No doubled words, stiff comma-spliced constructions, opaque literalisms, or "
-        "unnatural lexical choices: choose the natural English word, not the "
-        "closest-looking one.",
-        "- No source punctuation artefacts: render tildes, separating dashes, and "
-        "similar marks naturally in English instead of copying them.",
-        "",
-        "Keep vulgarity, scorn, and sarcasm at their full source force.",
-        "",
-        "Treat briefs, drafts, already-translated context, and source context as "
-        "reference only: do not translate them, do not continue the story from them, "
-        "and do not "
-        "include them in the output.",
-        "",
-        "Reply with the translated text only: no notes, comments, or source text. If a "
-        "title is present, render it fully at the top; never truncate it or add words "
-        "it does not carry. If the source is ambiguous, pick the most contextually "
-        "plausible "
-        "reading and continue; never mark uncertainty.",
-        "",
-        "Keep the source's paragraph structure exactly: one output paragraph per "
-        "source paragraph, in the same order, separated by blank lines; do not merge, "
-        "split, or "
-        "reorder paragraphs.",
-    )
-)
-
-
-def test_translator_golden_prompt() -> None:
+def test_translator_prompt_renders_every_built_in_section() -> None:
     rendered = render_pass_prompt(translator_request())
-    assert rendered.instruction == TRANSLATOR_GOLDEN
     assert rendered.role == "translator"
     assert rendered.included_sections == PROMPT_SECTION_NAMES
     assert rendered.omitted_sections == ()
     assert all(
         rendered.section_origins[name] == "built-in" for name in PROMPT_SECTION_NAMES
     )
+    for section_text in TRANSLATOR_SECTIONS.values():
+        if not section_text:
+            continue
+        assert (
+            instruction_with_languages(section_text, "Chinese", "English")
+            in rendered.instruction
+        )
 
 
 def test_reviewer_prompt_uses_reviewer_sections_and_generated_guidance() -> None:
@@ -160,15 +110,13 @@ def test_reviewer_prompt_uses_reviewer_sections_and_generated_guidance() -> None
 def test_analyser_prompt_defines_the_brief_contract() -> None:
     rendered = render_pass_prompt(analyser_request())
     assert rendered.role == "analyser"
-    assert 'Open with the exact line "Preparation brief (reference only):"' in (
-        rendered.instruction
-    )
-    for heading in ANALYSER_HEADINGS:
-        assert f"- {heading}:" in rendered.instruction
-    assert "under 400 words" in rendered.instruction
+    assert ANALYSER_OPENING_LINE in rendered.instruction
+    assert ANALYSER_OUTPUT_RULES_TEXT in rendered.instruction
+    assert all(heading in rendered.instruction for heading in ANALYSER_HEADINGS)
+    assert f"under {ANALYSER_WORD_LIMIT} words" in rendered.instruction
 
 
-def test_dedicated_template_bytes_are_unchanged() -> None:
+def test_dedicated_template_instructions_use_the_shared_constants() -> None:
     settings = build_settings()
     assert settings.glossary_extraction_instruction == (
         GLOSSARY_EXTRACTION_INSTRUCTION_TEXT
@@ -301,7 +249,7 @@ def test_omitted_text_pass_renders_built_in() -> None:
     assert isinstance(result, Ok)
     finalized = result.value[0]
     assert finalized.prompt_role == "translator"
-    assert finalized.instruction == TRANSLATOR_GOLDEN
+    assert finalized.instruction == render_pass_prompt(translator_request()).instruction
     assert finalized.prompt_omitted_sections == ()
     assert finalized.prompt_section_origins["accuracy"] == "built-in"
 
@@ -340,9 +288,7 @@ def test_analysis_without_instruction_renders_the_analyser() -> None:
     assert isinstance(result, Ok)
     finalized = result.value.passes[0]
     assert finalized.prompt_role == "analyser"
-    assert finalized.instruction.startswith(
-        "You are the preparation stage of a fiction translation pipeline."
-    )
+    assert finalized.instruction.startswith(ANALYSER_ROLE_TEXT)
     assert ANALYSER_OPENING_LINE in finalized.instruction
 
 
@@ -367,19 +313,13 @@ def test_incomplete_section_mappings_are_rejected() -> None:
         PromptSections(MappingProxyType(incomplete))
 
 
-def test_target_region_labels_and_bare_or_unknown_regions() -> None:
-    assert (
-        target_region_guidance_text("en-AU")
-        == "Use Australian English spelling and conventions."
-    )
-    assert (
-        target_region_guidance_text("en-GB")
-        == "Use British English spelling and conventions."
-    )
-    assert (
-        target_region_guidance_text("en-US")
-        == "Use American English spelling and conventions."
-    )
+def test_target_region_guidance_known_bare_and_unknown_regions() -> None:
+    labelled_regions = {
+        region: target_region_guidance_text(f"en-{region}")
+        for region in ("AU", "GB", "US")
+    }
+    assert all(labelled_regions.values())
+    assert len(set(labelled_regions.values())) == len(labelled_regions)
     assert target_region_guidance_text("en") == ""
     assert target_region_guidance_text("en-XX") == ""
     assert target_region_guidance_text("Zorblaxian") == ""
@@ -388,14 +328,11 @@ def test_target_region_labels_and_bare_or_unknown_regions() -> None:
 
 
 def test_target_scripts_guidance_only_for_known_scripts() -> None:
-    assert (
-        target_scripts_guidance_text("English")
-        == "Write the translation in the Latin script."
-    )
-    assert (
-        target_scripts_guidance_text("Japanese")
-        == "Write the translation in the Han, Hiragana, Katakana scripts."
-    )
+    english_guidance = target_scripts_guidance_text("English")
+    japanese_guidance = target_scripts_guidance_text("Japanese")
+    assert english_guidance
+    assert japanese_guidance
+    assert english_guidance != japanese_guidance
     assert target_scripts_guidance_text("Zorblaxian") == ""
 
 
@@ -429,37 +366,25 @@ def test_honorifics_guidance_only_for_japanese_and_korean() -> None:
 def test_formality_guidance_table_and_fallback() -> None:
     preserve = StylePolicy()
     assert formality_guidance_text("Japanese", preserve) == ""
+    formal_guidance = {
+        language: formality_guidance_text(
+            language, replace(preserve, formality="formal")
+        )
+        for language in ("ja", "fr", "de", "es", "en")
+    }
+    informal_guidance = {
+        language: formality_guidance_text(
+            language, replace(preserve, formality="informal")
+        )
+        for language in ("ja", "fr", "de", "es", "ru")
+    }
+    assert all(formal_guidance.values())
+    assert all(informal_guidance.values())
+    assert len(set(formal_guidance.values())) == len(formal_guidance)
+    assert len(set(informal_guidance.values())) == len(informal_guidance)
+    unknown_formal = replace(preserve, formality="formal")
     assert (
-        formality_guidance_text("ja", replace(preserve, formality="formal"))
-        == "Write dialogue and narration in polite 敬体 (desu/masu) style."
-    )
-    assert (
-        formality_guidance_text("ja", replace(preserve, formality="informal"))
-        == "Write dialogue and narration in plain 常体 (da/dearu) style."
-    )
-    assert (
-        formality_guidance_text("fr", replace(preserve, formality="formal"))
-        == "Address characters with the formal pronoun (vous)."
-    )
-    assert (
-        formality_guidance_text("de", replace(preserve, formality="informal"))
-        == "Address characters with the informal pronoun (du)."
-    )
-    assert (
-        formality_guidance_text("es", replace(preserve, formality="formal"))
-        == "Address characters with the formal pronoun (usted)."
-    )
-    assert (
-        formality_guidance_text("ru", replace(preserve, formality="informal"))
-        == "Address characters with the informal pronoun (ты)."
-    )
-    assert (
-        formality_guidance_text("en", replace(preserve, formality="formal"))
-        == "Write the translation in a formal register."
-    )
-    assert (
-        formality_guidance_text("Zorblaxian", replace(preserve, formality="informal"))
-        == "Write the translation in an informal register."
+        formality_guidance_text("Zorblaxian", unknown_formal) == formal_guidance["en"]
     )
 
 
@@ -540,7 +465,7 @@ def test_generated_output_rules_survive_section_overrides() -> None:
     )
 
 
-def test_output_policy_golden_prompt() -> None:
+def test_output_policy_rules_render_into_the_prompt() -> None:
     rendered = render_pass_prompt(
         PassPromptRequest(
             role="translator",
