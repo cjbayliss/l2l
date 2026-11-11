@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import partial, reduce
+from itertools import accumulate
 from typing import TextIO, final
 
 from l2l.ascii import enforce_pass_ascii
@@ -1346,10 +1347,16 @@ def run_units(
         environment.glossary,
         earlier_pass_modes,
     )
+    total_paragraphs = sum(len(group) for group in work_groups)
+    shown_paragraph_total = (
+        total_paragraphs if pass_definition.paragraphs_per_call > 0 else 0
+    )
+    done_by_call = tuple(accumulate(len(group) for group in work_groups))
 
-    def unit_part(
-        call: UnitCall,
-    ) -> IO[Result[UnitResult, TranslationError]]:
+    def note_paragraphs_done(done: int) -> IO[None]:
+        return run_context.console.paragraph_progress(done, shown_paragraph_total)
+
+    def run_call(call: UnitCall) -> IO[Result[UnitResult, TranslationError]]:
         if not call.source_chunk:
             return io_and_then(
                 verbose_log(
@@ -1392,7 +1399,22 @@ def run_units(
 
         return run_single_call(environment, call, usage)
 
-    return io_traverse(calls, unit_part)
+    def counted_call(
+        indexed: tuple[UnitCall, int],
+    ) -> IO[Result[UnitResult, TranslationError]]:
+        call, done = indexed
+
+        def counted(
+            result: Result[UnitResult, TranslationError],
+        ) -> IO[Result[UnitResult, TranslationError]]:
+            return io_and_then(note_paragraphs_done(done), io_result(result))
+
+        return io_bind(run_call(call), counted)
+
+    return io_and_then(
+        note_paragraphs_done(0),
+        io_traverse(tuple(zip(calls, done_by_call, strict=True)), counted_call),
+    )
 
 
 def unit_plan_for_pass(

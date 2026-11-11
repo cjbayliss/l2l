@@ -38,6 +38,8 @@ class StatusView:
     label: str = "Working"
     started: float = 0.0
     tokens: int = 0
+    paragraphs_done: int = 0
+    paragraphs_total: int = 0
     prefix: str = ""
     drawn: str = ""
     raw: bool = False
@@ -49,6 +51,8 @@ def status_line_text(view: StatusView, now_value: float) -> str:
         f"{view.label}: time elapsed: {now_value - view.started:.2f}s, "
         f"tokens received: {view.tokens}"
     )
+    if view.paragraphs_total > 0:
+        line += f", paragraphs: [{view.paragraphs_done}/{view.paragraphs_total}]"
     return view.prefix + line if view.prefix else line
 
 
@@ -80,6 +84,10 @@ def start_render(
 
 def progress_render(view: StatusView, label: str, count: int) -> StatusView:
     return replace(view, label=label, tokens=view.tokens + count)
+
+
+def paragraph_progress_render(view: StatusView, done: int, total: int) -> StatusView:
+    return replace(view, paragraphs_done=done, paragraphs_total=total)
 
 
 def raw_begin_render(view: StatusView) -> tuple[StatusView, str]:
@@ -247,14 +255,19 @@ class StatusLine:
         return io_when_unit(self.live, io_and_then(drawn, spawn_ticker_thread(None)))
 
     def progress(self, label: str, count: int = 1) -> IO[None]:
-        def updated(view: StatusView) -> StatusView:
-            return progress_render(view, label, count)
+        return self.update_view(partial(progress_render, label=label, count=count))
 
+    def paragraph_progress(self, done: int, total: int) -> IO[None]:
+        return self.update_view(
+            partial(paragraph_progress_render, done=done, total=total)
+        )
+
+    def update_view(self, render_view: Callable[[StatusView], StatusView]) -> IO[None]:
         return io_when_unit(
             self.live,
             io_atomic(
                 self.lock,
-                io_and_then(modify_reference(self.view, updated), io_pure(None)),
+                io_and_then(modify_reference(self.view, render_view), io_pure(None)),
             ),
         )
 
@@ -662,6 +675,9 @@ class Console:
 
     def progress(self, label: str, count: int = 1) -> IO[None]:
         return self.status.progress(label, count)
+
+    def paragraph_progress(self, done: int, total: int) -> IO[None]:
+        return self.status.paragraph_progress(done, total)
 
     def stop(self) -> IO[None]:
         return self.status.stop()

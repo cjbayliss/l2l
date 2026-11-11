@@ -229,7 +229,7 @@ def test_unit_accepts_multiscript_output_for_japanese() -> None:
 
 
 def test_translate_pass_batches_paragraphs_per_call() -> None:
-    console, stderr = make_console()
+    console, stderr = make_console(live=True)
     http = FakeHttp(
         [
             FakeStreamResponse(
@@ -250,10 +250,12 @@ def test_translate_pass_batches_paragraphs_per_call() -> None:
     assert state.kind is ExitKind.SUCCESS
     assert stdout.getvalue() == "One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n"
     assert len(http.requests) == 2
+    logged = stderr.getvalue()
     assert (
         "l2l: [translate] 5 paragraph(s) in 2 call(s), up to 3 paragraph(s) per call"
-        in stderr.getvalue()
+        in logged
     )
+    assert "paragraphs: [3/5]" in logged
 
 
 def test_paragraph_count_mismatch_demotes_batches_to_one_paragraph_per_call() -> None:

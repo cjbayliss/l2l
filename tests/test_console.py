@@ -14,6 +14,7 @@ from l2l.console import (
     event_visible,
     finish_render,
     interrupt_render,
+    paragraph_progress_render,
     progress_render,
     raw_begin_render,
     raw_end_render,
@@ -38,6 +39,9 @@ def test_status_line_text_and_draw_render() -> None:
     assert status_line_text(
         StatusView(label="Working", started=10.0, tokens=5), 10.0
     ).startswith("Working: time elapsed: 0.00s")
+    assert status_line_text(paragraph_progress_render(view, 12, 123), 12.5) == (
+        "p: Working: time elapsed: 2.50s, tokens received: 5, paragraphs: [12/123]"
+    )
     assert status_erase_text(StatusView(drawn="abc")) == "\r" + " " * 3 + "\r"
     assert status_erase_text(StatusView()) == ""
 
@@ -187,9 +191,12 @@ def test_status_line_live_progress_and_finish() -> None:
     status = StatusLine(stream, live=True, monotonic=lambda: next(ticks, 9.0))
     status.start("Working").run()
     status.progress("Working", 3).run()
+    status.paragraph_progress(12, 123).run()
+    status.tick_action().run()
     status.finish("Done: 2.0s").run()
     output = stream.getvalue()
     assert output.startswith("\rWorking")
+    assert "tokens received: 3, paragraphs: [12/123]" in output
     assert output.endswith("Done: 2.0s\n")
 
 
@@ -198,6 +205,7 @@ def test_status_line_without_live_is_quiet() -> None:
     status = StatusLine(stream, live=False)
     status.start("Working").run()
     status.progress("Working", 1).run()
+    status.paragraph_progress(12, 123).run()
     status.stop().run()
     assert stream.getvalue() == ""
 
