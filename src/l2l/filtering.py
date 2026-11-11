@@ -61,16 +61,12 @@ def normalized_paragraph(text: str) -> str:
 
 
 def duplicate_paragraph_removals(paragraphs: tuple[str, ...]) -> tuple[int, ...]:
-    seen: set[str] = set()
-    duplicates: list[int] = []
-    for index, paragraph in enumerate(paragraphs):
-        body = normalized_paragraph(paragraph)
-        if body in seen:
-            duplicates.append(index)
-        else:
-            seen.add(body)
-
-    return tuple(duplicates)
+    normalized = tuple(normalized_paragraph(paragraph) for paragraph in paragraphs)
+    return tuple(
+        index
+        for index in range(1, len(normalized))
+        if normalized[index] == normalized[index - 1]
+    )
 
 
 def pattern_paragraph_removals(

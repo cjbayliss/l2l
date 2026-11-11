@@ -386,7 +386,7 @@ def test_built_in_filters_remove_paragraphs_before_translation(
             "--verbose",
         ],
         cache_environment(tmp_path),
-        io.StringIO("Keep one\n\nDrop 12\n\nKeep one\n\nx\n\nKeep two"),
+        io.StringIO("Keep one\n\nKeep one\n\nDrop 12\n\nx\n\nKeep two"),
         stdout,
         stderr,
         time.time,
@@ -403,7 +403,7 @@ def test_built_in_filters_remove_paragraphs_before_translation(
     assert "filter 'duplicate_paragraphs': removed 1 of 5 paragraph(s)" in log
     assert "filter 'pattern': removed 1 of 5 paragraph(s)" in log
     assert "filter 'short_paragraphs': removed 1 of 5 paragraph(s)" in log
-    assert "removed paragraph 3: 'Keep one'" in log
+    assert "removed paragraph 2: 'Keep one'" in log
 
 
 def test_filter_script_runs_before_dry_run_planning(tmp_path: Path) -> None:

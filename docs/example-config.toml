@@ -141,8 +141,8 @@ retranslate_untranslated = false
 # Built-in filters, applied in array order to the paragraph list.
 # Each entry is either the string "duplicate_paragraphs" (shorthand) or
 # a table with a "kind" key. Kinds:
-#   - duplicate_paragraphs: drop paragraphs that repeat an earlier
-#     paragraph after whitespace normalization (no extra keys)
+#   - duplicate_paragraphs: drop paragraphs that repeat the immediately
+#     preceding paragraph after whitespace normalization (no extra keys)
 #   - pattern: drop paragraphs matching a regular expression
 #     (requires the "pattern" key)
 #   - short_paragraphs: drop paragraphs shorter than a character count

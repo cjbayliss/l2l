@@ -18,8 +18,15 @@ lazy from l2l.config.models import DocumentResult
 
 def test_removal_helpers_normalize_whitespace() -> None:
     paragraphs = ("First\tparagraph", "Noise", "First  paragraph")
-    assert duplicate_paragraph_removals(paragraphs) == (2,)
+    assert duplicate_paragraph_removals(paragraphs) == ()
     assert short_paragraph_removals((" \t ", "ab", " a b ", "abcd"), 3) == (0, 1)
+
+
+def test_duplicate_paragraph_removals_drops_repeats_of_the_previous_only() -> None:
+    paragraphs = ("Same", "Same  ", "Different", "Same", "Same", "Different", "Same")
+    assert duplicate_paragraph_removals(paragraphs) == (1, 4)
+    assert duplicate_paragraph_removals(()) == ()
+    assert duplicate_paragraph_removals(("Only",)) == ()
 
 
 def test_spec_removals_handles_each_kind_and_pattern_fallback() -> None:
@@ -27,14 +34,14 @@ def test_spec_removals_handles_each_kind_and_pattern_fallback() -> None:
     duplicate = FilterSpec("duplicate_paragraphs")
     pattern = FilterSpec("pattern", pattern=re.compile(r"\d+"))
     short = FilterSpec("short_paragraphs", minimum_characters=7)
-    assert spec_removals(duplicate, paragraphs) == (2,)
+    assert spec_removals(duplicate, paragraphs) == ()
     assert spec_removals(pattern, paragraphs) == (1,)
     assert spec_removals(short, paragraphs) == (0, 2)
     assert spec_removals(FilterSpec("pattern"), paragraphs) == ()
 
 
 def test_filter_paragraphs_composes_filters_and_canonicalizes_separators() -> None:
-    text = "First\n\nDrop 12\n\n\nFirst\n\nTiny\n\nLast paragraph"
+    text = "First\n\nDrop 12\n\n\nFirst\n\nFirst\n\nTiny\n\nLast paragraph"
     outcome = filter_paragraphs(
         text,
         (
@@ -43,12 +50,12 @@ def test_filter_paragraphs_composes_filters_and_canonicalizes_separators() -> No
             FilterSpec("short_paragraphs", minimum_characters=5),
         ),
     )
-    assert outcome.text == "First\n\nLast paragraph"
-    assert outcome.paragraph_count == 5
+    assert outcome.text == "First\n\nFirst\n\nLast paragraph"
+    assert outcome.paragraph_count == 6
     assert tuple((removal.index, removal.kind) for removal in outcome.removals) == (
-        (2, "duplicate_paragraphs"),
+        (3, "duplicate_paragraphs"),
         (1, "pattern"),
-        (3, "pattern"),
+        (4, "pattern"),
     )
     assert removal_counts(outcome.removals) == (
         ("duplicate_paragraphs", 1),
