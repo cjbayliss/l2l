@@ -33,6 +33,7 @@ from l2l.glossary import (
     integrate_glossary_reply,
     parse_model_glossary_reply,
     select_glossary_entries_for_texts,
+    substitute_glossary_terms,
 )
 from l2l.http import RepairOutcome, RepairPolicy, chat, repaired_call
 from l2l.languages import (
@@ -1132,6 +1133,16 @@ def run_unit(
         (call.source_chunk, call.work_chunk),
     )
 
+    def substituted(text: str) -> str:
+        if not pass_definition.substitute_glossary_terms:
+            return text
+
+        return substitute_glossary_terms(unit_glossary_entries, text)
+
+    substituted_source_chunk = substituted(call.source_chunk)
+    substituted_work_chunk = substituted(call.work_chunk)
+    substituted_context = tuple(substituted(paragraph) for paragraph in call.context)
+
     def validate(output: str) -> Maybe[str]:
         return maybe_or(
             unit_output_problem(
@@ -1157,9 +1168,9 @@ def run_unit(
 
     def build_retry_user(bad_output: str, problem: str) -> str:
         return build_unit_retry_user(
-            call.source_chunk,
-            call.work_chunk,
-            call.context,
+            substituted_source_chunk,
+            substituted_work_chunk,
+            substituted_context,
             bad_output,
             problem,
             call.translated_context,
@@ -1204,7 +1215,10 @@ def run_unit(
                 unit_glossary_entries,
             ),
             build_pass_user(
-                call.source_chunk, call.work_chunk, call.analysis, call.context
+                substituted_source_chunk,
+                substituted_work_chunk,
+                call.analysis,
+                substituted_context,
             ),
             RepairPolicy(
                 validate=validate,

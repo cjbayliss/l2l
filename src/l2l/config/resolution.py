@@ -223,6 +223,9 @@ def finalized_pass_definition(
         ascii=value_if_set(pass_draft.ascii),
         ensure_paragraphs=value_if_set(pass_draft.ensure_paragraphs),
         retranslate_untranslated=value_if_set(pass_draft.retranslate_untranslated),
+        substitute_glossary_terms=bool(
+            value_if_set(pass_draft.substitute_glossary_terms)
+        ),
         target_language=value_if_set(pass_draft.target_language),
         include_types=pass_draft.include_types,
         style=style_policy,

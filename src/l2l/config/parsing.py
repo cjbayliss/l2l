@@ -75,7 +75,13 @@ def parse_options_table(
         return fail_config(f"{path}: [options] must be a table")
 
     unknown = sorted(
-        set(table) - {"ascii", "ensure_paragraphs", "retranslate_untranslated"}
+        set(table)
+        - {
+            "ascii",
+            "ensure_paragraphs",
+            "retranslate_untranslated",
+            "substitute_glossary_terms",
+        }
     )
     if unknown:
         return fail_config(
@@ -99,11 +105,18 @@ def parse_options_table(
             f"{path}: [options] retranslate_untranslated must be true or false"
         )
 
+    substitute_glossary_terms = table.get("substitute_glossary_terms", False)
+    if not isinstance(substitute_glossary_terms, bool):
+        return fail_config(
+            f"{path}: [options] substitute_glossary_terms must be true or false"
+        )
+
     return Ok(
         OptionDefaults(
             ascii=ascii_value,
             ensure_paragraphs=ensure_paragraphs,
             retranslate_untranslated=retranslate_untranslated,
+            substitute_glossary_terms=substitute_glossary_terms,
             ensure_paragraphs_explicit="ensure_paragraphs" in table,
         )
     )
@@ -329,6 +342,22 @@ def pass_draft_from(
             f"{path}: [pass.{name}]: retranslate_untranslated must be true or false"
         )
 
+    substitute_value = table.get("substitute_glossary_terms")
+    if substitute_value is None:
+        substitute_setting: bool | Unset = UNSET
+    elif isinstance(substitute_value, bool):
+        substitute_setting = substitute_value
+    else:
+        return fail_config(
+            f"{path}: [pass.{name}]: substitute_glossary_terms must be true or false"
+        )
+
+    if substitute_setting is not UNSET and mode not in ("translate", "review"):
+        return fail_config(
+            f"{path}: [pass.{name}]: substitute_glossary_terms applies only "
+            "to translate and review passes"
+        )
+
     model_value = table.get("model")
     if model_value is None:
         model: str | Unset = UNSET
@@ -384,6 +413,7 @@ def pass_draft_from(
             ascii=ascii_setting,
             ensure_paragraphs=ensure_paragraphs_setting,
             retranslate_untranslated=retranslate_setting,
+            substitute_glossary_terms=substitute_setting,
             target_language=target_language,
             include_types=tuple(include_types_value),
             prompts=prompts,
@@ -418,6 +448,11 @@ def apply_default_options(
                 options.retranslate_untranslated
                 if isinstance(pass_draft.retranslate_untranslated, Unset)
                 else pass_draft.retranslate_untranslated
+            ),
+            substitute_glossary_terms=(
+                options.substitute_glossary_terms
+                if isinstance(pass_draft.substitute_glossary_terms, Unset)
+                else pass_draft.substitute_glossary_terms
             ),
         )
         for pass_draft in pass_drafts

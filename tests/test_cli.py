@@ -614,6 +614,108 @@ def test_translation_request_carries_glossary_block(tmp_path: Path) -> None:
     assert '- 南京 = "Nanjing"' in system
 
 
+def glossary_substitution_config(
+    options_setting: str | None, pass_setting: str | None
+) -> str:
+    config = CONFIG_TEXT
+    if options_setting is not None:
+        config += "\n[options]\n" + f"substitute_glossary_terms = {options_setting}\n"
+    if pass_setting is not None:
+        config = config.replace(
+            'instruction = "Translate to {target_language}."',
+            'instruction = "Translate to {target_language}."\n'
+            + f"substitute_glossary_terms = {pass_setting}",
+        )
+    return config
+
+
+def run_glossary_substitution_request(
+    tmp_path: Path, config_text: str
+) -> tuple[FakeHttp, ExitState, str]:
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text(
+        '[{"original": "南京", "translated": "Nanjing"}, {"original": "拳法"}]',
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "l2l.toml"
+    config_path.write_text(config_text)
+    chunks: list[JsonObject] = [
+        *stream_chunks("Hello."),
+        {"choices": [{"delta": {}}], "usage": USAGE},
+    ]
+    http = FakeHttp([FakeStreamResponse(chunks)])
+    stdout, stderr = io.StringIO(), io.StringIO()
+    state = cli.main(
+        [
+            "-c",
+            str(config_path),
+            "--no-cache",
+            "--glossary",
+            str(glossary),
+        ],
+        cache_environment(tmp_path),
+        io.StringIO("你好南京。"),
+        stdout,
+        stderr,
+        time.time,
+        http.open,
+    ).run()
+    assert state.kind is ExitKind.SUCCESS
+    return http, state, stdout.getvalue()
+
+
+def test_translation_request_substitutes_glossary_terms(tmp_path: Path) -> None:
+    http, _state, _stdout = run_glossary_substitution_request(
+        tmp_path, glossary_substitution_config("true", None)
+    )
+    payload = json.loads(http.requests[0].body.decode("utf-8"))
+    system = payload["messages"][0]["content"]
+    user = payload["messages"][1]["content"]
+    assert "Glossary (mandatory)" in system
+    assert '- 南京 = "Nanjing"' in system
+    assert "Nanjing" in user
+    assert "南京" not in user
+
+
+def test_translation_request_without_substitution_keeps_source(tmp_path: Path) -> None:
+    http, _state, _stdout = run_glossary_substitution_request(
+        tmp_path, glossary_substitution_config(None, None)
+    )
+    payload = json.loads(http.requests[0].body.decode("utf-8"))
+    user = payload["messages"][1]["content"]
+    assert "南京" in user
+    assert "Nanjing" not in user
+
+
+def test_pass_substitute_glossary_terms_overrides_options(tmp_path: Path) -> None:
+    http, _state, _stdout = run_glossary_substitution_request(
+        tmp_path, glossary_substitution_config("true", "false")
+    )
+    payload = json.loads(http.requests[0].body.decode("utf-8"))
+    user = payload["messages"][1]["content"]
+    assert "南京" in user
+    assert "Nanjing" not in user
+
+
+@pytest.mark.parametrize(
+    ("pass_table", "problem"),
+    [
+        ('mode = "analysis"\nsubstitute_glossary_terms = true', "applies only"),
+        ('substitute_glossary_terms = "yes"', "must be true or false"),
+    ],
+)
+def test_substitute_glossary_terms_config_errors(
+    tmp_path: Path, pass_table: str, problem: str
+) -> None:
+    config_path = tmp_path / "broken.toml"
+    config_path.write_text(CONFIG_TEXT + "\n[pass.prep]\n" + pass_table + "\n")
+    state, _stdout, _stderr = run_l2l(
+        tmp_path, ["-c", str(config_path), "--check-config"]
+    )
+    assert state.kind is ExitKind.USAGE_ERROR
+    assert f"substitute_glossary_terms {problem}" in final_message(state)
+
+
 def run_extract_glossary(
     tmp_path: Path,
     arguments: list[str],

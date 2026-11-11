@@ -212,6 +212,9 @@ def test_parse_options_table() -> None:
     assert parse_options_table("f", {"retranslate_untranslated": True}) == Ok(
         OptionDefaults(retranslate_untranslated=True)
     )
+    assert parse_options_table("f", {"substitute_glossary_terms": True}) == Ok(
+        OptionDefaults(substitute_glossary_terms=True)
+    )
     assert isinstance(parse_options_table("f", {"ascii": "yes"}), Err)
     for bad in ("yes", 0, -1, 1.5, None):
         result = parse_options_table("f", {"ensure_paragraphs": bad})
@@ -223,6 +226,11 @@ def test_parse_options_table() -> None:
         result = parse_options_table("f", {"retranslate_untranslated": bad})
         assert isinstance(result, Err)
         assert "retranslate_untranslated must be true or false" in describe(
+            result.error
+        )
+        result = parse_options_table("f", {"substitute_glossary_terms": bad})
+        assert isinstance(result, Err)
+        assert "substitute_glossary_terms must be true or false" in describe(
             result.error
         )
     assert isinstance(parse_options_table("f", {"other": 1}), Err)
@@ -287,6 +295,31 @@ def test_pass_draft_from() -> None:
     assert isinstance(result, Ok)
     assert result.value.retranslate_untranslated is True
 
+    result = pass_draft_from(
+        "f", "p", {"mode": "translate", "substitute_glossary_terms": True}, "inst"
+    )
+    assert isinstance(result, Ok)
+    assert result.value.substitute_glossary_terms is True
+
+    for mode in ("analysis", "update_glossary"):
+        result = pass_draft_from(
+            "f", "p", {"mode": mode, "substitute_glossary_terms": True}, "inst"
+        )
+        assert isinstance(result, Err)
+        assert (
+            "substitute_glossary_terms applies only to translate and review "
+            "passes" in describe(result.error)
+        )
+
+    for bad in ("yes", 0, -1, 1.5):
+        result = pass_draft_from(
+            "f", "p", {"mode": "translate", "substitute_glossary_terms": bad}, "inst"
+        )
+        assert isinstance(result, Err)
+        assert "substitute_glossary_terms must be true or false" in describe(
+            result.error
+        )
+
     for bad in ("yes", 0, -1, 1.5):
         result = pass_draft_from(
             "f", "p", {"mode": "translate", "retranslate_untranslated": bad}, "inst"
@@ -333,7 +366,10 @@ def test_apply_default_options() -> None:
     applied = apply_default_options(
         passes,
         OptionDefaults(
-            ascii=True, ensure_paragraphs=True, retranslate_untranslated=True
+            ascii=True,
+            ensure_paragraphs=True,
+            retranslate_untranslated=True,
+            substitute_glossary_terms=True,
         ),
         False,
     )
@@ -342,11 +378,12 @@ def test_apply_default_options() -> None:
             pass_draft.ascii,
             pass_draft.ensure_paragraphs,
             pass_draft.retranslate_untranslated,
+            pass_draft.substitute_glossary_terms,
         )
         for pass_draft in applied
     ] == [
-        (True, True, True),
-        (True, False, True),
+        (True, True, True, True),
+        (True, False, True, True),
     ]
 
     applied = apply_default_options(
@@ -359,12 +396,20 @@ def test_apply_default_options() -> None:
             pass_draft.ascii,
             pass_draft.ensure_paragraphs,
             pass_draft.retranslate_untranslated,
+            pass_draft.substitute_glossary_terms,
         )
         for pass_draft in applied
     ] == [
-        (False, True, False),
-        (True, False, True),
+        (False, True, False, False),
+        (True, False, True, False),
     ]
+
+    overridden = apply_default_options(
+        (PassDraft("c", "translate", "i", {}, UNSET, UNSET, UNSET, UNSET, False),),
+        OptionDefaults(substitute_glossary_terms=True),
+        False,
+    )
+    assert overridden[0].substitute_glossary_terms is False
 
 
 def test_build_setup_resolves_ensure_paragraphs_precedence() -> None:
@@ -418,7 +463,7 @@ def test_resolve_call_settings() -> None:
 def test_pass_salt_includes_glossary_and_effective_language() -> None:
     pass_definition = PassDefinition("p", "i", "translate", {}, None, False)
     assert pass_salt(pass_definition) == (
-        CACHE_SALT_VERSION + "\x00p\x00i\x00\x00\x00[]\n"
+        CACHE_SALT_VERSION + "\x00p\x00i\x00\x00\x00[]\n\x00"
     )
     entries = (GlossaryEntry("南京", "Nanjing", None, "other"),)
     salted = pass_salt(pass_definition, entries)
@@ -433,6 +478,16 @@ def test_pass_salt_includes_glossary_and_effective_language() -> None:
     assert pass_salt(glossary_pass, effective_language="Chinese") == pass_salt(
         replace(glossary_pass, target_language="Chinese"),
         effective_language="Chinese",
+    )
+
+
+def test_pass_salt_includes_substitution_component() -> None:
+    pass_definition = PassDefinition("p", "i", "translate", {}, None, False)
+    substituted = replace(pass_definition, substitute_glossary_terms=True)
+    assert pass_salt(substituted) != pass_salt(pass_definition)
+    assert pass_salt(substituted) == pass_salt(substituted)
+    assert retranslation_salt(substituted) == (
+        pass_salt(substituted) + "\x00retranslate"
     )
 
 
@@ -496,7 +551,7 @@ def test_cache_salts_follow_the_documented_version_bump() -> None:
     )
     legacy = "5\x00p\x00i\x00english\x00[]\n"
     assert current != legacy
-    assert current == "6\x00p\x00i\x00english\x00Chinese\x00[]\n"
+    assert current == "6\x00p\x00i\x00english\x00Chinese\x00[]\n\x00"
     assert cache_key("text", "model", current) != cache_key("text", "model", legacy)
 
 

@@ -139,6 +139,54 @@ def select_glossary_entries_for_texts(
     return tuple(entry for entry in entries if entry in matched)
 
 
+def substitutable_glossary_entries(
+    entries: tuple[GlossaryEntry, ...],
+) -> tuple[GlossaryEntry, ...]:
+    return tuple(
+        entry
+        for entry in entries
+        if entry.translated is not None and entry.translated != entry.original
+    )
+
+
+def substitute_glossary_terms(entries: tuple[GlossaryEntry, ...], text: str) -> str:
+    ordered_entries = tuple(
+        sorted(
+            (
+                entry
+                for entry in substitutable_glossary_entries(entries)
+                if entry.original
+            ),
+            key=original_length,
+            reverse=True,
+        )
+    )
+    if not ordered_entries:
+        return text
+
+    def advance(
+        state: tuple[int, tuple[str, ...]], _: int
+    ) -> tuple[int, tuple[str, ...]]:
+        position, segments = state
+        if position >= len(text):
+            return state
+
+        entry = longest_glossary_match_at(ordered_entries, text, position)
+        match entry:
+            case None:
+                return (position + 1, (*segments, text[position]))
+
+            case _:
+                return (
+                    position + len(entry.original),
+                    (*segments, entry.translated or ""),
+                )
+
+    start: tuple[int, tuple[str, ...]] = (0, ())
+    _, segments = reduce(advance, range(len(text)), start)
+    return "".join(segments)
+
+
 def untranslated_glossary_entries(
     entries: tuple[GlossaryEntry, ...], output: str
 ) -> tuple[GlossaryEntry, ...]:

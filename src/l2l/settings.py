@@ -80,6 +80,7 @@ class PassDefinition:
     ascii: bool | None
     ensure_paragraphs: ParagraphTriState | None = None
     retranslate_untranslated: bool | None = None
+    substitute_glossary_terms: bool = False
     target_language: str | None = None
     include_types: tuple[str, ...] = ()
     style: StylePolicy = field(default_factory=StylePolicy)
@@ -106,6 +107,7 @@ class PassDraft:
     ascii: bool | Unset = UNSET
     ensure_paragraphs: ParagraphTriState | Unset = UNSET
     retranslate_untranslated: bool | Unset = UNSET
+    substitute_glossary_terms: bool | Unset = UNSET
     target_language: str | Unset = UNSET
     include_types: tuple[str, ...] = ()
     prompts: Mapping[PromptSectionName, PromptSectionOverride] = MappingProxyType({})
@@ -140,6 +142,7 @@ class OptionDefaults:
     ascii: bool = False
     ensure_paragraphs: ParagraphTriState = False
     retranslate_untranslated: bool = False
+    substitute_glossary_terms: bool = False
     ensure_paragraphs_explicit: bool = False
 
 
@@ -262,6 +265,7 @@ PASS_KEYS: Final = (
     "ascii",
     "ensure_paragraphs",
     "retranslate_untranslated",
+    "substitute_glossary_terms",
     "model",
     "params",
     "target_language",
@@ -372,6 +376,12 @@ def glossary_salt_component(
             return entries_to_json_text(glossary)
 
 
+def substitution_salt_component(pass_definition: PassDefinition) -> str:
+    return (
+        "substitute_glossary_terms" if pass_definition.substitute_glossary_terms else ""
+    )
+
+
 def output_policy_salt_component(pass_definition: PassDefinition) -> str:
     if pass_definition.prompt_role is None:
         return ""
@@ -403,6 +413,7 @@ def pass_salt(
         normalized_language_name(effective_language),
         normalized_source_language(source_language),
         glossary_salt_component(pass_definition, glossary),
+        substitution_salt_component(pass_definition),
     )
     output_component = output_policy_salt_component(pass_definition)
     if output_component:

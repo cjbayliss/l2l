@@ -121,6 +121,15 @@ ensure_paragraphs = false
 # retranslation salt so they do not hit the same cache entry. Defaults to false.
 retranslate_untranslated = false
 
+# When true, each glossary entry's "original" term is rewritten with its
+# "translated" rendering directly in the source text before it is sent
+# to the model, instead of only instructing the model to use the
+# renderings. Entries without a distinct translated rendering are left
+# untouched. The glossary block is still sent with the prompt. Can be
+# overridden per pass with [pass.<name>].substitute_glossary_terms (only
+# on translate and review passes). Defaults to false.
+substitute_glossary_terms = false
+
 # ---------------------------------------------------------------------------
 # Filtering
 # ---------------------------------------------------------------------------
@@ -296,6 +305,12 @@ ensure_paragraphs = true
 # Re-send untranslated paragraphs once after the pass (see
 # [options].retranslate_untranslated).
 retranslate_untranslated = true
+
+# Rewrite glossary originals in the source text with their translated
+# renderings before the call (see [options].substitute_glossary_terms).
+# Applies only to translate and review passes; the glossary block is
+# still sent with the prompt. Defaults to the [options] value.
+substitute_glossary_terms = false
 
 # Target language override for this pass only; defaults to the global
 # target_language. Non-empty string.

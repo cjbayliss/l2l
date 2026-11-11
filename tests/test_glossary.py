@@ -16,6 +16,8 @@ from l2l.glossary import (
     parse_model_glossary_reply,
     render_glossary_block,
     select_glossary_entries_for_texts,
+    substitutable_glossary_entries,
+    substitute_glossary_terms,
     untranslated_glossary_entries,
 )
 from l2l.json_values import JsonObject, JsonValue, is_json_object, is_string_array
@@ -201,6 +203,46 @@ def test_untranslated_glossary_entries_flags_leftover_originals() -> None:
     assert untranslated_glossary_entries(entries, "Lin Daiyu smiled.") == ()
     assert untranslated_glossary_entries(entries, "林黛玉 smiled.") == (entries[0],)
     assert untranslated_glossary_entries(entries, "拳法 and TCP") == ()
+
+
+def test_substitutable_glossary_entries_skips_unrendered_entries() -> None:
+    entries = (
+        entry("林黛玉", "Lin Daiyu", "she/her", "character"),
+        entry("拳法"),
+        entry("TCP", "TCP"),
+        entry("金陵", "  ", entry_type="place"),
+    )
+    assert substitutable_glossary_entries(entries) == (entries[0],)
+
+
+def test_substitute_glossary_terms_prefers_longest_original() -> None:
+    entries = (
+        entry("黛玉", "Daiyu", "she/her", "character"),
+        entry("林黛玉", "Lin Daiyu", "she/her", "character"),
+    )
+    assert substitute_glossary_terms(entries, "林黛玉遇见黛玉。") == (
+        "Lin Daiyu遇见Daiyu。"
+    )
+
+
+def test_substitute_glossary_terms_replaces_every_occurrence() -> None:
+    entries = (entry("南京", "Nanjing", entry_type="place"),)
+    assert substitute_glossary_terms(entries, "南京到南京。") == "Nanjing到Nanjing。"
+    assert substitute_glossary_terms(entries, "金陵到金陵。") == "金陵到金陵。"
+
+
+def test_substitute_glossary_terms_without_entries_returns_text() -> None:
+    text = "你好南京。"
+    assert substitute_glossary_terms((), text) == text
+    assert substitute_glossary_terms((entry("拳法"),), text) == text
+
+
+def test_substitute_glossary_terms_does_not_rescan_output() -> None:
+    entries = (
+        entry("A", "B"),
+        entry("B", "C"),
+    )
+    assert substitute_glossary_terms(entries, "AAA") == "BBB"
 
 
 @pytest.mark.parametrize(
