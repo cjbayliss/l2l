@@ -791,6 +791,58 @@ def test_finalized_pass_definition_forwards_paragraphs_per_call() -> None:
     assert result.value[0].paragraphs_per_call == 3
 
 
+def test_pass_draft_from_parses_concurrent_calls() -> None:
+    absent = pass_draft_from("f", "p", {"instruction": "i"}, None)
+    assert isinstance(absent, Ok)
+    assert absent.value.concurrent_calls is UNSET
+
+    for mode in ("translate", "review"):
+        allowed = pass_draft_from("f", "p", {"mode": mode, "concurrent_calls": 2}, None)
+        assert isinstance(allowed, Ok)
+        assert allowed.value.concurrent_calls == 2
+
+    for bad in (0, -1, True, 1.5, "many", "4"):
+        result = pass_draft_from(
+            "f", "p", {"mode": "translate", "concurrent_calls": bad}, "inst"
+        )
+        assert isinstance(result, Err)
+        assert "concurrent_calls must be a positive integer" in describe(result.error)
+
+    for mode in ("analysis", "update_glossary"):
+        result = pass_draft_from("f", "p", {"mode": mode, "concurrent_calls": 2}, None)
+        assert isinstance(result, Err)
+        assert (
+            "concurrent_calls applies only to translate and review passes"
+            in describe(result.error)
+        )
+
+
+def test_finalized_pass_definition_forwards_concurrent_calls() -> None:
+    for draft_concurrent_calls, expected in ((2, 2), (UNSET, 1)):
+        draft = PassDraft(
+            "p",
+            "translate",
+            None,
+            {},
+            UNSET,
+            False,
+            paragraphs_per_call=3,
+            concurrent_calls=draft_concurrent_calls,
+        )
+        result = finalize_pass_draft(
+            draft,
+            "translator",
+            "English",
+            "Chinese",
+            {},
+            StylePolicyPatch(),
+            OutputPolicyPatch(),
+            None,
+        )
+        assert isinstance(result, Ok)
+        assert result.value[0].concurrent_calls == expected
+
+
 def test_pass_draft_from_rejects_bad_fields() -> None:
     result = pass_draft_from("f", "p", {"mode": "translate", "ascii": "yes"}, "i")
     assert isinstance(result, Err)

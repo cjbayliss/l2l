@@ -321,6 +321,12 @@ target_language = "English"
 # token-budget grouping. Applies only to translate and review passes.
 paragraphs_per_call = 4
 
+# Send up to this many chunk calls concurrently. Positive integer;
+# defaults to 1 (one call at a time, stopping at the first failed
+# call). Higher values run calls to completion even after one fails.
+# Applies only to translate and review passes.
+concurrent_calls = 4
+
 # Per-pass prompt section overrides. Same section names and value
 # forms as the global [prompts] table, but applies only to this pass,
 # on top of the global overrides. Only allowed for built-in rendered

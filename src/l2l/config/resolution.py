@@ -237,6 +237,11 @@ def finalized_pass_definition(
             if isinstance(pass_draft.paragraphs_per_call, Unset)
             else pass_draft.paragraphs_per_call
         ),
+        concurrent_calls=(
+            1
+            if isinstance(pass_draft.concurrent_calls, Unset)
+            else pass_draft.concurrent_calls
+        ),
         prompt_role=prompt_role,
         prompt_sections=prompt_sections,
         prompt_omitted_sections=prompt_omitted_sections,

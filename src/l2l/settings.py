@@ -88,6 +88,7 @@ class PassDefinition:
     unit_paragraph_tolerance: int | None = None
     pass_paragraph_tolerance: int | None = None
     paragraphs_per_call: int = 0
+    concurrent_calls: int = 1
     prompt_role: PromptRole | None = None
     prompt_sections: tuple[PromptSectionName, ...] = ()
     prompt_omitted_sections: tuple[PromptSectionName, ...] = ()
@@ -115,6 +116,7 @@ class PassDraft:
     output_patch: OutputPolicyPatch = field(default_factory=OutputPolicyPatch)
     ensure_paragraphs_explicit: ParagraphTriState | Unset = UNSET
     paragraphs_per_call: int | Unset = UNSET
+    concurrent_calls: int | Unset = UNSET
 
 
 @final
@@ -274,6 +276,7 @@ PASS_KEYS: Final = (
     "style",
     "output",
     "paragraphs_per_call",
+    "concurrent_calls",
 )
 
 

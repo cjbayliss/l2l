@@ -313,6 +313,26 @@ def pass_draft_from(
             "to translate and review passes"
         )
 
+    concurrent_calls_value = table.get("concurrent_calls")
+    if concurrent_calls_value is None:
+        concurrent_calls: int | Unset = UNSET
+    elif (
+        not isinstance(concurrent_calls_value, bool)
+        and isinstance(concurrent_calls_value, int)
+        and concurrent_calls_value >= 1
+    ):
+        concurrent_calls = concurrent_calls_value
+    else:
+        return fail_config(
+            f"{path}: [pass.{name}]: concurrent_calls must be a positive integer"
+        )
+
+    if concurrent_calls is not UNSET and mode not in ("translate", "review"):
+        return fail_config(
+            f"{path}: [pass.{name}]: concurrent_calls applies only "
+            "to translate and review passes"
+        )
+
     ascii_value = table.get("ascii")
     if ascii_value is None:
         ascii_setting: bool | Unset = UNSET
@@ -421,6 +441,7 @@ def pass_draft_from(
             output_patch=output_patch,
             ensure_paragraphs_explicit=ensure_paragraphs_setting,
             paragraphs_per_call=paragraphs_per_call,
+            concurrent_calls=concurrent_calls,
         )
     )
 

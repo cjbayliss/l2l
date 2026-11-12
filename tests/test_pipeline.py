@@ -1,7 +1,9 @@
 import io
 import json
+import threading
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final, final
+lazy from collections.abc import Callable
 lazy from pathlib import Path
 
 from fakes import (
@@ -46,6 +48,7 @@ from l2l.pipeline import (
 )
 from l2l.settings import PassDefinition
 from l2l.text import THINK_OPEN, Usage
+lazy from l2l.console import Console
 
 if TYPE_CHECKING:
     from l2l.context import HttpRequest, HttpResponse
@@ -54,6 +57,80 @@ if TYPE_CHECKING:
 def final_message(state: ExitState) -> str:
     assert state.message is not None
     return state.message
+
+
+PARAGRAPH_TRANSLATIONS: Final[dict[str, str]] = {
+    "一。": "One.",
+    "二。": "Two.",
+    "三。": "Three.",
+    "四。": "Four.",
+    "五。": "Five.",
+}
+
+
+def request_content(request: HttpRequest) -> str:
+    content: str = json.loads(request.body)["messages"][1]["content"]
+    return content
+
+
+def translated_chunks(request: HttpRequest) -> str:
+    return "\n\n".join(
+        translation
+        for source, translation in PARAGRAPH_TRANSLATIONS.items()
+        if source in request_content(request)
+    )
+
+
+def batched_pass(concurrent_calls: int) -> PassDefinition:
+    return replace(
+        translate_pass(), paragraphs_per_call=3, concurrent_calls=concurrent_calls
+    )
+
+
+@final
+class GatedHttp:
+    def __init__(
+        self,
+        delay_response: Callable[[HttpRequest], None] = lambda request: None,
+    ) -> None:
+        self.requests: list[HttpRequest] = []
+        self.delay_response = delay_response
+        self.peak_in_flight = 0
+        self.lock = threading.Lock()
+        self.in_flight = 0
+
+    def open(
+        self, request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
+        with self.lock:
+            self.requests.append(request)
+            self.in_flight += 1
+            self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        self.delay_response(request)
+        with self.lock:
+            self.in_flight -= 1
+        return Ok(
+            FakeStreamResponse(
+                with_usage(stream_chunks(translated_chunks(request)), USAGE)
+            )
+        )
+
+
+def batched_source() -> str:
+    return "一。\n\n二。\n\n三。\n\n四。\n\n五。"
+
+
+def run_batched_pass(
+    console: Console,
+    open_http: Callable[[HttpRequest, float], Result[HttpResponse, TranslationError]],
+    pass_definition: PassDefinition,
+) -> tuple[ExitState, str]:
+    run_context = make_context(console, open_http)
+    stdout = io.StringIO()
+    state = run_pipeline(
+        run_context, (pass_definition,), batched_source(), 0.0, stdout
+    ).run()
+    return state, stdout.getvalue()
 
 
 USAGE = {"prompt_tokens": 5, "completion_tokens": 6, "cost": 0.2}
@@ -256,6 +333,56 @@ def test_translate_pass_batches_paragraphs_per_call() -> None:
         in logged
     )
     assert "paragraphs: [3/5]" in logged
+
+
+def test_concurrent_pass_runs_chunk_calls_in_parallel() -> None:
+    console, _stderr = make_console(live=True)
+    both_calls_in_flight = threading.Barrier(2)
+
+    def hold_in_barrier(request: HttpRequest) -> None:
+        both_calls_in_flight.wait(timeout=5.0)
+
+    http = GatedHttp(delay_response=hold_in_barrier)
+    state, stdout = run_batched_pass(console, http.open, batched_pass(2))
+    assert state.kind is ExitKind.SUCCESS
+    assert stdout == "One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n"
+    assert http.peak_in_flight == 2
+    view = console.status.view.value
+    assert (view.paragraphs_done, view.paragraphs_total) == (5, 5)
+
+
+def test_concurrent_pass_preserves_call_order() -> None:
+    console, _stderr = make_console()
+    slower_chunk_released = threading.Event()
+
+    def hold_first_chunk(request: HttpRequest) -> None:
+        if "一。" in request_content(request):
+            slower_chunk_released.wait(timeout=5.0)
+        else:
+            slower_chunk_released.set()
+
+    http = GatedHttp(delay_response=hold_first_chunk)
+    state, stdout = run_batched_pass(console, http.open, batched_pass(2))
+    assert state.kind is ExitKind.SUCCESS
+    assert stdout == "One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n"
+    assert len(http.requests) == 2
+
+
+def test_concurrent_pass_reports_the_first_in_order_error() -> None:
+    console, _stderr = make_console()
+
+    def open_fail(
+        request: HttpRequest, timeout: float
+    ) -> Result[HttpResponse, TranslationError]:
+        if "一。" in request_content(request):
+            return fail_http("unreachable", "first down")
+        return fail_http("unreachable", "second down")
+
+    state, stdout = run_batched_pass(console, open_fail, batched_pass(2))
+    assert state.kind is ExitKind.RUNTIME_ERROR
+    assert stdout == ""
+    assert "failed on unit 1" in final_message(state)
+    assert "first down" in final_message(state)
 
 
 def test_paragraph_count_mismatch_demotes_batches_to_one_paragraph_per_call() -> None:

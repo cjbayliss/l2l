@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from functools import partial, reduce
 from itertools import accumulate
@@ -73,6 +74,7 @@ from l2l.monads import (
     Just,
     Maybe,
     Ok,
+    Reference,
     Result,
     fold_io,
     io_and_then,
@@ -85,7 +87,10 @@ from l2l.monads import (
     io_traverse,
     maybe_either,
     maybe_or,
+    modify_reference,
+    new_reference,
     result_map,
+    result_sequence,
 )
 from l2l.plans import (
     EMPTY_PASS_MODE_SET,
@@ -1324,6 +1329,60 @@ def state_after_units(state: State, units: tuple[UnitResult, ...]) -> State:
     )
 
 
+def dispatch_calls(
+    calls: tuple[IO[Result[UnitResult, TranslationError]], ...],
+    paragraph_counts: tuple[int, ...],
+    progress: Callable[[int], IO[None]],
+    maximum_concurrent_calls: int,
+) -> IO[Result[tuple[UnitResult, ...], TranslationError]]:
+    if maximum_concurrent_calls == 1:
+        done_by_call = tuple(accumulate(paragraph_counts))
+
+        def counted_call(
+            indexed: tuple[IO[Result[UnitResult, TranslationError]], int],
+        ) -> IO[Result[UnitResult, TranslationError]]:
+            call, done = indexed
+
+            def counted(
+                outcome: Result[UnitResult, TranslationError],
+            ) -> IO[Result[UnitResult, TranslationError]]:
+                return io_and_then(progress(done), io_result(outcome))
+
+            return io_bind(call, counted)
+
+        return io_traverse(tuple(zip(calls, done_by_call, strict=True)), counted_call)
+
+    def run_one(
+        completed: Reference[int],
+        call: IO[Result[UnitResult, TranslationError]],
+        paragraph_count: int,
+    ) -> Result[UnitResult, TranslationError]:
+        outcome = call.run()
+        done = modify_reference(
+            completed, lambda counted: counted + paragraph_count
+        ).run()
+        progress(done).run()
+        return outcome
+
+    def dispatch(
+        completed: Reference[int],
+    ) -> IO[Result[tuple[UnitResult, ...], TranslationError]]:
+        with ThreadPoolExecutor(max_workers=maximum_concurrent_calls) as executor:
+            futures = tuple(
+                executor.submit(partial(run_one, completed), call, paragraph_count)
+                for call, paragraph_count in zip(calls, paragraph_counts, strict=True)
+            )
+            outcomes = tuple(future.result() for future in futures)
+
+        # Completion order is nondeterministic, so the last emitted progress
+        # count can be lower than the total; re-emit the final count.
+        return io_and_then(
+            progress(sum(paragraph_counts)), io_result(result_sequence(outcomes))
+        )
+
+    return io_bind(new_reference(0), dispatch)
+
+
 def run_units(
     environment: CallEnvironment,
     work_groups: tuple[tuple[str, ...], ...],
@@ -1351,7 +1410,6 @@ def run_units(
     shown_paragraph_total = (
         total_paragraphs if pass_definition.paragraphs_per_call > 0 else 0
     )
-    done_by_call = tuple(accumulate(len(group) for group in work_groups))
 
     def note_paragraphs_done(done: int) -> IO[None]:
         return run_context.console.paragraph_progress(done, shown_paragraph_total)
@@ -1399,21 +1457,14 @@ def run_units(
 
         return run_single_call(environment, call, usage)
 
-    def counted_call(
-        indexed: tuple[UnitCall, int],
-    ) -> IO[Result[UnitResult, TranslationError]]:
-        call, done = indexed
-
-        def counted(
-            result: Result[UnitResult, TranslationError],
-        ) -> IO[Result[UnitResult, TranslationError]]:
-            return io_and_then(note_paragraphs_done(done), io_result(result))
-
-        return io_bind(run_call(call), counted)
-
     return io_and_then(
         note_paragraphs_done(0),
-        io_traverse(tuple(zip(calls, done_by_call, strict=True)), counted_call),
+        dispatch_calls(
+            tuple(run_call(call) for call in calls),
+            tuple(len(group) for group in work_groups),
+            note_paragraphs_done,
+            pass_definition.concurrent_calls,
+        ),
     )
 
 

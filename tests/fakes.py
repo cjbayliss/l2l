@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import threading
 import time
 from typing import TYPE_CHECKING, cast, final
 
@@ -228,12 +229,16 @@ class FakeHttp:
     def __init__(self, responses: Sequence[HttpResponse]) -> None:
         self.responses = responses
         self.requests: list[HttpRequest] = []
+        self.lock = threading.Lock()
 
     def open(
         self, request: HttpRequest, timeout: float
     ) -> Result[HttpResponse, TranslationError]:
-        self.requests.append(request)
-        index = min(len(self.requests) - 1, len(self.responses) - 1)
+        # Chunk calls run concurrently, so registration and index selection
+        # must be one atomic step to hand each response to exactly one call.
+        with self.lock:
+            self.requests.append(request)
+            index = min(len(self.requests) - 1, len(self.responses) - 1)
         return Ok(self.responses[index])
 
 
